@@ -15,6 +15,8 @@ Python tools for driving an **RX-888 MkII** SDR from a Mac (Apple Silicon, macOS
 |---|---|
 | `probe.py` | Finds the RX-888, reports firmware state and USB link speed |
 | `rx888/usb.py` | USB discovery (VID/PID for bootloader and SDDC states) |
+| `am_scan.py` | Scans the AM broadcast band on the HF input, tries several gains, lists stations by SNR |
+| `rx888/sddc.py` | Direct control: HF/VHF port, gain, VHF tuner, ADC rate, sample stream |
 | `run_sdrpp.sh` | Launches the locally built SDR++ with its RX-888 (SDDC) input |
 
 ## Setup
@@ -42,7 +44,7 @@ make -C tools/SDRPlusPlus/build -j10
 
 The patch hard-codes the firmware path as `fw/SDDC_FX3.img` in this project; the input uploads it automatically when the device is still in bootloader mode. The run root (`tools/SDRPlusPlus/root_dev`) is a copy of `root/` plus a `modules/` folder of links to the built `.dylib` files and a `config.json` with the SDDC input enabled.
 
-The input is basic: HF direct sampling only (no VHF/UHF tuner, gain or attenuator controls yet), with sample rates of 4–64 MHz.
+The input is basic: HF direct sampling only, with sample rates of 4–64 MHz. The patch makes it select the HF port and turn on the HF amplifier at a fixed mid gain (VGA 64); the original code switched to the VHF port, so the HF input heard nothing. There are no gain or VHF/UHF controls in the UI yet.
 
 Note: the FX3 enumerates at USB 2 speed while it's in bootloader mode; it comes back at USB 3 once the firmware is running.
 

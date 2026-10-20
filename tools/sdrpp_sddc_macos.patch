@@ -23,7 +23,7 @@ index c86006d..b638044 100644
  #define FX3_TIMEOUT         1000
  #define FX3_VENDOR_REQUEST  0xA0
 diff --git a/source_modules/sddc_source/libsddc/src/sddc.c b/source_modules/sddc_source/libsddc/src/sddc.c
-index 820aa1d..9be4f31 100644
+index 820aa1d..57b5840 100644
 --- a/source_modules/sddc_source/libsddc/src/sddc.c
 +++ b/source_modules/sddc_source/libsddc/src/sddc.c
 @@ -3,6 +3,8 @@
@@ -45,6 +45,29 @@ index 820aa1d..9be4f31 100644
  void sddc_init() {
      // If already initialized, do nothing
      if (sddc_is_init) { return; }
+@@ -311,14 +316,14 @@ sddc_error_t sddc_open(const char* serial, sddc_dev_t** dev) {
+     sddc_stop(*dev);
+ 
+     // TODO: Setup all of the other state
+-    sddc_gpio_put(*dev, SDDC_GPIO_SEL0, false);
+-    sddc_gpio_put(*dev, SDDC_GPIO_SEL1, true);
+-    sddc_gpio_put(*dev, SDDC_GPIO_VHF_EN, true);
+-    sddc_tuner_start((*dev)->openDev, 16e6);
+-    sddc_tuner_tune((*dev)->openDev, 100e6);
+-    sddc_fx3_set_param((*dev)->openDev, SDDC_PARAM_R82XX_ATT, 15);
+-    sddc_fx3_set_param((*dev)->openDev, SDDC_PARAM_R83XX_VGA, 9);
+-    sddc_fx3_set_param((*dev)->openDev, SDDC_PARAM_AD8340_VGA, 5);
++    // HF port, direct sampling, VHF tuner off, HF amplifier on at mid gain
++    // (the module only handles direct sampling; the old code selected the VHF port)
++    sddc_tuner_stop((*dev)->openDev);
++    sddc_gpio_put(*dev, SDDC_GPIO_VHF_EN, false);
++    sddc_gpio_put(*dev, SDDC_GPIO_SEL1, false);
++    sddc_gpio_put(*dev, SDDC_GPIO_SEL0, true);
++    sddc_gpio_put(*dev, SDDC_GPIO_PGA_EN, true);
++    sddc_fx3_set_param((*dev)->openDev, SDDC_PARAM_AD8340_VGA, 64);
+ 
+     return SDDC_SUCCESS;
+ }
 @@ -348,7 +353,7 @@ int sddc_gpio_set(sddc_dev_t* dev, sddc_gpio_t gpios) {
      dev->gpioState = gpios;
  
