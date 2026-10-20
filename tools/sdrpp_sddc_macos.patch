@@ -1,0 +1,119 @@
+diff --git a/source_modules/sddc_source/libsddc/CMakeLists.txt b/source_modules/sddc_source/libsddc/CMakeLists.txt
+index d91bccd..4755248 100644
+--- a/source_modules/sddc_source/libsddc/CMakeLists.txt
++++ b/source_modules/sddc_source/libsddc/CMakeLists.txt
+@@ -53,7 +53,7 @@ else ()
+     include(GNUInstallDirs)
+ endif ()
+ 
+-if (NOT MSVC)
++if (FALSE) # pkg-config file only exists in the standalone libsddc repo
+     # Configure pkgconfig file
+     configure_file(${CMAKE_SOURCE_DIR}/libsddc.pc.in ${CMAKE_CURRENT_BINARY_DIR}/libsddc.pc @ONLY)
+ 
+diff --git a/source_modules/sddc_source/libsddc/src/fx3_boot.c b/source_modules/sddc_source/libsddc/src/fx3_boot.c
+index c86006d..b638044 100644
+--- a/source_modules/sddc_source/libsddc/src/fx3_boot.c
++++ b/source_modules/sddc_source/libsddc/src/fx3_boot.c
+@@ -1,5 +1,6 @@
+ #include "fx3_boot.h"
+ #include <stdio.h>
++#include <stdlib.h>
+ 
+ #define FX3_TIMEOUT         1000
+ #define FX3_VENDOR_REQUEST  0xA0
+diff --git a/source_modules/sddc_source/libsddc/src/sddc.c b/source_modules/sddc_source/libsddc/src/sddc.c
+index 820aa1d..9be4f31 100644
+--- a/source_modules/sddc_source/libsddc/src/sddc.c
++++ b/source_modules/sddc_source/libsddc/src/sddc.c
+@@ -3,6 +3,8 @@
+ #include <stdint.h>
+ #include <libusb.h>
+ #include <stdio.h>
++#include <string.h>
++#include <unistd.h>
+ #include "usb_interface.h"
+ 
+ struct sddc_dev {
+@@ -23,6 +25,9 @@ struct libusb_context* ctx = NULL;
+ char* sddc_firmware_path = NULL;
+ bool sddc_is_init = false;
+ 
++int sddc_gpio_set(sddc_dev_t* dev, sddc_gpio_t gpios);
++int sddc_gpio_put(sddc_dev_t* dev, sddc_gpio_t gpios, bool value);
++
+ void sddc_init() {
+     // If already initialized, do nothing
+     if (sddc_is_init) { return; }
+@@ -348,7 +353,7 @@ int sddc_gpio_set(sddc_dev_t* dev, sddc_gpio_t gpios) {
+     dev->gpioState = gpios;
+ 
+     // Push to the device
+-    sddc_fx3_gpio(dev->openDev, gpios);
++    return sddc_fx3_gpio(dev->openDev, gpios);
+ }
+ 
+ int sddc_gpio_put(sddc_dev_t* dev, sddc_gpio_t gpios, bool value) {
+diff --git a/source_modules/sddc_source/src/main.cpp b/source_modules/sddc_source/src/main.cpp
+index c0ddf37..1bd5f5b 100644
+--- a/source_modules/sddc_source/src/main.cpp
++++ b/source_modules/sddc_source/src/main.cpp
+@@ -27,7 +27,7 @@ public:
+         this->name = name;
+ 
+         // Set firmware image path for debugging
+-        sddc_set_firmware_path("C:/Users/ryzerth/Downloads/SDDC_FX3 (1).img");
++        sddc_set_firmware_path("/Users/minyaozhu/ClaudeFileSystem/RX888/fw/SDDC_FX3.img");
+ 
+         sampleRate = 128e6;
+ 
+@@ -97,30 +97,29 @@ private:
+     void refresh() {
+         devices.clear();
+         
+-        // // Get device list
+-        // sddc_devinfo_t* devList;
+-        // int count = sddc_get_device_list(&devList);
+-        // if (count < 0) {
+-        //     flog::error("Failed to list SDDC devices: {}", count);
+-        //     return;
+-        // }
++        // Get device list
++        sddc_devinfo_t* devList;
++        int count = sddc_get_device_list(&devList);
++        if (count < 0) {
++            flog::error("Failed to list SDDC devices: {}", count);
++            return;
++        }
+ 
+-        // // Add every device found
+-        // for (int i = 0; i < count; i++) {
+-        //     // Create device name
+-        //     std::string name = sddc_model_to_string(devList[i].model);
+-        //     name += '[';
+-        //     name += devList[i].serial;
+-        //     name += ']';
++        // Add every device found
++        for (int i = 0; i < count; i++) {
++            // Create device name
++            std::string name = sddc_model_to_string(devList[i].model);
++            name += '[';
++            name += devList[i].serial;
++            name += ']';
+ 
+-        //     // Add an entry to the device list
+-        //     devices.define(devList[i].serial, name, devList[i].serial);
+-        // }
++            // Add an entry to the device list
++            devices.define(devList[i].serial, name, devList[i].serial);
++        }
+ 
+-        devices.define("0009072C00C40C32", "TESTING", "0009072C00C40C32");
+ 
+-        // // Free the device list
+-        // sddc_free_device_list(devList);
++        // Free the device list
++        sddc_free_device_list(devList);
+     }
+ 
+     void select(const std::string& serial) {

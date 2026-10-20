@@ -11,3 +11,4 @@ fw/*.img
 recordings/*.wav
 recordings/*.iq
 recordings/*.raw
+tools/SDRPlusPlus/
