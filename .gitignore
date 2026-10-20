@@ -15,3 +15,5 @@ tools/SDRPlusPlus/
 tools/ExtIO_sddc/
 .venv-soapy/
 tools/ka9q-radio/
+tools/ka9q-web/
+tools/onion/

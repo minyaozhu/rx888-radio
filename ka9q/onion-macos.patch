@@ -1,0 +1,70 @@
+diff --git a/src/onion/poller.c b/src/onion/poller.c
+index 39d5678..bc8a40c 100644
+--- a/src/onion/poller.c
++++ b/src/onion/poller.c
+@@ -29,6 +29,13 @@
+ #include <limits.h>
+ #include <time.h>
+ #include <unistd.h>
++#ifdef __APPLE__
++// macOS: epoll/timerfd come from epoll-shim (kqueue); the system lacks struct itimerspec
++struct itimerspec {
++  struct timespec it_interval;
++  struct timespec it_value;
++};
++#endif
+ #include <sys/timerfd.h>
+ #ifdef __DEBUG__
+ #include <execinfo.h>
+diff --git a/src/onion/poller_libevent.c b/src/onion/poller_libevent.c
+index f379289..3497f82 100644
+--- a/src/onion/poller_libevent.c
++++ b/src/onion/poller_libevent.c
+@@ -24,7 +24,7 @@
+ #include <event2/event.h>
+ #include <event2/thread.h>
+ #include <stdlib.h>
+-#include <semaphore.h>
++#include <pthread.h> // a mutex, not sem_t: macOS has no unnamed POSIX semaphores
+ 
+ #include "poller.h"
+ #include "log.h"
+@@ -32,7 +32,7 @@
+ 
+ struct onion_poller_t {
+   struct event_base *base;
+-  sem_t sem;
++  pthread_mutex_t lock; // one thread runs the event loop at a time
+   volatile int stop;
+ };
+ 
+@@ -81,7 +81,7 @@ void onion_poller_slot_set_timeout(onion_poller_slot * el, int timeout_ms) {
+ }
+ 
+ /// Sets the polling type: read/write/other. O_POLL_READ | O_POLL_WRITE | O_POLL_OTHER
+-void onion_poller_slot_set_type(onion_poller_slot * el, int type) {
++void onion_poller_slot_set_type(onion_poller_slot * el, onion_poller_slot_type_e type) {
+   el->type = EV_PERSIST;
+   if (type & O_POLL_READ)
+     el->type |= EV_READ;
+@@ -95,7 +95,7 @@ onion_poller *onion_poller_new(int aprox_n) {
+ 
+   onion_poller *ret = onion_low_calloc(1, sizeof(onion_poller));
+   ret->base = event_base_new();
+-  sem_init(&ret->sem, 0, 1);
++  pthread_mutex_init(&ret->lock, NULL);
+   return ret;
+ }
+ 
+@@ -143,9 +143,9 @@ onion_poller_slot *onion_poller_get(onion_poller * poller, int fd) {
+ void onion_poller_poll(onion_poller * poller) {
+   poller->stop = 0;
+   while (!poller->stop) {
+-    sem_wait(&poller->sem);
++    pthread_mutex_lock(&poller->lock);
+     event_base_loop(poller->base, EVLOOP_ONCE);
+-    sem_post(&poller->sem);
++    pthread_mutex_unlock(&poller->lock);
+   }
+ }
+ 

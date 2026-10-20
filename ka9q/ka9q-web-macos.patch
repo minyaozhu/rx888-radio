@@ -1,0 +1,170 @@
+diff --git a/Makefile b/Makefile
+index d689943..1fa39a5 100644
+--- a/Makefile
++++ b/Makefile
+@@ -10,6 +10,14 @@ COPTS=-march=native -std=gnu11 -pthread -Wall -funsafe-math-optimizations -D_GNU
+ 
+ KA9QOBJS = misc.o multicast.o rtp.o status.o decode_status.o
+ INCLUDES=
++LIBS=-lonion -lbsd -lm -ldl
++
++ifeq ($(shell uname -s),Darwin)
++	# macOS: strlcpy is in libc (no libbsd); Onion may be a local install (ONION=prefix)
++	ONION ?= /opt/homebrew
++	INCLUDES += -I$(ONION)/include -I/opt/homebrew/include
++	LIBS = -L$(ONION)/lib -Wl,-rpath,$(ONION)/lib -lonion -lm
++endif
+ 
+ RESOURCES_BASE_DIR=$(PREFIX)/share/ka9q-web
+ 
+@@ -23,7 +31,7 @@ KA9Q_RADIO_OBJS=$(KA9QOBJS)
+ all: ka9q-web
+ 
+ ka9q-web: ka9q-web.o $(KA9Q_RADIO_OBJS)
+-	$(CC) -o $@ $^ -lonion -lbsd -lm -ldl
++	$(CC) -o $@ $^ $(LIBS)
+ 
+ # Generate config paths header (copied from ka9q-web1 Makefile)
+ esc = sed 's/\\/\\\\/g; s/"/\\"/g'
+diff --git a/ka9q-web.c b/ka9q-web.c
+index 2a996b4..e5660cb 100644
+--- a/ka9q-web.c
++++ b/ka9q-web.c
+@@ -30,7 +30,11 @@
+ #include <stdio.h>
+ #include <dlfcn.h>
+ //#include <stdlib.h>
++#ifdef __APPLE__
++#include <stdlib.h> // BSD functions are in libc on macOS
++#else
+ #include <bsd/stdlib.h>
++#endif
+ #include <stdint.h>
+ #include <string.h>
+ #include <unistd.h>
+@@ -45,6 +49,11 @@
+ #include <netinet/in.h>
+ #include <arpa/inet.h>
+ 
++#ifdef __APPLE__
++// macOS can only name the calling thread (one-argument form); thread names are cosmetic
++#define pthread_setname_np(thread, name) ((void)(thread), (void)(name), 0)
++#endif
++
+ #include "misc.h"
+ #include "multicast.h"
+ #include "status.h"
+@@ -106,7 +115,7 @@ onion_handler *onion_handler_export_local_new(const char *localpath);
+ double current_backend_frequency = 0.0;
+ 
+ int Ctl_fd = -1, Input_fd = -1, Status_fd = -1;
+-pthread_mutex_t ctl_mutex;
++pthread_mutex_t ctl_mutex = PTHREAD_MUTEX_INITIALIZER; // zeroed memory is not a valid mutex on macOS
+ pthread_t ctrl_task;
+ pthread_t status_reader_task;
+ pthread_t audio_task;
+@@ -114,8 +123,8 @@ pthread_t ws_ping_task;
+ pthread_t ws_watchdog_task;
+ pthread_t lifetime_refresh_task;
+ /* monitor removed: previously guarded by ENABLE_MONITOR */
+-pthread_mutex_t output_dest_socket_mutex;
+-pthread_cond_t output_dest_socket_cond;
++pthread_mutex_t output_dest_socket_mutex = PTHREAD_MUTEX_INITIALIZER;
++pthread_cond_t output_dest_socket_cond = PTHREAD_COND_INITIALIZER;
+ /* microseconds to sleep after successful control send to avoid overrunning backend */
+ #define CONTROL_USLEEP_US 20000 // minimum observed for backend to process a command and update status
+ #define FILTER_EDGE_MIN_INTERVAL_MS 250
+diff --git a/misc.h b/misc.h
+index 8908e10..4a2c569 100644
+--- a/misc.h
++++ b/misc.h
+@@ -20,8 +20,12 @@
+ #include <stdbool.h>
+ #include <sys/errno.h>
+ #ifdef __linux__
++#ifdef __APPLE__
++#include <string.h> // BSD functions are in libc on macOS
++#else
+ #include <bsd/string.h>
+ #endif
++#endif
+ #include <assert.h>
+ #include <sys/types.h>
+ 
+diff --git a/multicast.c b/multicast.c
+index d152539..63e68a5 100644
+--- a/multicast.c
++++ b/multicast.c
+@@ -24,7 +24,11 @@
+ #if defined(linux)
+ #include <linux/if_packet.h>
+ #include <net/ethernet.h>
++#ifdef __APPLE__
++#include <string.h> // BSD functions are in libc on macOS
++#else
+ #include <bsd/string.h>
++#endif
+ #include <sys/prctl.h>
+ #include <linux/capability.h>
+ #endif
+@@ -327,6 +331,23 @@ int resolve_mcast(char const *group, void *group_sock, uint16_t default_port, ch
+     int const ecode = getaddrinfo(full_host, port, &hints, &results);
+     if(ecode == 0)
+       break;
++#ifdef __APPLE__
++    // macOS: Bonjour won't resolve the multicast host records radiod publishes.
++    // radiod derives every group address from its name with make_maddr(), so
++    // compute it the same way instead of asking mDNS.
++    size_t const hl = strlen(full_host);
++    if(hl > 6 && strcasecmp(full_host + hl - 6, ".local") == 0){
++      struct sockaddr_in sin = {
++	.sin_len = sizeof(struct sockaddr_in),
++	.sin_family = AF_INET,
++	.sin_port = htons(port != NULL ? (uint16_t)atoi(port) : default_port),
++	.sin_addr.s_addr = htonl(make_maddr(full_host)),
++      };
++      memcpy(group_sock, &sin, sizeof sin);
++      fprintf(stderr, "resolve_mcast: %s not in mDNS, using derived address %s\n", full_host, formatsock(&sin, false));
++      return 0;
++    }
++#endif
+     if(!message_logged){
+       int64_t now = gps_time_ns();
+       if(now > start_time + 2 * BILLION){
+@@ -640,12 +661,19 @@ int join_group(int fd, struct sockaddr const * const source, struct sockaddr con
+     {
+       level = IPPROTO_IP;
+       memcpy(&req.gr_group,group,sizeof(struct sockaddr_in));
++#ifdef __APPLE__
++      // BSD kernels reject group_req addresses without sa_len (EINVAL)
++      ((struct sockaddr_in *)&req.gr_group)->sin_len = sizeof(struct sockaddr_in);
++#endif
+     }
+     break;
+   case AF_INET6:
+     {
+       level = IPPROTO_IPV6;
+       memcpy(&req.gr_group,group,sizeof(struct sockaddr_in6));
++#ifdef __APPLE__
++      ((struct sockaddr_in6 *)&req.gr_group)->sin6_len = sizeof(struct sockaddr_in6);
++#endif
+     }
+     break;
+   default:
+diff --git a/status.c b/status.c
+index bce8645..bb2ce15 100644
+--- a/status.c
++++ b/status.c
+@@ -5,8 +5,12 @@
+ #include <assert.h>
+ #include <string.h>
+ #if defined(linux)
++#ifdef __APPLE__
++#include <string.h> // BSD functions are in libc on macOS
++#else
+ #include <bsd/string.h>
+ #endif
++#endif
+ #include <math.h>
+ #include <sys/socket.h>
+ #include <sys/time.h>
