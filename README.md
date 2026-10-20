@@ -15,7 +15,7 @@ Python tools for driving an **RX-888 MkII** SDR from a Mac (Apple Silicon, macOS
 |---|---|
 | `probe.py` | Finds the RX-888, reports firmware state and USB link speed |
 | `rx888/usb.py` | USB discovery (VID/PID for bootloader and SDDC states) |
-| `am_scan.py` | Scans the AM broadcast band on the HF input, tries several gains, lists stations by SNR |
+| `am_scan.py` | Scans the AM broadcast band through SoapySDDC, tries several IF gains, lists stations by SNR; `--tune` sets SDR++ to the strongest |
 | `rx888/sddc.py` | Direct control: HF/VHF port, gain, VHF tuner, ADC rate, sample stream |
 | `run_sdrpp.sh` | Launches the locally built SDR++ with the official SoapySDDC driver |
 
@@ -47,6 +47,18 @@ git clone --depth 1 https://github.com/AlexandreRouma/SDRPlusPlus.git tools/SDRP
 cmake -S tools/SDRPlusPlus -B tools/SDRPlusPlus/build -DCMAKE_BUILD_TYPE=Release -DOPT_BUILD_SOAPY_SOURCE=ON -DOPT_BUILD_AIRSPY_SOURCE=OFF -DOPT_BUILD_AIRSPYHF_SOURCE=OFF -DOPT_BUILD_HACKRF_SOURCE=OFF -DOPT_BUILD_PLUTOSDR_SOURCE=OFF -DOPT_BUILD_RTL_SDR_SOURCE=OFF -DOPT_BUILD_AUDIO_SOURCE=OFF -DOPT_BUILD_DISCORD_PRESENCE=OFF
 make -C tools/SDRPlusPlus/build -j10
 ```
+
+`tools/soapysddc_macos.patch` fixes an off-by-one in the driver's USB string handling (the device label picked up random bytes after the serial, so SDR++ never matched its saved settings). Apply it after cloning: `git -C tools/ExtIO_sddc apply ../soapysddc_macos.patch`.
+
+Python scripts that use the driver (`am_scan.py`) run in `.venv-soapy`, which sees Homebrew's SoapySDR bindings:
+
+```bash
+/opt/homebrew/bin/python3.15 -m venv --system-site-packages .venv-soapy
+.venv-soapy/bin/pip install numpy pyusb
+.venv-soapy/bin/python am_scan.py --tune
+```
+
+Close SDR++ before running a script: only one program can hold the RX-888. At HF the driver tunes about 850 Hz high; `am_scan.py` allows for it.
 
 `run_sdrpp.sh` points `SOAPY_SDR_PLUGIN_PATH` at the driver build, so nothing is installed system-wide. Check the driver alone with `SOAPY_SDR_PLUGIN_PATH=tools/ExtIO_sddc/build/SoapySDDC SoapySDRUtil --probe="driver=SDDC"`. The run root (`tools/SDRPlusPlus/root_dev`) is a copy of `root/` plus a `modules/` folder of links to the built `.dylib` files.
 
