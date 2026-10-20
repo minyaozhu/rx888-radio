@@ -17,7 +17,7 @@ Python tools for driving an **RX-888 MkII** SDR from a Mac (Apple Silicon, macOS
 | `rx888/usb.py` | USB discovery (VID/PID for bootloader and SDDC states) |
 | `am_scan.py` | Scans the AM broadcast band on the HF input, tries several gains, lists stations by SNR |
 | `rx888/sddc.py` | Direct control: HF/VHF port, gain, VHF tuner, ADC rate, sample stream |
-| `run_sdrpp.sh` | Launches the locally built SDR++ with its RX-888 (SDDC) input |
+| `run_sdrpp.sh` | Launches the locally built SDR++ with the official SoapySDDC driver |
 
 ## Setup
 
@@ -30,23 +30,31 @@ python3 -m venv .venv
 
 Firmware: put `SDDC_FX3.img` from the [ik1xpv/ExtIO_sddc](https://github.com/ik1xpv/ExtIO_sddc) releases in `fw/` (it isn't committed).
 
-## SDR++ with the RX-888 input
+## SDR++ with the RX-888 (via the official SoapySDDC driver)
 
-The macOS release of SDR++ leaves out its SDDC (RX-888) input, and the input in its source code is an unfinished stub: it doesn't compile on macOS and points to a firmware file on its author's PC. `tools/sdrpp_sddc_macos.patch` fixes that. To rebuild:
+The RX-888 runs in SDR++ through its **SoapySDR** input and **SoapySDDC**, the SoapySDR driver from the official [ik1xpv/ExtIO_sddc](https://github.com/ik1xpv/ExtIO_sddc) project. It's the same core that Windows HDSDR users run: HF and VHF ports, RF attenuation (−31.5–0 dB) and IF gain (−24.6–+33.1 dB), 2–64 MSPS, 10 kHz–1800 MHz, and a NEON-optimized downconverter on Apple Silicon. It also uploads the firmware itself (embedded in the driver).
 
 ```bash
-brew install cmake fftw glfw volk rtaudio
+brew install cmake fftw glfw volk rtaudio soapysdr
+
+# Driver
+git clone --depth 1 https://github.com/ik1xpv/ExtIO_sddc.git tools/ExtIO_sddc
+cmake -S tools/ExtIO_sddc -B tools/ExtIO_sddc/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=arm64
+cmake --build tools/ExtIO_sddc/build -j10
+
+# SDR++ with the SoapySDR input
 git clone --depth 1 https://github.com/AlexandreRouma/SDRPlusPlus.git tools/SDRPlusPlus
-git -C tools/SDRPlusPlus apply ../sdrpp_sddc_macos.patch
-cmake -S tools/SDRPlusPlus -B tools/SDRPlusPlus/build -DCMAKE_BUILD_TYPE=Release -DOPT_BUILD_SDDC_SOURCE=ON -DBUILD_SDDC_UTILS=OFF -DOPT_BUILD_AIRSPY_SOURCE=OFF -DOPT_BUILD_AIRSPYHF_SOURCE=OFF -DOPT_BUILD_HACKRF_SOURCE=OFF -DOPT_BUILD_PLUTOSDR_SOURCE=OFF -DOPT_BUILD_RTL_SDR_SOURCE=OFF -DOPT_BUILD_AUDIO_SOURCE=OFF -DOPT_BUILD_DISCORD_PRESENCE=OFF
+cmake -S tools/SDRPlusPlus -B tools/SDRPlusPlus/build -DCMAKE_BUILD_TYPE=Release -DOPT_BUILD_SOAPY_SOURCE=ON -DOPT_BUILD_AIRSPY_SOURCE=OFF -DOPT_BUILD_AIRSPYHF_SOURCE=OFF -DOPT_BUILD_HACKRF_SOURCE=OFF -DOPT_BUILD_PLUTOSDR_SOURCE=OFF -DOPT_BUILD_RTL_SDR_SOURCE=OFF -DOPT_BUILD_AUDIO_SOURCE=OFF -DOPT_BUILD_DISCORD_PRESENCE=OFF
 make -C tools/SDRPlusPlus/build -j10
 ```
 
-The patch hard-codes the firmware path as `fw/SDDC_FX3.img` in this project; the input uploads it automatically when the device is still in bootloader mode. The run root (`tools/SDRPlusPlus/root_dev`) is a copy of `root/` plus a `modules/` folder of links to the built `.dylib` files and a `config.json` with the SDDC input enabled.
+`run_sdrpp.sh` points `SOAPY_SDR_PLUGIN_PATH` at the driver build, so nothing is installed system-wide. Check the driver alone with `SOAPY_SDR_PLUGIN_PATH=tools/ExtIO_sddc/build/SoapySDDC SoapySDRUtil --probe="driver=SDDC"`. The run root (`tools/SDRPlusPlus/root_dev`) is a copy of `root/` plus a `modules/` folder of links to the built `.dylib` files.
 
-The input is basic: HF direct sampling only, with sample rates of 4–64 MHz. The patch makes it select the HF port and turn on the HF amplifier at a fixed mid gain (VGA 64); the original code switched to the VHF port, so the HF input heard nothing. There are no gain or VHF/UHF controls in the UI yet.
+In the SoapySDR source menu: antenna **HF** for 0–64 MHz (AM broadcast, shortwave, ham bands), **VHF** for FM broadcast, airband and above.
 
-Note: the FX3 enumerates at USB 2 speed while it's in bootloader mode; it comes back at USB 3 once the firmware is running.
+### Superseded: SDR++'s own SDDC input
+
+SDR++ also has a built-in `sddc_source`, but it's an unfinished stub (hard-coded serial and firmware path, VHF port selected while doing HF direct sampling, USB reads that overflow on macOS and wedge the device). `tools/sdrpp_sddc_macos.patch` makes it work for HF, but it has no gain or port controls. Use the SoapySDR input instead.
 
 ## Roadmap
 

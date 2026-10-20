@@ -12,3 +12,4 @@ recordings/*.wav
 recordings/*.iq
 recordings/*.raw
 tools/SDRPlusPlus/
+tools/ExtIO_sddc/

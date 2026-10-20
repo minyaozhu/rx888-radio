@@ -78,7 +78,7 @@ index 820aa1d..57b5840 100644
  
  int sddc_gpio_put(sddc_dev_t* dev, sddc_gpio_t gpios, bool value) {
 diff --git a/source_modules/sddc_source/src/main.cpp b/source_modules/sddc_source/src/main.cpp
-index c0ddf37..1bd5f5b 100644
+index c0ddf37..bfa62cd 100644
 --- a/source_modules/sddc_source/src/main.cpp
 +++ b/source_modules/sddc_source/src/main.cpp
 @@ -27,7 +27,7 @@ public:
@@ -140,3 +140,24 @@ index c0ddf37..1bd5f5b 100644
      }
  
      void select(const std::string& serial) {
+@@ -256,6 +255,8 @@ private:
+ 
+         // Compute buffer size (Lower than usual, but it's a workaround for their API having broken streaming)
+         _this->bufferSize = _this->sampleRate / 100.0;
++        // USB bulk reads must be whole 16 KiB blocks, or libusb reports an overflow on macOS
++        _this->bufferSize = ((_this->bufferSize + 8191) / 8192) * 8192;
+ 
+         // Start streaming
+         err = sddc_start(_this->openDev);
+@@ -444,7 +445,10 @@ private:
+             while (run) {
+                 // Read samples
+                 int err = sddc_rx(openDev, buffer, bufferSize);
+-                if (err) { break; }
++                if (err) {
++                    flog::error("SDDC read failed: {}", err);
++                    break;
++                }
+ 
+                 // Convert the samples to float
+                 volk_16i_s32f_convert_32f(fbuffer, buffer, 32768.0f, bufferSize);
