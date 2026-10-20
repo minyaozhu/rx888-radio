@@ -1,0 +1,588 @@
+// rxapp browser client: tuning, audio, spectrum/waterfall, channels, scans, recordings, dashboard.
+'use strict';
+
+const $ = (id) => document.getElementById(id);
+const api = async (method, path, body) => {
+  const r = await fetch(path, {method, headers: body ? {'Content-Type': 'application/json'} : {},
+                               body: body ? JSON.stringify(body) : undefined});
+  if (!r.ok) throw new Error((await r.json().catch(() => ({detail: r.statusText}))).detail);
+  return r.json();
+};
+const wsUrl = (p) => (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + p;
+const fmtKHz = (hz) => (hz / 1e3).toLocaleString(undefined, {minimumFractionDigits: hz % 1000 ? 2 : 0, maximumFractionDigits: 2});
+const fmtTime = (t) => new Date(t * 1000).toLocaleString();
+
+const state = {
+  info: null, channels: [], selected: null,   // selected = ssrc we tune/listen
+  view: {center: 1.1e6, bin: 1000, n: 2048},
+  levels: {floor: -130, ceil: -60},
+  listening: false,
+};
+
+// ------------------------------------------------------------------ setup
+async function init() {
+  state.info = await api('GET', '/api/info');
+  for (const m of state.info.modes) $('mode').add(new Option(m.toUpperCase(), m));
+  for (const b of Object.keys(state.info.bands)) {
+    $('band').add(new Option(b, b));
+    $('schedBand').add(new Option(b, b));
+    $('dashBand').add(new Option(b, b));
+  }
+  state.channels = await api('GET', '/api/channels');
+  let main = state.channels.find((c) => c.kind === 'listen');
+  if (!main) main = await api('POST', '/api/channels', {freq_hz: 860e3, mode: 'am', label: 'main'});
+  select(main.ssrc, main);
+  wire();
+  resizeCanvases();
+  openSpectrum();
+  openStatus();
+  refreshRecordings();
+}
+
+function select(ssrc, ch) {
+  state.selected = ssrc;
+  ch = ch || state.channels.find((c) => c.ssrc === ssrc);
+  if (!ch) return;
+  $('freq').value = fmtKHz(ch.freq_hz);
+  $('mode').value = ch.mode;
+  $('step').value = defaultStep(ch.mode, ch.freq_hz);
+  if (state.listening) startAudio();
+  renderChannels();
+}
+
+const defaultStep = (mode, f) => (mode === 'am' && f < 1.71e6) ? 10000 : (mode === 'am' ? 5000 :
+  mode === 'nfm' ? 5000 : mode.startsWith('cw') ? 10 : 100);
+
+const current = () => state.channels.find((c) => c.ssrc === state.selected);
+
+// ------------------------------------------------------------------ tuning
+function parseFreq(s) {
+  s = s.trim().toLowerCase().replace(/,/g, '');
+  const m = s.match(/^([\d.]+)\s*(m|mhz|k|khz|hz)?$/);
+  if (!m) return null;
+  const v = parseFloat(m[1]);
+  if (m[2] && m[2].startsWith('m')) return v * 1e6;
+  if (m[2] === 'hz') return v;
+  if (m[2] && m[2].startsWith('k')) return v * 1e3;
+  return v < 50 ? v * 1e6 : v * 1e3;   // bare numbers: < 50 means MHz, else kHz
+}
+
+let tuneTimer = null, pendingTune = null;
+async function tune(freq_hz, mode) {
+  const ch = current();
+  if (!ch) return;
+  if (freq_hz != null) {
+    freq_hz = Math.max(1e3, Math.min(freq_hz, state.info.max_freq_hz - 1e3));
+    ch.freq_hz = freq_hz;
+    $('freq').value = fmtKHz(freq_hz);
+    keepInView(freq_hz);
+  }
+  if (mode) ch.mode = mode;
+  drawSpectrumOverlay();
+  // coalesce wheel/drag bursts into one request every 80 ms
+  pendingTune = {freq_hz: ch.freq_hz, mode: ch.mode};
+  if (tuneTimer) return;
+  tuneTimer = setTimeout(async () => {
+    tuneTimer = null;
+    const body = pendingTune; pendingTune = null;
+    try {
+      await api('PATCH', `/api/channels/${ch.ssrc}`, body);
+      if (mode && state.listening) startAudio();
+    } catch (e) { flash(e.message); }
+  }, 80);
+}
+
+function keepInView(f) {
+  const span = state.view.bin * state.view.n;
+  const lo = state.view.center - span / 2, hi = state.view.center + span / 2;
+  if (f < lo + span * 0.05 || f > hi - span * 0.05) setView(f, null);
+}
+
+let viewTimer = null;
+function setView(center, bin) {
+  clearTimeout(viewTimer);
+  viewTimer = setTimeout(() => api('POST', '/api/spectrum', {center_hz: center, bin_hz: bin}).catch((e) => flash(e.message)), 120);
+}
+
+function flash(msg) {
+  $('scanStatus').textContent = msg;
+  console.warn(msg);
+}
+
+// ------------------------------------------------------------------ audio
+let audio = {ctx: null, gain: null, ws: null, next: 0};
+
+function startAudio() {
+  stopAudio(false);
+  if (!audio.ctx) {
+    audio.ctx = new AudioContext();
+    audio.gain = audio.ctx.createGain();
+    audio.gain.connect(audio.ctx.destination);
+  }
+  audio.ctx.resume();
+  audio.gain.gain.value = parseFloat($('volume').value);
+  audio.next = 0;
+  const ws = new WebSocket(wsUrl(`/ws/audio/${state.selected}`));
+  ws.binaryType = 'arraybuffer';
+  ws.onmessage = (e) => {
+    const rate = new DataView(e.data).getUint32(0, true);
+    const pcm = new Int16Array(e.data, 4);
+    if (!pcm.length) return;
+    const buf = audio.ctx.createBuffer(1, pcm.length, rate);
+    const out = buf.getChannelData(0);
+    for (let i = 0; i < pcm.length; i++) out[i] = pcm[i] / 32768;
+    const src = audio.ctx.createBufferSource();
+    src.buffer = buf;
+    src.connect(audio.gain);
+    const now = audio.ctx.currentTime;
+    if (audio.next < now + 0.05 || audio.next > now + 1.0) audio.next = now + 0.2;  // (re)start jitter buffer
+    src.start(audio.next);
+    audio.next += buf.duration;
+  };
+  ws.onclose = () => {   // server restart or network blip: reconnect while still listening
+    if (audio.ws === ws && state.listening) setTimeout(() => state.listening && startAudio(), 1000);
+  };
+  audio.ws = ws;
+  state.listening = true;
+  $('listen').textContent = '■ Stop';
+  $('listen').classList.add('on');
+}
+
+function stopAudio(updateButton = true) {
+  if (audio.ws) { const w = audio.ws; audio.ws = null; w.onmessage = null; w.onclose = null; w.close(); }
+  if (updateButton) {
+    state.listening = false;
+    $('listen').textContent = '▶ Listen';
+    $('listen').classList.remove('on');
+  }
+}
+
+// ------------------------------------------------------------------ spectrum + waterfall
+const spec = $('spectrum'), wf = $('waterfall');
+const sctx = spec.getContext('2d'), wctx = wf.getContext('2d');
+let lastFrame = null;
+
+// viridis-like palette
+const LUT = (() => {
+  const stops = [[0, 0, 4], [40, 11, 84], [101, 21, 110], [159, 42, 99], [212, 72, 66], [245, 125, 21], [250, 193, 39], [252, 255, 164]];
+  const lut = new Uint8ClampedArray(256 * 3);
+  for (let i = 0; i < 256; i++) {
+    const x = i / 255 * (stops.length - 1), k = Math.min(Math.floor(x), stops.length - 2), f = x - k;
+    for (let c = 0; c < 3; c++) lut[i * 3 + c] = stops[k][c] + (stops[k + 1][c] - stops[k][c]) * f;
+  }
+  return lut;
+})();
+
+function resizeCanvases() {
+  for (const c of [spec, wf]) {
+    const w = Math.floor(c.clientWidth * devicePixelRatio);
+    if (c.width !== w) c.width = w;
+  }
+  wf.height = Math.floor(300 * devicePixelRatio);
+  spec.height = Math.floor(160 * devicePixelRatio);
+}
+window.addEventListener('resize', resizeCanvases);
+
+function openSpectrum() {
+  const ws = new WebSocket(wsUrl('/ws/spectrum'));
+  ws.binaryType = 'arraybuffer';
+  ws.onmessage = (e) => {
+    const dv = new DataView(e.data);
+    const center = dv.getFloat64(0, true), bin = dv.getFloat32(8, true), n = dv.getUint32(12, true);
+    const db = new Float32Array(e.data, 16, n);
+    if (center !== state.view.center || bin !== state.view.bin) {
+      state.view = {center, bin, n};
+      const z = $('zoom'); if ([...z.options].some((o) => +o.value === bin)) z.value = String(bin);
+    }
+    state.view.n = n;
+    lastFrame = db;
+    if ($('autoscale').checked) autoLevels(db);
+    drawWaterfallLine(db);
+    drawSpectrum();
+  };
+  ws.onclose = () => setTimeout(openSpectrum, 1000);
+}
+
+function autoLevels(db) {
+  const s = Float32Array.from(db).sort();
+  const floor = s[Math.floor(s.length * 0.1)], top = s[Math.floor(s.length * 0.999)];
+  state.levels.floor += (floor - 3 - state.levels.floor) * 0.1;
+  state.levels.ceil += (Math.max(top + 3, floor + 30) - state.levels.ceil) * 0.1;
+}
+
+function drawWaterfallLine(db) {
+  const W = wf.width, H = wf.height;
+  wctx.drawImage(wf, 0, 0, W, H - 1, 0, 1, W, H - 1);   // scroll down one row
+  const row = wctx.createImageData(W, 1), d = row.data, n = db.length;
+  const {floor, ceil} = state.levels, k = 255 / (ceil - floor);
+  for (let x = 0; x < W; x++) {
+    // max over the bins that fall in this pixel, so narrow carriers stay visible
+    const a = Math.floor(x * n / W), b = Math.max(a + 1, Math.floor((x + 1) * n / W));
+    let v = -1e9; for (let i = a; i < b; i++) if (db[i] > v) v = db[i];
+    const c = Math.max(0, Math.min(255, (v - floor) * k)) | 0;
+    d[x * 4] = LUT[c * 3]; d[x * 4 + 1] = LUT[c * 3 + 1]; d[x * 4 + 2] = LUT[c * 3 + 2]; d[x * 4 + 3] = 255;
+  }
+  wctx.putImageData(row, 0, 0);
+}
+
+const xToFreq = (x, w) => state.view.center + (x / w - 0.5) * state.view.bin * state.view.n;
+const freqToX = (f, w) => ((f - state.view.center) / (state.view.bin * state.view.n) + 0.5) * w;
+
+function drawSpectrum() {
+  const W = spec.width, H = spec.height, db = lastFrame;
+  sctx.fillStyle = '#05070a'; sctx.fillRect(0, 0, W, H);
+  const {floor, ceil} = state.levels, span = state.view.bin * state.view.n;
+  // frequency grid
+  const step = niceStep(span / 8);
+  sctx.font = `${11 * devicePixelRatio}px -apple-system, sans-serif`;
+  sctx.fillStyle = '#5b6573'; sctx.strokeStyle = '#1b222b';
+  for (let f = Math.ceil((state.view.center - span / 2) / step) * step; f < state.view.center + span / 2; f += step) {
+    const x = freqToX(f, W);
+    sctx.beginPath(); sctx.moveTo(x, 0); sctx.lineTo(x, H); sctx.stroke();
+    sctx.fillText(f >= 1e6 ? (f / 1e6).toFixed(step < 1e5 ? 3 : 1) + ' M' : (f / 1e3).toFixed(0) + ' k', x + 3, H - 4);
+  }
+  // dB grid
+  for (let v = Math.ceil(floor / 10) * 10; v < ceil; v += 10) {
+    const y = H - (v - floor) / (ceil - floor) * H;
+    sctx.beginPath(); sctx.moveTo(0, y); sctx.lineTo(W, y); sctx.stroke();
+    sctx.fillText(v + ' dB', 3, y - 2);
+  }
+  if (db) {
+    sctx.strokeStyle = '#4cc2ff'; sctx.lineWidth = devicePixelRatio; sctx.beginPath();
+    const n = db.length;
+    for (let x = 0; x < W; x++) {
+      const a = Math.floor(x * n / W), b = Math.max(a + 1, Math.floor((x + 1) * n / W));
+      let v = -1e9; for (let i = a; i < b; i++) if (db[i] > v) v = db[i];
+      const y = H - (v - floor) / (ceil - floor) * H;
+      x ? sctx.lineTo(x, y) : sctx.moveTo(x, y);
+    }
+    sctx.stroke();
+  }
+  drawSpectrumOverlay();
+  $('viewInfo').textContent = `${fmtKHz(state.view.center - span / 2)} – ${fmtKHz(state.view.center + span / 2)} kHz · ${state.view.bin} Hz bins`;
+}
+
+function drawSpectrumOverlay() {
+  const W = spec.width, H = spec.height;
+  for (const ch of state.channels) {
+    const x = freqToX(ch.freq_hz, W);
+    if (x < 0 || x > W) continue;
+    const sel = ch.ssrc === state.selected;
+    // passband
+    const bw = ch.mode === 'nfm' ? 12500 : ch.mode.startsWith('cw') ? 400 : ch.mode === 'usb' || ch.mode === 'lsb' ? 3000 : 10000;
+    const lo = ch.mode === 'usb' ? 0 : ch.mode === 'lsb' ? -bw : -bw / 2;
+    const x0 = freqToX(ch.freq_hz + lo, W), x1 = freqToX(ch.freq_hz + lo + bw, W);
+    sctx.fillStyle = sel ? 'rgba(255,184,76,0.15)' : 'rgba(76,194,255,0.10)';
+    sctx.fillRect(x0, 0, Math.max(1, x1 - x0), H);
+    sctx.strokeStyle = sel ? '#ffb84c' : '#4cc2ff'; sctx.lineWidth = devicePixelRatio;
+    sctx.beginPath(); sctx.moveTo(x, 0); sctx.lineTo(x, H); sctx.stroke();
+  }
+}
+
+function niceStep(raw) {
+  const p = Math.pow(10, Math.floor(Math.log10(raw)));
+  for (const m of [1, 2, 5, 10]) if (m * p >= raw) return m * p;
+  return 10 * p;
+}
+
+// Move a click onto the strongest signal within +-frac of the view, if one stands out.
+function snapToPeak(f, frac) {
+  const db = lastFrame; if (!db) return f;
+  const n = db.length, span = state.view.bin * n;
+  const i0 = Math.round((f - state.view.center) / state.view.bin + n / 2), w = Math.max(1, Math.round(frac * n));
+  let best = -1, bv = -1e9;
+  for (let i = Math.max(0, i0 - w); i <= Math.min(n - 1, i0 + w); i++) if (db[i] > bv) { bv = db[i]; best = i; }
+  if (best < 0 || bv < state.levels.floor + 12) return f;   // nothing clearly above the noise
+  return state.view.center + (best - n / 2) * state.view.bin;
+}
+
+// mouse: click tunes (snapping to a nearby signal), wheel steps, drag pans
+function wireScope(canvas) {
+  let drag = null;
+  canvas.addEventListener('mousedown', (e) => { drag = {x: e.clientX, center: state.view.center, moved: false}; });
+  window.addEventListener('mousemove', (e) => {
+    if (!drag) return;
+    const dx = e.clientX - drag.x;
+    if (Math.abs(dx) > 4) drag.moved = true;
+    if (drag.moved) setView(drag.center - dx / canvas.clientWidth * state.view.bin * state.view.n, null);
+  });
+  window.addEventListener('mouseup', (e) => {
+    if (drag && !drag.moved && e.target === canvas) {
+      const r = canvas.getBoundingClientRect();
+      const step = +$('step').value;
+      tune(Math.round(snapToPeak(xToFreq(e.clientX - r.left, r.width), 8 / r.width) / step) * step);
+    }
+    drag = null;
+  });
+  canvas.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const ch = current(); if (!ch) return;
+    const step = +$('step').value;
+    tune(Math.round(ch.freq_hz / step) * step + (e.deltaY < 0 ? step : -step));
+  }, {passive: false});
+}
+
+// ------------------------------------------------------------------ status, channels
+function openStatus() {
+  const ws = new WebSocket(wsUrl('/ws/status'));
+  ws.onmessage = (e) => {
+    const s = JSON.parse(e.data);
+    // keep local edits (pending tunes) authoritative for the selected channel
+    const sel = current();
+    if (sel && !s.channels.some((c) => c.ssrc === sel.ssrc) && !state.recreating) {
+      // our channel is gone (rxapp restarted): make a new one where we were tuned
+      state.recreating = true;
+      api('POST', '/api/channels', {freq_hz: sel.freq_hz, mode: sel.mode, label: 'main'})
+        .then((c) => { state.channels.push(c); select(c.ssrc, c); })
+        .finally(() => { state.recreating = false; });
+      return;
+    }
+    state.channels = s.channels.map((c) => (sel && c.ssrc === sel.ssrc && pendingTune) ? {...c, ...pendingTune} : c);
+    renderHealth(s.health, s.scanning);
+    renderMeter();
+    renderChannels();
+  };
+  ws.onclose = () => { $('health').innerHTML = '<span class="bad">disconnected</span>'; setTimeout(openStatus, 1500); };
+}
+
+function renderHealth(h, scanning) {
+  if (!h || !h.t) return;
+  const ok = h.ok ? '<span class="ok">● radiod</span>' : `<span class="bad">● radiod not answering (${h.fails || 0})</span>`;
+  const rate = h.input_samprate ? (h.input_samprate / 1e6).toFixed(1) + ' MS/s' : '';
+  const over = h.ad_over ? `<span class="bad">ADC overloads ${h.ad_over}</span>` : 'no overloads';
+  $('health').innerHTML = `${ok} · ${rate} · IF ${h.if_power_db?.toFixed(1)} dBFS · RF gain ${h.rf_gain_db?.toFixed(1)} dB · ${over}` +
+    ` · ${h.spectrum_fps} fps · ${h.channels} ch` + (h.restarts ? ` · restarts ${h.restarts}` : '') + (scanning ? ' · <b>scanning</b>' : '');
+}
+
+function renderMeter() {
+  const ch = current(); if (!ch) return;
+  const p = ch.power_db;
+  if (p == null) return;
+  // S-units on HF: S9 = -73 dBm, 6 dB per S unit. radiod's baseband power is dBFS-ish, so this is relative.
+  const pct = Math.max(0, Math.min(100, (p + 130) / 90 * 100));
+  $('meterfill').style.width = pct + '%';
+  $('meterText').textContent = `${p.toFixed(1)} dB · SNR ${ch.snr_db != null ? ch.snr_db.toFixed(1) : '—'} dB`;
+  $('record').classList.toggle('on', !!ch.recording);
+  $('record').textContent = ch.recording ? '■ Stop rec' : '● Rec';
+}
+
+function renderChannels() {
+  const rows = state.channels.map((c) => `
+    <tr class="${c.ssrc === state.selected ? 'sel' : ''}">
+      <td>${fmtKHz(c.freq_hz)} kHz</td><td>${c.mode.toUpperCase()}</td><td>${c.label || ''}${c.recording ? ' <span style="color:var(--rec)">● rec</span>' : ''}</td>
+      <td>${c.power_db != null ? c.power_db.toFixed(1) + ' dB' : ''}</td>
+      <td>${c.snr_db != null ? `<span class="snrbar" style="width:${Math.max(2, Math.min(80, c.snr_db * 1.5))}px"></span>${c.snr_db.toFixed(1)}` : ''}</td>
+      <td><button data-act="sel" data-ssrc="${c.ssrc}">Tune/listen</button>
+          <button data-act="del" data-ssrc="${c.ssrc}">✕</button></td>
+    </tr>`).join('');
+  $('channelRows').innerHTML = rows;
+}
+
+// ------------------------------------------------------------------ scans
+let autoScanTimer = null;
+async function runScan() {
+  const band = $('band').value;
+  $('scanBtn').disabled = true;
+  $('scanStatus').textContent = `scanning ${band}…`;
+  try {
+    const r = await api('POST', `/api/scan/${band}`);
+    $('scanStatus').textContent = `${r.hits.length} signals · floor ${r.floor_db?.toFixed(1) ?? '—'} dB · ${r.frames} frames at ${r.bin_hz} Hz · ${new Date().toLocaleTimeString()}`;
+    const mode = r.mode;
+    $('scanRows').innerHTML = r.hits.map((h) => `
+      <tr><td>${fmtKHz(h.freq_hz)} kHz</td>
+      <td><span class="snrbar" style="width:${Math.max(2, Math.min(120, h.snr_db * 2))}px"></span>${h.snr_db} dB</td>
+      <td><button data-act="tune" data-f="${h.freq_hz}" data-m="${mode}">Tune</button>
+          <button data-act="add" data-f="${h.freq_hz}" data-m="${mode}">+ Channel</button></td></tr>`).join('');
+  } catch (e) {
+    $('scanStatus').textContent = 'scan failed: ' + e.message;
+  } finally {
+    $('scanBtn').disabled = false;
+  }
+}
+
+// ------------------------------------------------------------------ recordings
+async function refreshRecordings() {
+  const recs = await api('GET', '/api/recordings');
+  $('recRows').innerHTML = recs.map((r) => `
+    <tr><td>${fmtTime(r.start)}</td><td>${fmtKHz(r.freq_hz)} kHz</td><td>${(r.mode || '').toUpperCase()}</td>
+    <td>${r.seconds != null ? r.seconds.toFixed(0) + ' s' : '<span style="color:var(--rec)">recording…</span>'}</td>
+    <td>${r.peak_dbfs != null ? r.peak_dbfs.toFixed(1) + ' dBFS' : ''}</td>
+    <td>${r.seconds != null ? `<audio controls preload="none" src="/api/recordings/${r.id}/audio"></audio>` : ''}</td></tr>` +
+    (r.transcript ? `<tr><td></td><td colspan="5" class="dim">“${escapeHtml(r.transcript)}”</td></tr>` : '')).join('');
+}
+
+const escapeHtml = (t) => t.replace(/[&<>"]/g, (c) => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
+
+// ------------------------------------------------------------------ monitor (server-side jobs)
+async function refreshMonitor() {
+  const [sch, wat] = await Promise.all([api('GET', '/api/schedules'), api('GET', '/api/watches')]);
+  $('schedRows').innerHTML = sch.map((s) => `<tr><td>${s.band}</td><td>${s.every_min} min</td>
+    <td>${s.last_run ? fmtTime(s.last_run) : 'pending'}</td>
+    <td><button data-act="delsched" data-id="${s.id}">✕</button></td></tr>`).join('');
+  $('watchRows').innerHTML = wat.map((w) => `<tr><td>${fmtKHz(w.freq_hz)} kHz</td><td>${w.mode.toUpperCase()}</td>
+    <td>${w.label || ''}</td><td>${w.snr_db} dB${w.transcribe ? ' · transcribe' : ''}</td>
+    <td>${w.snr_now != null ? w.snr_now.toFixed(1) + ' dB' : '—'}</td>
+    <td>${w.recording ? '<span style="color:var(--rec)">● recording</span>' : 'waiting'} · ${w.recordings_this_run} saved</td>
+    <td><button data-act="delwatch" data-id="${w.id}">✕</button></td></tr>`).join('');
+}
+let monitorTimer = null;
+
+// ------------------------------------------------------------------ dashboard
+async function refreshDashboard() {
+  const band = $('dashBand').value, hours = $('dashHours').value;
+  const [occ, tl, hh, ev] = await Promise.all([
+    api('GET', `/api/occupancy/${band}?hours=${hours}`), api('GET', `/api/timeline/${band}?hours=${hours}`),
+    api('GET', `/api/health/history?hours=${hours}`), api('GET', '/api/events?limit=30')]);
+  $('dashInfo').textContent = `${occ.scans} scans of ${band} in the last ${hours} h`;
+  drawOccupancy(occ, state.info.bands[band]);
+  drawTimeline(tl, state.info.bands[band], hours);
+  drawHealth(hh, hours);
+  $('eventRows').innerHTML = ev.map((e) => `<tr><td>${fmtTime(e.t)}</td><td>${e.kind}</td><td class="dim">${e.detail}</td></tr>`).join('');
+}
+
+function prepCanvas(c) {
+  c.width = Math.floor(c.clientWidth * devicePixelRatio);
+  c.height = Math.floor(parseInt(c.getAttribute('height')) * devicePixelRatio);
+  const g = c.getContext('2d');
+  g.fillStyle = '#05070a'; g.fillRect(0, 0, c.width, c.height);
+  g.font = `${11 * devicePixelRatio}px -apple-system, sans-serif`;
+  return g;
+}
+
+function bandAxis(g, W, H, b, pad) {
+  const span = b.stop_hz - b.start_hz, step = niceStep(span / 8);
+  g.fillStyle = '#5b6573'; g.strokeStyle = '#1b222b';
+  for (let f = Math.ceil(b.start_hz / step) * step; f <= b.stop_hz; f += step) {
+    const x = pad + (f - b.start_hz) / span * (W - pad);
+    g.beginPath(); g.moveTo(x, 0); g.lineTo(x, H - 14 * devicePixelRatio); g.stroke();
+    g.fillText(f >= 1e6 ? (f / 1e6).toFixed(3) : (f / 1e3).toFixed(0), x + 2, H - 3);
+  }
+}
+
+const snrColor = (s) => { const c = Math.max(0, Math.min(255, s * 6)) | 0; return `rgb(${LUT[c * 3]},${LUT[c * 3 + 1]},${LUT[c * 3 + 2]})`; };
+
+function drawOccupancy(occ, b) {
+  const c = $('occ'), g = prepCanvas(c), W = c.width, H = c.height, pad = 30 * devicePixelRatio, bottom = H - 16 * devicePixelRatio;
+  bandAxis(g, W, H, b, pad);
+  if (!occ.scans) { g.fillStyle = '#8b96a5'; g.fillText('No scans of this band yet — run one from the Scan tab.', pad + 10, 30); return; }
+  const span = b.stop_hz - b.start_hz, bw = Math.max(2, (b.step_hz || span / 200) / span * (W - pad) * 0.8);
+  for (const r of occ.channels) {
+    const x = pad + (r.freq_hz - b.start_hz) / span * (W - pad), h = r.heard / occ.scans * (bottom - 10);
+    g.fillStyle = snrColor(r.mean_snr);
+    g.fillRect(x - bw / 2, bottom - h, bw, h);
+  }
+  g.fillStyle = '#5b6573'; g.fillText('100%', 2, 14 * devicePixelRatio); g.fillText('0', 2, bottom);
+}
+
+function drawTimeline(tl, b, hours) {
+  const c = $('timeline'), g = prepCanvas(c), W = c.width, H = c.height, pad = 30 * devicePixelRatio, bottom = H - 16 * devicePixelRatio;
+  bandAxis(g, W, H, b, pad);
+  if (!tl.length) return;
+  const span = b.stop_hz - b.start_hz, t1 = Date.now() / 1000, t0 = t1 - hours * 3600;
+  for (const r of tl) {
+    const x = pad + (r.freq_hz - b.start_hz) / span * (W - pad), y = (r.t - t0) / (t1 - t0) * bottom;
+    g.fillStyle = snrColor(r.snr_db);
+    g.fillRect(x - 1.5 * devicePixelRatio, y - 1.5 * devicePixelRatio, 3 * devicePixelRatio, 3 * devicePixelRatio);
+  }
+  g.fillStyle = '#5b6573'; g.fillText(`-${hours}h`, 2, 12 * devicePixelRatio); g.fillText('now', 2, bottom);
+}
+
+function drawHealth(hh, hours) {
+  const c = $('healthChart'), g = prepCanvas(c), W = c.width, H = c.height;
+  if (hh.length < 2) { g.fillStyle = '#8b96a5'; g.fillText('Collecting (one sample every 30 s)…', 10, 30); return; }
+  const t1 = Date.now() / 1000, t0 = t1 - hours * 3600;
+  const series = [['if_power_db', '#4cc2ff', -60, 0, 'IF power dBFS'], ['rf_gain_db', '#ffb84c', 0, 40, 'RF gain dB'],
+                  ['spectrum_fps', '#4cd98a', 0, 15, 'spectrum fps']];
+  series.forEach(([k, col, lo, hi, name], i) => {
+    g.strokeStyle = col; g.lineWidth = devicePixelRatio; g.beginPath();
+    hh.forEach((r, j) => {
+      const x = (r.t - t0) / (t1 - t0) * W, y = H - ((r[k] ?? lo) - lo) / (hi - lo) * H;
+      j ? g.lineTo(x, y) : g.moveTo(x, y);
+    });
+    g.stroke(); g.fillStyle = col; g.fillText(name, 8 + i * 120 * devicePixelRatio, 14 * devicePixelRatio);
+  });
+  const overs = hh.filter((r) => r.ad_over);
+  if (overs.length) { g.fillStyle = '#ff6b6b'; g.fillText(`ADC overloads seen: ${overs.at(-1).ad_over}`, 8, 30 * devicePixelRatio); }
+}
+
+// ------------------------------------------------------------------ wiring
+function wire() {
+  $('freq').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { const f = parseFreq($('freq').value); f ? tune(f) : flash('frequency? e.g. 860, 7.2M, 14074k'); $('freq').blur(); }
+  });
+  $('mode').addEventListener('change', () => { tune(null, $('mode').value); $('step').value = defaultStep($('mode').value, current().freq_hz); });
+  $('listen').addEventListener('click', () => state.listening ? stopAudio() : startAudio());
+  $('volume').addEventListener('input', () => { if (audio.gain) audio.gain.gain.value = parseFloat($('volume').value); });
+  $('record').addEventListener('click', async () => {
+    const ch = current(); if (!ch) return;
+    try {
+      if (ch.recording) { await api('DELETE', `/api/channels/${ch.ssrc}/record`); ch.recording = false; }
+      else { await api('POST', `/api/channels/${ch.ssrc}/record`); ch.recording = true; }
+      renderMeter(); refreshRecordings();
+    } catch (e) { flash(e.message); }
+  });
+  $('zoom').addEventListener('change', () => setView(current()?.freq_hz ?? state.view.center, +$('zoom').value));
+  $('center').addEventListener('click', () => setView(current().freq_hz, null));
+  $('autoscale').addEventListener('change', () => {});
+  wireScope(spec); wireScope(wf);
+
+  document.querySelectorAll('.tabs button').forEach((b) => b.addEventListener('click', () => {
+    document.querySelectorAll('.tabs button, .tab').forEach((x) => x.classList.remove('active'));
+    b.classList.add('active'); $('tab-' + b.dataset.tab).classList.add('active');
+    if (b.dataset.tab === 'recordings') refreshRecordings();
+    clearInterval(monitorTimer);
+    if (b.dataset.tab === 'monitor') { refreshMonitor(); monitorTimer = setInterval(refreshMonitor, 2000); }
+    if (b.dataset.tab === 'dashboard') refreshDashboard();
+  }));
+
+  $('addChannel').addEventListener('click', async () => {
+    const ch = current();
+    const c = await api('POST', '/api/channels', {freq_hz: ch.freq_hz, mode: ch.mode, label: ''});
+    state.channels.push(c); renderChannels();
+  });
+  $('channelRows').addEventListener('click', async (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    const ssrc = +b.dataset.ssrc;
+    if (b.dataset.act === 'sel') select(ssrc);
+    if (b.dataset.act === 'del') {
+      if (ssrc === state.selected && state.channels.length === 1) return flash('keep at least one channel');
+      await api('DELETE', `/api/channels/${ssrc}`);
+      state.channels = state.channels.filter((c) => c.ssrc !== ssrc);
+      if (ssrc === state.selected) select(state.channels[0].ssrc);
+      renderChannels();
+    }
+  });
+  $('scanBtn').addEventListener('click', runScan);
+  $('autoScan').addEventListener('change', () => {
+    clearInterval(autoScanTimer);
+    if ($('autoScan').checked) { runScan(); autoScanTimer = setInterval(runScan, Math.max(1, +$('autoMin').value) * 60000); }
+  });
+  $('scanRows').addEventListener('click', async (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    const f = +b.dataset.f, m = b.dataset.m;
+    if (b.dataset.act === 'tune') { $('mode').value = m; tune(f, m); }
+    if (b.dataset.act === 'add') { const c = await api('POST', '/api/channels', {freq_hz: f, mode: m}); state.channels.push(c); renderChannels(); }
+  });
+  $('schedAdd').addEventListener('click', async () => {
+    try { await api('POST', '/api/schedules', {band: $('schedBand').value, every_min: +$('schedMin').value}); refreshMonitor(); }
+    catch (e) { flash(e.message); }
+  });
+  $('watchAdd').addEventListener('click', async () => {
+    const ch = current();
+    try {
+      await api('POST', '/api/watches', {freq_hz: ch.freq_hz, mode: ch.mode, label: '', snr_db: +$('watchSnr').value,
+                                          transcribe: $('watchTx').checked});
+      refreshMonitor();
+    } catch (e) { flash(e.message); }
+  });
+  for (const id of ['schedRows', 'watchRows']) $(id).addEventListener('click', async (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    await api('DELETE', b.dataset.act === 'delsched' ? `/api/schedules/${b.dataset.id}` : `/api/watches/${b.dataset.id}`);
+    refreshMonitor();
+  });
+  $('dashRefresh').addEventListener('click', refreshDashboard);
+  $('dashBand').addEventListener('change', refreshDashboard);
+  $('dashHours').addEventListener('change', refreshDashboard);
+}
+
+init().catch((e) => { $('health').innerHTML = `<span class="bad">startup failed: ${e.message}</span>`; });

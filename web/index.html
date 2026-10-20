@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>rxapp · RX-888</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <div class="brand">rxapp <span class="dim">RX-888 · radiod</span></div>
+  <div id="health" class="health">connecting…</div>
+</header>
+
+<section class="tuner">
+  <div class="freq-wrap">
+    <input id="freq" class="freq" value="" spellcheck="false" aria-label="Frequency (kHz, or add M for MHz)">
+    <span class="unit">kHz</span>
+  </div>
+  <label>Mode <select id="mode"></select></label>
+  <label>Step <select id="step">
+    <option value="10">10 Hz</option><option value="100">100 Hz</option><option value="500">500 Hz</option>
+    <option value="1000">1 kHz</option><option value="5000">5 kHz</option><option value="10000" selected>10 kHz</option>
+  </select></label>
+  <button id="listen" class="primary">▶ Listen</button>
+  <label class="vol">Vol <input id="volume" type="range" min="0" max="1" step="0.01" value="0.7"></label>
+  <button id="record">● Rec</button>
+  <div class="meter">
+    <div class="bar"><div id="meterfill"></div></div>
+    <div id="meterText" class="dim">—</div>
+  </div>
+</section>
+
+<section class="scope">
+  <div class="scope-bar">
+    <span id="viewInfo" class="dim"></span>
+    <span class="spacer"></span>
+    <label>Zoom <select id="zoom">
+      <option value="50">100 kHz</option><option value="100">200 kHz</option><option value="250">500 kHz</option>
+      <option value="500">1 MHz</option><option value="1000" selected>2 MHz</option><option value="2500">5 MHz</option>
+      <option value="5000">10 MHz</option><option value="16000">full HF</option>
+    </select></label>
+    <button id="center" title="Center the view on the tuned frequency">Center</button>
+    <label><input id="autoscale" type="checkbox" checked> auto levels</label>
+  </div>
+  <canvas id="spectrum" height="160"></canvas>
+  <canvas id="waterfall" height="300"></canvas>
+  <div class="hint dim">Click to tune · wheel to step · drag to pan</div>
+</section>
+
+<nav class="tabs">
+  <button data-tab="channels" class="active">Channels</button>
+  <button data-tab="scan">Scan</button>
+  <button data-tab="monitor">Monitor</button>
+  <button data-tab="recordings">Recordings</button>
+  <button data-tab="dashboard">Dashboard</button>
+</nav>
+
+<section id="tab-channels" class="tab active">
+  <div class="row"><button id="addChannel">+ Add channel at tuned frequency</button>
+    <span class="dim">Every channel is demodulated at once by radiod; listen to any one.</span></div>
+  <table><thead><tr><th>Freq</th><th>Mode</th><th>Label</th><th>Power</th><th>SNR</th><th></th></tr></thead>
+    <tbody id="channelRows"></tbody></table>
+</section>
+
+<section id="tab-scan" class="tab">
+  <div class="row">
+    <label>Band <select id="band"></select></label>
+    <button id="scanBtn" class="primary">Scan</button>
+    <label><input id="autoScan" type="checkbox"> repeat every <input id="autoMin" type="number" value="10" min="1" max="240" class="num"> min</label>
+    <span id="scanStatus" class="dim"></span>
+  </div>
+  <table><thead><tr><th>Freq</th><th>SNR</th><th></th></tr></thead><tbody id="scanRows"></tbody></table>
+</section>
+
+<section id="tab-monitor" class="tab">
+  <p class="dim">These run on the server, so they keep going with this page closed.</p>
+  <h3>Scheduled scans</h3>
+  <div class="row">
+    <label>Band <select id="schedBand"></select></label>
+    <label>every <input id="schedMin" type="number" value="10" min="1" max="1440" class="num"> min</label>
+    <button id="schedAdd">+ Add schedule</button>
+  </div>
+  <table><thead><tr><th>Band</th><th>Every</th><th>Last run</th><th></th></tr></thead><tbody id="schedRows"></tbody></table>
+  <h3>Watches <span class="dim">(record a channel whenever a signal appears on it)</span></h3>
+  <div class="row">
+    <button id="watchAdd">+ Watch the tuned frequency</button>
+    <label>record when SNR ≥ <input id="watchSnr" type="number" value="10" class="num"> dB</label>
+    <label><input id="watchTx" type="checkbox"> transcribe</label>
+  </div>
+  <table><thead><tr><th>Freq</th><th>Mode</th><th>Label</th><th>Threshold</th><th>SNR now</th><th>State</th><th></th></tr></thead>
+    <tbody id="watchRows"></tbody></table>
+</section>
+
+<section id="tab-recordings" class="tab">
+  <table><thead><tr><th>Start</th><th>Freq</th><th>Mode</th><th>Length</th><th>Peak</th><th></th></tr></thead>
+    <tbody id="recRows"></tbody></table>
+</section>
+
+<section id="tab-dashboard" class="tab">
+  <div class="row">
+    <label>Band <select id="dashBand"></select></label>
+    <label>Last <select id="dashHours"><option value="1">1 h</option><option value="6">6 h</option>
+      <option value="24" selected>24 h</option><option value="168">7 days</option></select></label>
+    <button id="dashRefresh">Refresh</button>
+    <span id="dashInfo" class="dim"></span>
+  </div>
+  <h3>Occupancy <span class="dim">(share of scans each channel was heard, colored by mean SNR)</span></h3>
+  <canvas id="occ" height="220"></canvas>
+  <h3>Activity over time <span class="dim">(each dot is a detection; brighter = stronger)</span></h3>
+  <canvas id="timeline" height="220"></canvas>
+  <h3>Receiver health</h3>
+  <canvas id="healthChart" height="160"></canvas>
+  <h3>Events</h3>
+  <table><tbody id="eventRows"></tbody></table>
+</section>
+
+<script src="app.js"></script>
+</body>
+</html>
