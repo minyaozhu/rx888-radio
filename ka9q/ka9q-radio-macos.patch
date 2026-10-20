@@ -1,0 +1,136 @@
+diff --git a/src/avahi.c b/src/avahi.c
+index 775390b..4945267 100644
+--- a/src/avahi.c
++++ b/src/avahi.c
+@@ -15,6 +15,7 @@
+ #include <ctype.h>
+ #include "misc.h"
+ #include "avahi.h"
++#include <sysexits.h>
+ 
+ #define SERVICES "/etc/avahi/services"
+ #define HOSTS "/etc/avahi/hosts"
+@@ -27,6 +28,44 @@ static void sanitize_filename(char *name);
+ 
+ int avahi_start(char const *service_name,char const *service_type,int const service_port,char const *dns_name,uint32_t address,char const *description){
+   int pid = getpid(); // Advertise the parent's pid, not the child's
++#ifdef __APPLE__
++  // macOS has no avahi; publish through Bonjour's dns-sd.
++  // "dns-sd -P" registers the service plus a host record for dns_name -> address,
++  // which covers both avahi-publish-service and avahi-publish-address.
++  if(fork() == 0){
++#pragma GCC diagnostic push
++#pragma GCC diagnostic ignored "-Wunused-result"
++    char *port_string = NULL;
++    asprintf(&port_string, "%d", service_port);
++    char *pid_string = NULL;
++    asprintf(&pid_string, "pid=%d", pid);
++    char hostname[sysconf(_SC_HOST_NAME_MAX)];
++    gethostname(hostname,sizeof(hostname));
++    char *source_string = NULL;
++    asprintf(&source_string, "source=%s", hostname);
++    char *desc_string = NULL;
++    asprintf(&desc_string, "description=%s", description ? description : "");
++#pragma GCC diagnostic pop
++    // dns-sd wants the host without the .local suffix it adds itself
++    char host[256];
++    strlcpy(host, dns_name, sizeof host);
++    char *dot = strstr(host, ".local");
++    if(dot != NULL && dot[6] == '\0')
++      *dot = '\0';
++    if(address != 0){
++      char ip[INET_ADDRSTRLEN];
++      snprintf(ip, sizeof ip, "%d.%d.%d.%d", (address >> 24) & 0xff, (address >> 16) & 0xff, (address >> 8) & 0xff, address & 0xff);
++      execlp("dns-sd", "dns-sd", "-P", service_name, service_type, "local", port_string, host, ip,
++	     desc_string, pid_string, source_string, NULL);
++    } else {
++      execlp("dns-sd", "dns-sd", "-R", service_name, service_type, "local", port_string,
++	     desc_string, pid_string, source_string, NULL);
++    }
++    perror("exec dns-sd failed");
++    _exit(EX_OSERR);
++  }
++  return 0;
++#endif
+   if(Static_avahi){
+     // Just put in /etc/avahi/services
+     avahi_publish_service(service_name, service_type, dns_name,service_port,description,pid);
+@@ -61,7 +100,7 @@ int avahi_start(char const *service_name,char const *service_type,int const serv
+ #endif
+       execlp("avahi-publish-service", "avahi-publish-service", "--no-fail", host_string, service_name, service_type, port_string, description, pid_string, source_string, NULL);
+       perror("exec avahi publish service failed");
+-      return -1;
++      _exit(EX_OSERR); // never fall back into the parent's code as a second radiod
+     }
+   }
+   if(address != 0){
+@@ -85,7 +124,7 @@ int avahi_start(char const *service_name,char const *service_type,int const serv
+ #endif
+ 	execlp("avahi-publish-address", "avahi-publish-address","--no-fail",dns_name,ip_address_string, NULL);
+ 	perror("exec avahi publish address");
+-	return -1;
++	_exit(EX_OSERR);
+       }
+     }
+   }
+diff --git a/src/monitor.c b/src/monitor.c
+index aeef5e5..f532a41 100644
+--- a/src/monitor.c
++++ b/src/monitor.c
+@@ -346,7 +346,7 @@ int main(int argc,char * const argv[]){
+   // Get rid of those fucking ALSA error messages that clutter the screen
+   snd_lib_error_set_handler(alsa_error_handler);
+ #endif
+-#define REPEATERS "/var/lib/ka9q-radio/repeaters.d"
++#define REPEATERS STATEDIR "/repeaters.d"
+   //static degree_t const Mylat = 39.337802;
+   static degree_t const Mylat =  32.860455;
+   static degree_t const Mylongit = -117.188861;
+diff --git a/src/multicast.c b/src/multicast.c
+index e73df74..c9f1265 100644
+--- a/src/multicast.c
++++ b/src/multicast.c
+@@ -322,6 +322,23 @@ int resolve_mcast(char const *group, void *group_sock, uint16_t default_port, ch
+     int const ecode = getaddrinfo(full_host, port, &hints, &results);
+     if(ecode == 0)
+       break;
++#ifdef __APPLE__
++    // macOS: Bonjour won't resolve the multicast host records radiod publishes.
++    // radiod derives every group address from its name with make_maddr(), so a
++    // client on the same LAN can compute it without asking mDNS at all.
++    size_t const hl = strlen(full_host);
++    if(hl > 6 && strcasecmp(full_host + hl - 6, ".local") == 0){
++      struct sockaddr_in sin = {
++	.sin_len = sizeof(struct sockaddr_in),
++	.sin_family = AF_INET,
++	.sin_port = htons(port != NULL ? (uint16_t)atoi(port) : default_port),
++	.sin_addr.s_addr = htonl(make_maddr(full_host)),
++      };
++      memcpy(group_sock, &sin, sizeof sin);
++      fprintf(stderr, "resolve_mcast: %s not in mDNS, using derived address %s\n", full_host, formatsock(&sin, false));
++      return 0;
++    }
++#endif
+     if(!message_logged){
+       int64_t now = gps_time_ns();
+       if(now > start_time + 2 * BILLION){
+@@ -642,12 +659,19 @@ int join_group(int fd, struct sockaddr const * const source, struct sockaddr con
+     {
+       level = IPPROTO_IP;
+       memcpy(&req.gr_group,group,sizeof(struct sockaddr_in));
++#ifdef __APPLE__
++      // BSD kernels reject group_req addresses without sa_len (EINVAL)
++      ((struct sockaddr_in *)&req.gr_group)->sin_len = sizeof(struct sockaddr_in);
++#endif
+     }
+     break;
+   case AF_INET6:
+     {
+       level = IPPROTO_IPV6;
+       memcpy(&req.gr_group,group,sizeof(struct sockaddr_in6));
++#ifdef __APPLE__
++      ((struct sockaddr_in6 *)&req.gr_group)->sin6_len = sizeof(struct sockaddr_in6);
++#endif
+     }
+     break;
+   default:

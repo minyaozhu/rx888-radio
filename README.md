@@ -17,6 +17,8 @@ Python tools for driving an **RX-888 MkII** SDR from a Mac (Apple Silicon, macOS
 | `rx888/usb.py` | USB discovery (VID/PID for bootloader and SDDC states) |
 | `am_scan.py` | Scans the AM broadcast band through SoapySDDC, tries several IF gains, lists stations by SNR; `--tune` sets SDR++ to the strongest |
 | `rx888/sddc.py` | Direct control: HF/VHF port, gain, VHF tuner, ADC rate, sample stream |
+| `fm_scan.py` | Scans the FM band on the VHF input; `--tune` sets SDR++ to the strongest station (WFM) |
+| `ka9q/` | ka9q-radio (radiod, multichannel) ported to macOS; see [ka9q/README.md](ka9q/README.md) |
 | `run_sdrpp.sh` | Launches the locally built SDR++ with the official SoapySDDC driver |
 
 ## Setup
