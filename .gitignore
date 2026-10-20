@@ -1,0 +1,13 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+
+# FX3 firmware images: fetch them yourself (see README)
+fw/*.img
+
+# Large captures
+recordings/*.wav
+recordings/*.iq
+recordings/*.raw
