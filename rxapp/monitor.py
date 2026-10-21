@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Optional
 
-from .config import ROOT
+from .config import CONFIG, ROOT
 from .jobs import BANDS, Recorder
 
 log = logging.getLogger(__name__)
@@ -92,6 +92,8 @@ class Monitor:
             for s in self.schedules():
                 if not s["enabled"] or (s["last_run"] and now - s["last_run"] < s["every_min"] * 60):
                     continue
+                if BANDS[s["band"]].band != self.radio.band:
+                    continue                       # its input isn't selected; runs again when it is
                 self.store._exec("UPDATE schedules SET last_run = ? WHERE id = ?", (now, s["id"]))
                 try:
                     r = await self.scanner.scan(s["band"])
@@ -126,7 +128,9 @@ class Monitor:
         self.store._exec("DELETE FROM watches WHERE id = ?", (wid,))
 
     async def _open_watch(self, row):
-        ch = await self.radio.create(row["freq_hz"], row["mode"], row["label"] or f"watch {row['id']}", kind="watch")
+        band = "vhf" if row["freq_hz"] > CONFIG.max_freq_hz else "hf"
+        ch = await self.radio.create(row["freq_hz"], row["mode"], row["label"] or f"watch {row['id']}",
+                                     kind="watch", band=band)
         self.watches[row["id"]] = WatchState(row=row, ssrc=ch.ssrc)
         log.info("watching %.3f kHz %s (SNR >= %.0f dB)", row["freq_hz"] / 1e3, row["mode"], row["snr_db"])
 
@@ -136,7 +140,9 @@ class Monitor:
             now = time.time()
             for w in list(self.watches.values()):
                 ch = await self.radio.refresh(w.ssrc)
-                if ch is None:          # radiod restarted and the supervisor hasn't restored yet
+                if ch is None or ch.parked:   # restoring after a radiod restart, or the other input is selected
+                    if w.recorder and ch is not None and ch.parked:
+                        self._finish(w)
                     continue
                 w.snr = ch.snr_db
                 up = ch.snr_db is not None and ch.snr_db >= w.row["snr_db"]

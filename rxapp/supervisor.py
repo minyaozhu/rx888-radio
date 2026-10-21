@@ -10,7 +10,7 @@ import logging
 import subprocess
 import time
 
-from .config import CONFIG
+from .config import CONFIG, RADIOD_CONFS, RUNTIME
 
 log = logging.getLogger(__name__)
 
@@ -28,6 +28,7 @@ def radiod_pids():
 class Supervisor:
     def __init__(self, radio, spectrum, store):
         self.radio, self.spectrum, self.store = radio, spectrum, store
+        self._restarting = False
         self.busy = lambda: False   # set by the server: True while a scan is reconfiguring the spectrum
         self.proc = None
         self.restarts = 0
@@ -35,6 +36,7 @@ class Supervisor:
         self.health = {}
         self._task = None
         self._fps_mark = (time.time(), 0)
+        self._last_over = None
 
     async def ensure_radiod(self):
         if radiod_pids():
@@ -48,7 +50,8 @@ class Supervisor:
         logpath = CONFIG.data_dir / "radiod.log"
         self._log_start = logpath.stat().st_size if logpath.exists() else 0
         logf = open(logpath, "ab")
-        self.proc = subprocess.Popen([str(CONFIG.radiod_script)], stdout=logf, stderr=subprocess.STDOUT,
+        conf = RADIOD_CONFS[RUNTIME.adc_rate_hz]
+        self.proc = subprocess.Popen([str(CONFIG.radiod_script), conf], stdout=logf, stderr=subprocess.STDOUT,
                                      start_new_session=True)
         log.info("started radiod (pid %d)", self.proc.pid)
         self.store.event("radiod_start", pid=self.proc.pid)
@@ -102,8 +105,16 @@ class Supervisor:
                     t0, n0 = self._fps_mark
                     fps = (self.spectrum.frames - n0) / max(now - t0, 1e-3)
                     self._fps_mark = (now, self.spectrum.frames)
+                    rate = fe.get("input_samprate")
+                    if rate and rate in RADIOD_CONFS and rate != RUNTIME.adc_rate_hz:
+                        RUNTIME.adc_rate_hz = float(rate)   # radiod was started elsewhere: adopt its rate
+                        RUNTIME.save()
+                    over = fe.get("ad_over") or 0
+                    recent = 0 if self._last_over is None or over < self._last_over else over - self._last_over
+                    self._last_over = over
                     self.health = {
-                        "t": now, "ok": True, "restarts": self.restarts,
+                        "t": now, "ok": True, "restarts": self.restarts, "overloads_recent": recent,
+                        "band": self.radio.band, "vhf": self.radio.vhf.info(), "adc_rate_hz": RUNTIME.adc_rate_hz,
                         "input_samprate": fe.get("input_samprate"), "if_power_db": fe.get("if_power"),
                         "rf_gain_db": fe.get("rf_gain"), "rf_atten_db": fe.get("rf_atten"),
                         "rf_agc": fe.get("rf_agc"), "ad_over": fe.get("ad_over"),
@@ -112,13 +123,13 @@ class Supervisor:
                         "spectrum_fps": round(fps, 1), "channels": len(self.radio.channels)}
                     if now - last_health >= HEALTH_EVERY_SEC:
                         self.store.add_health(t=now, if_power_db=self.health["if_power_db"],
-                                              rf_gain_db=self.health["rf_gain_db"], ad_over=self.health["ad_over"],
+                                              rf_gain_db=self.health["rf_gain_db"], ad_over=recent,
                                               input_samples=self.health["input_samples"],
                                               spectrum_fps=self.health["spectrum_fps"],
                                               channels=self.health["channels"])
                         last_health = now
                     continue
-                if self.busy() and radiod_pids():
+                if self._restarting or (self.busy() and radiod_pids()):
                     continue                 # a scan is swapping spectrum channels; not a radiod failure
                 self.fails += 1
                 self.health = {**self.health, "ok": False, "fails": self.fails}
@@ -130,18 +141,39 @@ class Supervisor:
             except Exception:
                 log.exception("watchdog")
 
+    async def set_coverage(self, rate_hz: float):
+        """Restart radiod at another ADC rate (64.8 MS/s: 0-32 MHz, 129.6 MS/s: 0-64 MHz)."""
+        if rate_hz not in RADIOD_CONFS:
+            raise ValueError(f"rate must be one of {sorted(RADIOD_CONFS)}")
+        if rate_hz == RUNTIME.adc_rate_hz and radiod_pids():
+            return
+        RUNTIME.adc_rate_hz = float(rate_hz)
+        RUNTIME.save()
+        self.store.event("coverage", adc_rate_hz=rate_hz)
+        await self._restart_radiod()
+
+    async def _restart_radiod(self):
+        self._restarting = True
+        try:
+            pids = radiod_pids()
+            for pid in pids:          # stop it so the USB device is free
+                subprocess.run(["kill", str(pid)])
+            for _ in range(20):
+                if not radiod_pids():
+                    break
+                await asyncio.sleep(0.5)
+            await self._start_radiod()
+            self.restarts += 1
+            self._last_over = None
+            await self.radio.restore()
+            await self.spectrum.retarget()
+            self.fails = 0
+        finally:
+            self._restarting = False
+
     async def _recover(self):
         if not CONFIG.manage_radiod:
             return
-        pids = radiod_pids()
-        self.store.event("radiod_recover", running=bool(pids), fails=self.fails)
-        for pid in pids:          # hung radiod: stop it so the USB device is free
-            subprocess.run(["kill", str(pid)])
-        if pids:
-            await asyncio.sleep(2)
-        await self._start_radiod()
-        self.restarts += 1
-        await self.radio.restore()
-        await self.spectrum._restart()
-        self.fails = 0
+        self.store.event("radiod_recover", running=bool(radiod_pids()), fails=self.fails)
+        await self._restart_radiod()
         log.info("recovered radiod (restart #%d)", self.restarts)

@@ -1,5 +1,6 @@
 """Settings, read from the environment (RXAPP_*) with defaults for this Mac."""
 
+import json
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -28,8 +29,6 @@ class Config:
     manage_radiod: bool = _env("MANAGE_RADIOD", "1") == "1"
     # Data
     data_dir: Path = Path(_env("DATA", str(ROOT / "rxapp_data")))
-    # radiod's sample rate decides the HF coverage (Nyquist)
-    adc_rate_hz: float = float(_env("ADC_RATE", "64.8e6"))
     # Default spectrum view: the AM broadcast band
     spectrum_center_hz: float = 1.1e6
     spectrum_bins: int = 2048
@@ -37,7 +36,7 @@ class Config:
 
     @property
     def max_freq_hz(self):
-        return self.adc_rate_hz / 2
+        return RUNTIME.adc_rate_hz / 2
 
     @property
     def db_path(self):
@@ -48,7 +47,8 @@ class Config:
         return self.data_dir / "recordings"
 
 
-# Modes offered in the UI -> radiod preset, output sample rate
+# Modes offered in the UI -> radiod preset, output sample rate (None: the preset's own;
+# the real rate is read back from radiod's status)
 MODES = {
     "am": ("am", 12000),
     "sam": ("sam", 12000),
@@ -57,6 +57,35 @@ MODES = {
     "cwu": ("cwu", 12000),
     "cwl": ("cwl", 12000),
     "nfm": ("nfm", 24000),
+    "wfm": ("wfm", None),
 }
+BAND_MODES = {"hf": ["am", "sam", "usb", "lsb", "cwu", "cwl", "nfm"], "vhf": ["wfm", "nfm", "am"]}
+
+# radiod sample rate -> its config file. 64.8 MS/s covers 0-32 MHz, 129.6 MS/s covers 0-64 MHz.
+RADIOD_CONFS = {64.8e6: "radiod-rxapp-64.conf", 129.6e6: "radiod-rxapp-129.conf"}
+
+# VHF/UHF tuner (R828D) range
+VHF_MIN_HZ, VHF_MAX_HZ = 24e6, 1700e6
 
 CONFIG = Config()
+
+
+class Runtime:
+    """Settings the UI can change at run time, persisted in rxapp_data/settings.json."""
+
+    def __init__(self, path: Path):
+        self.path = path
+        d = {}
+        try:
+            d = json.loads(path.read_text())
+        except (OSError, ValueError):
+            pass
+        self.adc_rate_hz = float(d.get("adc_rate_hz", 64.8e6))
+        self.vga = int(d.get("vga", 6))
+
+    def save(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text(json.dumps({"adc_rate_hz": self.adc_rate_hz, "vga": self.vga}))
+
+
+RUNTIME = Runtime(CONFIG.data_dir / "settings.json")

@@ -73,3 +73,45 @@ def test_frame_wire_format():
     assert (center, bin_hz, n) == (1.1e6, 1000.0, 3)
     assert np.frombuffer(b[16:], "<f4").tolist() == [-100, -90, -80]
     assert f.freqs.tolist() == [1.099e6, 1.1e6, 1.101e6]
+
+
+# ---- VHF mapping, span limits ---------------------------------------------
+from types import SimpleNamespace
+
+from rxapp.config import RUNTIME
+from rxapp.spectrum import Spectrum
+from rxapp.vhf import WINDOW_HZ, Vhf
+
+
+def test_vhf_if_mapping_is_inverted_and_reversible():
+    v = Vhf()
+    v.center_hz, v.if_hz = 97.4e6, 4.57e6
+    assert v.to_if(97.4e6) == 4.57e6            # the tuned frequency sits at the IF
+    assert v.to_if(98.5e6) == pytest.approx(3.47e6)   # higher RF -> lower IF (LO above RF)
+    assert v.to_rf(v.to_if(101.1e6)) == pytest.approx(101.1e6)
+    assert v.radiod_mode("usb") == "lsb" and v.radiod_mode("wfm") == "wfm"
+    assert v.in_window(97.4e6 + WINDOW_HZ) and not v.in_window(97.4e6 + WINDOW_HZ + 1)
+
+
+def _spectrum(band, center=None):
+    radio = SimpleNamespace(band=band, vhf=SimpleNamespace(center_hz=center, to_if=lambda f: f), on_tuner_move=[])
+    return Spectrum(radio)
+
+
+@pytest.mark.parametrize("rate", [64.8e6, 129.6e6])
+def test_hf_span_never_exceeds_nyquist(rate, monkeypatch):
+    # radiod returns half-empty frames when the span is wider than Nyquist
+    monkeypatch.setattr(RUNTIME, "adc_rate_hz", rate)
+    s = _spectrum("hf")
+    s.bin_hz, s.center_hz = 16000.0, 16e6        # the old "full HF" request: 32.77 MHz
+    s._clamp()
+    assert s.span_hz <= rate / 2 + 1
+    assert s.center_hz - s.span_hz / 2 >= -1 and s.center_hz + s.span_hz / 2 <= rate / 2 + 1
+
+
+def test_vhf_view_stays_in_tuner_window():
+    s = _spectrum("vhf", center=100e6)
+    s.bin_hz, s.center_hz = 10000.0, 110e6
+    s._clamp()
+    assert s.span_hz <= 2 * WINDOW_HZ + 1
+    assert abs(s.center_hz - 100e6) + s.span_hz / 2 <= WINDOW_HZ + 1

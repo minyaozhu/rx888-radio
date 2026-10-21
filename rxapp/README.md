@@ -23,12 +23,33 @@ or the SoapySDDC scripts.
 
 | | |
 |---|---|
-| **Listen** | Spectrum + waterfall (2048 bins, ~10 fps), click to tune (snaps to the nearest signal), wheel to step, drag to pan, zoom 100 kHz–full HF. Modes AM, SAM, USB, LSB, CW, NFM. Audio in the browser over a WebSocket, S-meter and SNR. |
+| **Inputs** | **HF** (direct sampling) or **VHF** (the R828D tuner, 24–1700 MHz), switched from the page. HF **coverage** 0–32 MHz (radiod at 64.8 MS/s) or 0–64 MHz (129.6 MS/s, ~90% of one core); switching restarts radiod and restores the channels. |
+| **Listen** | Spectrum + waterfall (2048 bins, ~10 fps), click to tune (snaps to the nearest signal), wheel to step, drag to pan, span 100 kHz up to the full coverage (HF) or the 7.2 MHz tuner window (VHF). HF modes AM, SAM, USB, LSB, CW, NFM; VHF modes WFM, NFM, AM. Audio in the browser over a WebSocket, S-meter and SNR. |
 | **Channels** | Any number at once (radiod demodulates them all); listen to one, record any. |
-| **Scan** | AM broadcast, shortwave broadcast bands, ham bands (peak finding for SSB), CB, and a WWV propagation check (2.5–25 MHz). Each scan uses its own spectrum channel, so the display doesn't move. |
+| **Scan** | HF: AM broadcast, shortwave broadcast bands, ham bands (peak finding for SSB), CB, WWV propagation check. VHF: FM broadcast, airband, 2 m, NOAA weather; bands wider than the tuner window are scanned in steps (FM: 4 steps, ~25 s), which briefly moves the tuner. HF scans use their own spectrum channel, so the display doesn't move. |
 | **Monitor** (server-side) | Scheduled scans (default: AM every 10 min, WWV every 30 min) and *watches*: a channel recorded automatically whenever its SNR rises above a threshold, optionally transcribed on-device. |
 | **Dashboard** | Occupancy per channel, detections over time, receiver health (IF power, RF gain, spectrum rate, ADC overloads), event log. |
 | **Recovery** | A supervisor restarts radiod when it stops answering (USB unplug, crash) and re-creates every channel with the same SSRC; open pages reconnect and re-create their channel. |
+
+## How VHF works with radiod
+
+radiod's RX-888 driver has no working VHF support ("VHF tuner does not work yet"), but it doesn't need
+it: radiod keeps sampling the ADC as on HF, and rxapp flips the RX-888's antenna switch to the tuner and
+programs the R828D over USB control transfers (`rxapp/vhf.py`, using ka9q-radio's
+`rx888_vhf_demo/rx888_vhf.py`). The tuner mixes the wanted signal to a 4.57 MHz IF with its LO above the
+signal, so the IF spectrum is inverted:
+
+    radiod frequency = 4.57 MHz − (RF − tuner centre)       (USB/LSB swap)
+
+Channels keep their real frequency and band; rxapp maps them, flips and relabels the spectrum, and moves
+the tuner when you tune outside its ±3.6 MHz window (channels outside the window pause until it returns).
+The tuner's LNA and mixer run on their own AGC with the IF VGA at 6 (adjustable, "Tuner gain"); radiod's
+RF AGC then holds the ADC at about −20 dBFS. Expect a burst of ADC overloads for a second or two right
+after switching to VHF while radiod's AGC settles. Channels that stop producing audio for 5 s (seen once,
+right after a switch) are re-created automatically.
+
+Channels of the input not in use are *parked* (kept by rxapp, absent from radiod); HF watches and HF scan
+schedules pause while VHF is selected, and the other way round.
 
 ## Design notes
 
@@ -63,8 +84,9 @@ or the SoapySDDC scripts.
 
 ## Known limits
 
-- **HF only (0–32.4 MHz at 64.8 MS/s).** radiod's RX-888 driver doesn't drive the VHF tuner; FM/airband
-  still go through SoapySDDC (`fm_scan.py`) or SDR++.
+- **VHF tuner gain** is one IF VGA setting plus the chip's own LNA/mixer AGC; there's no manual LNA control
+  in the UI yet. Very strong local signals may need a lower "Tuner gain".
+- **WFM is mono** (radiod's `wfm` preset with `mono = yes`); no RDS.
 - **Transcription needs a one-time macOS permission.** Watches with *transcribe* call the Malahit toolkit's
   `Transcribe.app`; run it once from Terminal and allow Speech Recognition:
   `open -W -n ../Malahit/tools/Transcribe.app --args <some.wav> /tmp/out.txt`.

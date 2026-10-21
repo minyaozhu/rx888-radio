@@ -13,14 +13,20 @@
 </header>
 
 <section class="tuner">
+  <div class="seg" role="group" aria-label="Input">
+    <button id="bandHF" class="seg-btn active" title="HF input: direct sampling">HF</button>
+    <button id="bandVHF" class="seg-btn" title="VHF/UHF tuner (24-1700 MHz)">VHF</button>
+  </div>
   <div class="freq-wrap">
-    <input id="freq" class="freq" value="" spellcheck="false" aria-label="Frequency (kHz, or add M for MHz)">
-    <span class="unit">kHz</span>
+    <input id="freq" class="freq" value="" spellcheck="false" aria-label="Frequency">
+    <span id="unit" class="unit">kHz</span>
   </div>
   <label>Mode <select id="mode"></select></label>
   <label>Step <select id="step">
     <option value="10">10 Hz</option><option value="100">100 Hz</option><option value="500">500 Hz</option>
     <option value="1000">1 kHz</option><option value="5000">5 kHz</option><option value="10000" selected>10 kHz</option>
+    <option value="12500">12.5 kHz</option><option value="25000">25 kHz</option><option value="100000">100 kHz</option>
+    <option value="200000">200 kHz</option>
   </select></label>
   <button id="listen" class="primary">▶ Listen</button>
   <label class="vol">Vol <input id="volume" type="range" min="0" max="1" step="0.01" value="0.7"></label>
@@ -35,11 +41,11 @@
   <div class="scope-bar">
     <span id="viewInfo" class="dim"></span>
     <span class="spacer"></span>
-    <label>Zoom <select id="zoom">
-      <option value="50">100 kHz</option><option value="100">200 kHz</option><option value="250">500 kHz</option>
-      <option value="500">1 MHz</option><option value="1000" selected>2 MHz</option><option value="2500">5 MHz</option>
-      <option value="5000">10 MHz</option><option value="16000">full HF</option>
-    </select></label>
+    <label id="coverageWrap" title="HF coverage: restarts radiod at 64.8 MS/s (0-32 MHz) or 129.6 MS/s (0-64 MHz)">Coverage
+      <select id="coverage"><option value="64800000">0–32 MHz</option><option value="129600000">0–64 MHz</option></select></label>
+    <label id="vgaWrap" style="display:none" title="VHF tuner IF gain (0-15); the tuner's LNA and mixer run on their own AGC">Tuner gain
+      <input id="vga" type="range" min="0" max="15" step="1"> <span id="vgaVal" class="dim"></span></label>
+    <label>Span <select id="zoom"></select></label>
     <button id="center" title="Center the view on the tuned frequency">Center</button>
     <label><input id="autoscale" type="checkbox" checked> auto levels</label>
   </div>

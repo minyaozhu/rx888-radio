@@ -63,3 +63,10 @@ audio { height: 28px; vertical-align: middle; }
   .meter { min-width: 0; }
   .bar { width: 90px; }
 }
+
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.seg-btn { border: none; border-radius: 0; background: #1d232c; padding: 6px 12px; font-weight: 600; }
+.seg-btn + .seg-btn { border-left: 1px solid var(--line); }
+.seg-btn.active { background: #17405a; color: #fff; }
+.seg-btn:disabled { opacity: .5; cursor: wait; }
+#vga { width: 90px; padding: 0; }

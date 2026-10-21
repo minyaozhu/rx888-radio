@@ -12,6 +12,7 @@ import numpy as np
 from ka9q import SpectrumStream
 
 from .config import CONFIG
+from .vhf import WINDOW_HZ
 
 log = logging.getLogger(__name__)
 
@@ -24,6 +25,7 @@ class Band:
     step_hz: float          # channel grid; 0 = find peaks anywhere
     mode: str
     first_hz: Optional[float] = None   # first grid channel, if not start_hz
+    band: str = "hf"                   # which input: hf | vhf
 
 
 BANDS: Dict[str, Band] = {b.name: b for b in [
@@ -48,6 +50,10 @@ BANDS: Dict[str, Band] = {b.name: b for b in [
     Band("17m", 18.11e6, 18.168e6, 0, "usb"),
     Band("15m", 21.2e6, 21.45e6, 0, "usb"),
     Band("cb", 26.965e6, 27.405e6, 10e3, "am"),
+    Band("fm", 88.1e6, 107.9e6, 200e3, "wfm", band="vhf"),
+    Band("air", 118.0e6, 136.975e6, 25e3, "am", band="vhf"),
+    Band("2m", 144.0e6, 148.0e6, 0, "nfm", band="vhf"),
+    Band("wx", 162.4e6, 162.55e6, 25e3, "nfm", band="vhf"),
 ]}
 
 WWV_HZ = [2.5e6, 5e6, 10e6, 15e6, 20e6, 25e6]
@@ -63,11 +69,13 @@ class Scanner:
         self.lock = asyncio.Lock()    # one scan at a time
         self.bins = spectrum.bins
 
-    async def _capture(self, center_hz: float, bin_hz: float, frames: int, timeout: float = 15.0):
+    async def _capture(self, center_hz: float, bin_hz: float, frames: int, timeout: float = 15.0,
+                       clamp: bool = True):
         """Average `frames` spectrum frames (linear power) from a temporary spectrum channel."""
         half = self.bins * bin_hz / 2
-        center_hz = min(max(center_hz, half), CONFIG.max_freq_hz - half) if 2 * half < CONFIG.max_freq_hz \
-            else CONFIG.max_freq_hz / 2
+        if clamp:
+            center_hz = min(max(center_hz, half), CONFIG.max_freq_hz - half) if 2 * half < CONFIG.max_freq_hz \
+                else CONFIG.max_freq_hz / 2
         loop = asyncio.get_running_loop()
         q: asyncio.Queue = asyncio.Queue()
 
@@ -96,16 +104,23 @@ class Scanner:
 
     async def scan(self, name: str, frames: int = 20, min_snr: float = 8.0):
         band = BANDS[name]
+        radio = self.spectrum.radio
+        if band.band != radio.band:
+            raise ValueError(f"{name} is a {band.band.upper()} band; switch the input to {band.band.upper()} first")
         async with self.lock:
             if name == "wwv":
                 return await self._scan_wwv(frames)
             width = band.stop_hz - band.start_hz
-            bin_hz = next(b for b in NICE_BINS if b * self.bins >= width * 1.1)
-            if band.step_hz:
-                bin_hz = min(bin_hz, max(NICE_BINS[0], band.step_hz / 4))
-                while bin_hz * self.bins < width * 1.1:
-                    bin_hz *= 2
-            freqs, db, n = await self._capture((band.start_hz + band.stop_hz) / 2, bin_hz, frames)
+            if band.band == "vhf":
+                bin_hz = 2500.0 if band.step_hz >= 100e3 else 500.0
+                freqs, db, n = await self._capture_vhf(band.start_hz, band.stop_hz, bin_hz, frames)
+            else:
+                bin_hz = next(b for b in NICE_BINS if b * self.bins >= width * 1.1)
+                if band.step_hz:
+                    bin_hz = min(bin_hz, max(NICE_BINS[0], band.step_hz / 4))
+                    while bin_hz * self.bins < width * 1.1:
+                        bin_hz *= 2
+                freqs, db, n = await self._capture((band.start_hz + band.stop_hz) / 2, bin_hz, frames)
             inband = (freqs >= band.start_hz) & (freqs <= band.stop_hz)
             floor = float(np.percentile(db[inband], 30))
             hits = self._grid_hits(band, freqs, db, floor, min_snr) if band.step_hz \
@@ -114,6 +129,33 @@ class Scanner:
             self.store.event("scan", band=name, stations=len(hits))
             return {"scan_id": sid, "band": name, "mode": band.mode, "floor_db": floor, "bin_hz": bin_hz,
                     "frames": n, "hits": [{"freq_hz": f, "snr_db": round(s, 1)} for f, s in hits]}
+
+    async def _capture_vhf(self, start_hz, stop_hz, bin_hz, frames):
+        """Step the tuner across [start, stop] and stitch the (un-inverted) IF spectra.
+
+        This moves the tuner for every VHF channel, so listening is interrupted for the
+        few seconds a scan takes; the tuner goes back where it was afterwards.
+        """
+        radio = self.spectrum.radio
+        home = radio.vhf.center_hz
+        span = min(self.bins * bin_hz, 2 * WINDOW_HZ)
+        use = span * 0.9                               # skip the filter skirts at the edges
+        centers = list(np.arange(start_hz + use / 2, stop_hz + use / 2, use))
+        all_f, all_db, n_min = [], [], frames
+        try:
+            for c in centers:
+                await radio.move_tuner(c)
+                await asyncio.sleep(0.2)               # PLL settle
+                f_if, db, n = await self._capture(radio.vhf.if_hz, bin_hz, frames, clamp=False)
+                rf = radio.vhf.to_rf(f_if)
+                keep = np.abs(rf - c) <= use / 2
+                order = np.argsort(rf[keep])
+                all_f.append(rf[keep][order])
+                all_db.append(db[keep][order])
+                n_min = min(n_min, n)
+        finally:
+            await radio.move_tuner(home)
+        return np.concatenate(all_f), np.concatenate(all_db), n_min
 
     @staticmethod
     def _grid_hits(band, freqs, db, floor, min_snr):

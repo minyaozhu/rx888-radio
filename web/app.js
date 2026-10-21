@@ -10,11 +10,16 @@ const api = async (method, path, body) => {
 };
 const wsUrl = (p) => (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + p;
 const fmtKHz = (hz) => (hz / 1e3).toLocaleString(undefined, {minimumFractionDigits: hz % 1000 ? 2 : 0, maximumFractionDigits: 2});
+const fmtMHz = (hz) => (hz / 1e6).toFixed(hz % 1000 ? 4 : 3);
+// The tuning box shows kHz on HF and MHz on VHF; tables pick by size.
+const fmtTune = (hz) => state.band === 'vhf' ? fmtMHz(hz) : fmtKHz(hz);
+const fmtHz = (hz) => hz >= 30e6 ? fmtMHz(hz) + ' MHz' : fmtKHz(hz) + ' kHz';
 const fmtTime = (t) => new Date(t * 1000).toLocaleString();
 
 const state = {
   info: null, channels: [], selected: null,   // selected = ssrc we tune/listen
   view: {center: 1.1e6, bin: 1000, n: 2048},
+  band: 'hf',
   levels: {floor: -130, ceil: -60},
   listening: false,
 };
@@ -22,16 +27,12 @@ const state = {
 // ------------------------------------------------------------------ setup
 async function init() {
   state.info = await api('GET', '/api/info');
-  for (const m of state.info.modes) $('mode').add(new Option(m.toUpperCase(), m));
   for (const b of Object.keys(state.info.bands)) {
-    $('band').add(new Option(b, b));
     $('schedBand').add(new Option(b, b));
     $('dashBand').add(new Option(b, b));
   }
   state.channels = await api('GET', '/api/channels');
-  let main = state.channels.find((c) => c.kind === 'listen');
-  if (!main) main = await api('POST', '/api/channels', {freq_hz: 860e3, mode: 'am', label: 'main'});
-  select(main.ssrc, main);
+  await applyBand(state.info.band);
   wire();
   resizeCanvases();
   openSpectrum();
@@ -39,19 +40,73 @@ async function init() {
   refreshRecordings();
 }
 
+// Show the controls for the selected input and pick (or make) a channel on it.
+async function applyBand(band) {
+  state.band = band;
+  $('bandHF').classList.toggle('active', band === 'hf');
+  $('bandVHF').classList.toggle('active', band === 'vhf');
+  $('unit').textContent = band === 'vhf' ? 'MHz' : 'kHz';
+  $('coverageWrap').style.display = band === 'hf' ? '' : 'none';
+  $('vgaWrap').style.display = band === 'vhf' ? '' : 'none';
+  $('coverage').value = String(state.info.adc_rate_hz);
+  $('vga').value = state.info.vhf.vga; $('vgaVal').textContent = state.info.vhf.vga;
+  const modes = state.info.band_modes[band];
+  $('mode').innerHTML = ''; for (const m of modes) $('mode').add(new Option(m.toUpperCase(), m));
+  $('band').innerHTML = '';
+  for (const [k, b] of Object.entries(state.info.bands)) if (b.band === band) $('band').add(new Option(k, k));
+  buildZoom();
+  wctx.fillStyle = '#05070a'; wctx.fillRect(0, 0, wf.width, wf.height);   // old band's waterfall
+  let main = state.channels.find((c) => c.kind === 'listen' && c.band === band);
+  if (!main) {
+    const dflt = band === 'vhf' ? {freq_hz: state.info.vhf.center_hz || 97.4e6, mode: 'wfm'} : {freq_hz: 860e3, mode: 'am'};
+    main = await api('POST', '/api/channels', {...dflt, label: 'main', band});
+    state.channels.push(main);
+  }
+  select(main.ssrc, main);
+}
+
+async function switchBand(band) {
+  if (band === state.band) return;
+  for (const b of ['bandHF', 'bandVHF']) $(b).disabled = true;
+  try {
+    state.info = await api('POST', '/api/band', {band});
+    state.channels = await api('GET', '/api/channels');
+    await applyBand(band);
+  } catch (e) { flash(e.message); }
+  finally { for (const b of ['bandHF', 'bandVHF']) $(b).disabled = false; }
+}
+
+// Span choices: what the input can show (HF: up to Nyquist; VHF: the tuner window).
+function buildZoom() {
+  const maxSpan = state.band === 'vhf' ? 2 * state.info.vhf.window_hz : state.info.max_freq_hz;
+  const spans = [100e3, 200e3, 500e3, 1e6, 2e6, 5e6, 10e6, 20e6].filter((x) => x < maxSpan * 0.98);
+  $('zoom').innerHTML = '';
+  for (const sp of spans) $('zoom').add(new Option(sp >= 1e6 ? sp / 1e6 + ' MHz' : sp / 1e3 + ' kHz', sp));
+  const full = state.band === 'vhf' ? `${(maxSpan / 1e6).toFixed(1)} MHz (tuner)` : `0–${Math.floor(maxSpan / 1e6)} MHz (full)`;
+  $('zoom').add(new Option(full, maxSpan));
+  syncZoom();
+}
+
+function syncZoom() {
+  const span = state.view.bin * state.view.n;
+  let best = null, bd = Infinity;
+  for (const o of $('zoom').options) { const d = Math.abs(Math.log(+o.value / span)); if (d < bd) { bd = d; best = o; } }
+  if (best) $('zoom').value = best.value;
+}
+
 function select(ssrc, ch) {
   state.selected = ssrc;
   ch = ch || state.channels.find((c) => c.ssrc === ssrc);
   if (!ch) return;
-  $('freq').value = fmtKHz(ch.freq_hz);
+  $('freq').value = fmtTune(ch.freq_hz);
   $('mode').value = ch.mode;
   $('step').value = defaultStep(ch.mode, ch.freq_hz);
   if (state.listening) startAudio();
   renderChannels();
 }
 
-const defaultStep = (mode, f) => (mode === 'am' && f < 1.71e6) ? 10000 : (mode === 'am' ? 5000 :
-  mode === 'nfm' ? 5000 : mode.startsWith('cw') ? 10 : 100);
+const defaultStep = (mode, f) => mode === 'wfm' ? 100000 : f >= 30e6 ? (mode === 'am' ? 25000 : 12500) :
+  (mode === 'am' && f < 1.71e6) ? 10000 : mode === 'am' ? 5000 : mode === 'nfm' ? 5000 : mode.startsWith('cw') ? 10 : 100;
 
 const current = () => state.channels.find((c) => c.ssrc === state.selected);
 
@@ -64,7 +119,8 @@ function parseFreq(s) {
   if (m[2] && m[2].startsWith('m')) return v * 1e6;
   if (m[2] === 'hz') return v;
   if (m[2] && m[2].startsWith('k')) return v * 1e3;
-  return v < 50 ? v * 1e6 : v * 1e3;   // bare numbers: < 50 means MHz, else kHz
+  // bare numbers: on HF < 50 means MHz (else kHz); on VHF < 2000 means MHz
+  return (state.band === 'vhf' ? v < 2000 : v < 50) ? v * 1e6 : v * 1e3;
 }
 
 let tuneTimer = null, pendingTune = null;
@@ -72,9 +128,10 @@ async function tune(freq_hz, mode) {
   const ch = current();
   if (!ch) return;
   if (freq_hz != null) {
-    freq_hz = Math.max(1e3, Math.min(freq_hz, state.info.max_freq_hz - 1e3));
+    const [lo, hi] = state.band === 'vhf' ? state.info.vhf_range_hz : [1e3, state.info.max_freq_hz - 1e3];
+    freq_hz = Math.max(lo, Math.min(freq_hz, hi));
     ch.freq_hz = freq_hz;
-    $('freq').value = fmtKHz(freq_hz);
+    $('freq').value = fmtTune(freq_hz);
     keepInView(freq_hz);
   }
   if (mode) ch.mode = mode;
@@ -192,7 +249,7 @@ function openSpectrum() {
     const db = new Float32Array(e.data, 16, n);
     if (center !== state.view.center || bin !== state.view.bin) {
       state.view = {center, bin, n};
-      const z = $('zoom'); if ([...z.options].some((o) => +o.value === bin)) z.value = String(bin);
+      syncZoom();
     }
     state.view.n = n;
     lastFrame = db;
@@ -259,17 +316,19 @@ function drawSpectrum() {
     sctx.stroke();
   }
   drawSpectrumOverlay();
-  $('viewInfo').textContent = `${fmtKHz(state.view.center - span / 2)} – ${fmtKHz(state.view.center + span / 2)} kHz · ${state.view.bin} Hz bins`;
+  $('viewInfo').textContent = `${fmtHz(Math.max(0, state.view.center - span / 2))} – ${fmtHz(state.view.center + span / 2)} · ${Math.round(state.view.bin)} Hz bins` +
+    (state.band === 'vhf' ? ` · tuner ${fmtMHz(state.info.vhf.center_hz)} MHz` : '');
 }
 
 function drawSpectrumOverlay() {
   const W = spec.width, H = spec.height;
   for (const ch of state.channels) {
+    if (ch.band !== state.band || ch.parked) continue;
     const x = freqToX(ch.freq_hz, W);
     if (x < 0 || x > W) continue;
     const sel = ch.ssrc === state.selected;
     // passband
-    const bw = ch.mode === 'nfm' ? 12500 : ch.mode.startsWith('cw') ? 400 : ch.mode === 'usb' || ch.mode === 'lsb' ? 3000 : 10000;
+    const bw = ch.mode === 'wfm' ? 200000 : ch.mode === 'nfm' ? 12500 : ch.mode.startsWith('cw') ? 400 : ch.mode === 'usb' || ch.mode === 'lsb' ? 3000 : 10000;
     const lo = ch.mode === 'usb' ? 0 : ch.mode === 'lsb' ? -bw : -bw / 2;
     const x0 = freqToX(ch.freq_hz + lo, W), x1 = freqToX(ch.freq_hz + lo + bw, W);
     sctx.fillStyle = sel ? 'rgba(255,184,76,0.15)' : 'rgba(76,194,255,0.10)';
@@ -327,6 +386,10 @@ function openStatus() {
   const ws = new WebSocket(wsUrl('/ws/status'));
   ws.onmessage = (e) => {
     const s = JSON.parse(e.data);
+    state.info.vhf = s.vhf; state.info.max_freq_hz = s.max_freq_hz; state.info.adc_rate_hz = s.adc_rate_hz;
+    if (s.band !== state.band && !state.switching) {   // another page switched the input
+      state.channels = s.channels; applyBand(s.band); return;
+    }
     // keep local edits (pending tunes) authoritative for the selected channel
     const sel = current();
     if (sel && !s.channels.some((c) => c.ssrc === sel.ssrc) && !state.recreating) {
@@ -349,8 +412,9 @@ function renderHealth(h, scanning) {
   if (!h || !h.t) return;
   const ok = h.ok ? '<span class="ok">● radiod</span>' : `<span class="bad">● radiod not answering (${h.fails || 0})</span>`;
   const rate = h.input_samprate ? (h.input_samprate / 1e6).toFixed(1) + ' MS/s' : '';
-  const over = h.ad_over ? `<span class="bad">ADC overloads ${h.ad_over}</span>` : 'no overloads';
-  $('health').innerHTML = `${ok} · ${rate} · IF ${h.if_power_db?.toFixed(1)} dBFS · RF gain ${h.rf_gain_db?.toFixed(1)} dB · ${over}` +
+  const over = h.overloads_recent ? `<span class="bad">ADC overloading (${h.overloads_recent} in 5 s)</span>` : 'no overloads';
+  const input = h.band === 'vhf' ? `VHF tuner ${h.vhf?.center_hz ? fmtMHz(h.vhf.center_hz) : '?'} MHz${h.vhf?.locked === false ? ' <span class="bad">PLL unlocked</span>' : ''}` : 'HF';
+  $('health').innerHTML = `${ok} · ${input} · ${rate} · IF ${h.if_power_db?.toFixed(1)} dBFS · RF gain ${h.rf_gain_db?.toFixed(1)} dB · ${over}` +
     ` · ${h.spectrum_fps} fps · ${h.channels} ch` + (h.restarts ? ` · restarts ${h.restarts}` : '') + (scanning ? ' · <b>scanning</b>' : '');
 }
 
@@ -367,9 +431,9 @@ function renderMeter() {
 }
 
 function renderChannels() {
-  const rows = state.channels.map((c) => `
+  const rows = state.channels.filter((c) => c.band === state.band).map((c) => `
     <tr class="${c.ssrc === state.selected ? 'sel' : ''}">
-      <td>${fmtKHz(c.freq_hz)} kHz</td><td>${c.mode.toUpperCase()}</td><td>${c.label || ''}${c.recording ? ' <span style="color:var(--rec)">● rec</span>' : ''}</td>
+      <td>${fmtHz(c.freq_hz)}${c.parked ? ' <span class="dim">(paused: outside tuner window)</span>' : ''}</td><td>${c.mode.toUpperCase()}</td><td>${c.label || ''}${c.recording ? ' <span style="color:var(--rec)">● rec</span>' : ''}</td>
       <td>${c.power_db != null ? c.power_db.toFixed(1) + ' dB' : ''}</td>
       <td>${c.snr_db != null ? `<span class="snrbar" style="width:${Math.max(2, Math.min(80, c.snr_db * 1.5))}px"></span>${c.snr_db.toFixed(1)}` : ''}</td>
       <td><button data-act="sel" data-ssrc="${c.ssrc}">Tune/listen</button>
@@ -389,7 +453,7 @@ async function runScan() {
     $('scanStatus').textContent = `${r.hits.length} signals · floor ${r.floor_db?.toFixed(1) ?? '—'} dB · ${r.frames} frames at ${r.bin_hz} Hz · ${new Date().toLocaleTimeString()}`;
     const mode = r.mode;
     $('scanRows').innerHTML = r.hits.map((h) => `
-      <tr><td>${fmtKHz(h.freq_hz)} kHz</td>
+      <tr><td>${fmtHz(h.freq_hz)}</td>
       <td><span class="snrbar" style="width:${Math.max(2, Math.min(120, h.snr_db * 2))}px"></span>${h.snr_db} dB</td>
       <td><button data-act="tune" data-f="${h.freq_hz}" data-m="${mode}">Tune</button>
           <button data-act="add" data-f="${h.freq_hz}" data-m="${mode}">+ Channel</button></td></tr>`).join('');
@@ -404,7 +468,7 @@ async function runScan() {
 async function refreshRecordings() {
   const recs = await api('GET', '/api/recordings');
   $('recRows').innerHTML = recs.map((r) => `
-    <tr><td>${fmtTime(r.start)}</td><td>${fmtKHz(r.freq_hz)} kHz</td><td>${(r.mode || '').toUpperCase()}</td>
+    <tr><td>${fmtTime(r.start)}</td><td>${fmtHz(r.freq_hz)}</td><td>${(r.mode || '').toUpperCase()}</td>
     <td>${r.seconds != null ? r.seconds.toFixed(0) + ' s' : '<span style="color:var(--rec)">recording…</span>'}</td>
     <td>${r.peak_dbfs != null ? r.peak_dbfs.toFixed(1) + ' dBFS' : ''}</td>
     <td>${r.seconds != null ? `<audio controls preload="none" src="/api/recordings/${r.id}/audio"></audio>` : ''}</td></tr>` +
@@ -419,7 +483,7 @@ async function refreshMonitor() {
   $('schedRows').innerHTML = sch.map((s) => `<tr><td>${s.band}</td><td>${s.every_min} min</td>
     <td>${s.last_run ? fmtTime(s.last_run) : 'pending'}</td>
     <td><button data-act="delsched" data-id="${s.id}">✕</button></td></tr>`).join('');
-  $('watchRows').innerHTML = wat.map((w) => `<tr><td>${fmtKHz(w.freq_hz)} kHz</td><td>${w.mode.toUpperCase()}</td>
+  $('watchRows').innerHTML = wat.map((w) => `<tr><td>${fmtHz(w.freq_hz)}</td><td>${w.mode.toUpperCase()}</td>
     <td>${w.label || ''}</td><td>${w.snr_db} dB${w.transcribe ? ' · transcribe' : ''}</td>
     <td>${w.snr_now != null ? w.snr_now.toFixed(1) + ' dB' : '—'}</td>
     <td>${w.recording ? '<span style="color:var(--rec)">● recording</span>' : 'waiting'} · ${w.recordings_this_run} saved</td>
@@ -521,7 +585,20 @@ function wire() {
       renderMeter(); refreshRecordings();
     } catch (e) { flash(e.message); }
   });
-  $('zoom').addEventListener('change', () => setView(current()?.freq_hz ?? state.view.center, +$('zoom').value));
+  $('zoom').addEventListener('change', () => setView(current()?.freq_hz ?? state.view.center, +$('zoom').value / state.view.n));
+  $('bandHF').addEventListener('click', () => { state.switching = true; switchBand('hf').finally(() => { state.switching = false; }); });
+  $('bandVHF').addEventListener('click', () => { state.switching = true; switchBand('vhf').finally(() => { state.switching = false; }); });
+  $('coverage').addEventListener('change', async () => {
+    const rate = +$('coverage').value;
+    $('coverage').disabled = true; flash('restarting radiod at ' + rate / 1e6 + ' MS/s…');
+    try {
+      state.info = await api('POST', '/api/coverage', {adc_rate_hz: rate});
+      buildZoom(); flash(`coverage 0–${Math.floor(state.info.max_freq_hz / 1e6)} MHz`);
+    } catch (e) { flash(e.message); $('coverage').value = String(state.info.adc_rate_hz); }
+    finally { $('coverage').disabled = false; }
+  });
+  $('vga').addEventListener('input', () => { $('vgaVal').textContent = $('vga').value; });
+  $('vga').addEventListener('change', () => api('POST', '/api/vhf/gain', {vga: +$('vga').value}).catch((e) => flash(e.message)));
   $('center').addEventListener('click', () => setView(current().freq_hz, null));
   $('autoscale').addEventListener('change', () => {});
   wireScope(spec); wireScope(wf);
@@ -537,7 +614,7 @@ function wire() {
 
   $('addChannel').addEventListener('click', async () => {
     const ch = current();
-    const c = await api('POST', '/api/channels', {freq_hz: ch.freq_hz, mode: ch.mode, label: ''});
+    const c = await api('POST', '/api/channels', {freq_hz: ch.freq_hz, mode: ch.mode, label: '', band: state.band});
     state.channels.push(c); renderChannels();
   });
   $('channelRows').addEventListener('click', async (e) => {
@@ -561,7 +638,7 @@ function wire() {
     const b = e.target.closest('button'); if (!b) return;
     const f = +b.dataset.f, m = b.dataset.m;
     if (b.dataset.act === 'tune') { $('mode').value = m; tune(f, m); }
-    if (b.dataset.act === 'add') { const c = await api('POST', '/api/channels', {freq_hz: f, mode: m}); state.channels.push(c); renderChannels(); }
+    if (b.dataset.act === 'add') { const c = await api('POST', '/api/channels', {freq_hz: f, mode: m, band: state.band}); state.channels.push(c); renderChannels(); }
   });
   $('schedAdd').addEventListener('click', async () => {
     try { await api('POST', '/api/schedules', {band: $('schedBand').value, every_min: +$('schedMin').value}); refreshMonitor(); }
