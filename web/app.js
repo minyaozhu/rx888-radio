@@ -57,7 +57,8 @@ async function applyBand(band) {
   for (const [k, b] of Object.entries(state.info.bands)) if (b.band === band) $('band').add(new Option(k, k));
   buildZoom();
   wctx.fillStyle = '#05070a'; wctx.fillRect(0, 0, wf.width, wf.height);   // old band's waterfall
-  let main = state.channels.find((c) => c.kind === 'listen' && c.band === band);
+  const mine = state.channels.filter((c) => c.kind === 'listen' && c.band === band);
+  let main = mine.find((c) => !c.parked) || mine[0];      // prefer a channel that's playing
   if (!main) {
     const dflt = band === 'vhf' ? {freq_hz: state.info.vhf.center_hz || 97.4e6, mode: 'wfm'} : {freq_hz: 860e3, mode: 'am'};
     main = await api('POST', '/api/channels', {...dflt, label: 'main', band});
@@ -359,6 +360,13 @@ function niceStep(raw) {
   return 10 * p;
 }
 
+// One tuning step (or n steps) up/down, snapped to the step grid
+function stepTune(dir, n = 1) {
+  const ch = current(); if (!ch) return;
+  const step = +$('step').value;
+  tune(Math.round(ch.freq_hz / step) * step + dir * n * step);
+}
+
 // Move a click onto the strongest signal within +-frac of the view, if one stands out.
 function snapToPeak(f, frac) {
   const db = lastFrame; if (!db) return f;
@@ -414,7 +422,7 @@ function openStatus() {
     if (sel && !s.channels.some((c) => c.ssrc === sel.ssrc) && !state.recreating) {
       // our channel is gone (rxapp restarted): make a new one where we were tuned
       state.recreating = true;
-      api('POST', '/api/channels', {freq_hz: sel.freq_hz, mode: sel.mode, label: 'main'})
+      api('POST', '/api/channels', {freq_hz: sel.freq_hz, mode: sel.mode, label: 'main', band: sel.band})
         .then((c) => { state.channels.push(c); select(c.ssrc, c); })
         .finally(() => { state.recreating = false; });
       return;
@@ -633,17 +641,18 @@ function wire() {
     try { await api('POST', '/api/hf/gain', {gain_db: db}); state.info.hf_gain = {...state.info.hf_gain, db}; renderHfGain(db); }
     catch (e) { flash(e.message); }
   });
-  // Left/right arrows step the tuning (Shift: 10 steps), unless typing in a field
-  document.addEventListener('keydown', (e) => {
+  // Left/right arrows always step the tuning (Shift: 10 steps), except while typing a frequency.
+  // Capture phase, so a focused dropdown or slider doesn't swallow them.
+  window.addEventListener('keydown', (e) => {
     if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
-    const t = e.target, tag = t && t.tagName;
-    if (tag === 'INPUT' && t.type !== 'range' && t.type !== 'checkbox' || tag === 'SELECT' || tag === 'TEXTAREA') return;
-    if (tag === 'INPUT' && t.type === 'range') return;   // let sliders use the arrows
-    const ch = current(); if (!ch) return;
-    e.preventDefault();
-    const step = +$('step').value * (e.shiftKey ? 10 : 1);
-    tune(Math.round(ch.freq_hz / +$('step').value) * +$('step').value + (e.key === 'ArrowRight' ? step : -step));
-  });
+    const t = e.target;
+    if (t && (t.id === 'freq' || t.tagName === 'TEXTAREA' || (t.tagName === 'INPUT' && t.type === 'number'))) return;
+    e.preventDefault(); e.stopPropagation();
+    if (t && t.blur && t !== document.body) t.blur();
+    stepTune(e.key === 'ArrowRight' ? 1 : -1, e.shiftKey ? 10 : 1);
+  }, true);
+  $('stepDown').addEventListener('click', (e) => stepTune(-1, e.shiftKey ? 10 : 1));
+  $('stepUp').addEventListener('click', (e) => stepTune(1, e.shiftKey ? 10 : 1));
   $('vga').addEventListener('input', () => { $('vgaVal').textContent = $('vga').value; });
   $('vga').addEventListener('change', () => api('POST', '/api/vhf/gain', {vga: +$('vga').value}).catch((e) => flash(e.message)));
   $('center').addEventListener('click', () => setView(current().freq_hz, null));

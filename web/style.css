@@ -70,3 +70,4 @@ audio { height: 28px; vertical-align: middle; }
 .seg-btn.active { background: #17405a; color: #fff; }
 .seg-btn:disabled { opacity: .5; cursor: wait; }
 #vga { width: 90px; padding: 0; }
+.stepbtn { font-size: 16px; padding: 6px 10px; align-self: center; }

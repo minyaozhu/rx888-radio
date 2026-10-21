@@ -96,6 +96,15 @@ async def lifespan(app):
 app = FastAPI(title="rxapp", lifespan=lifespan)
 
 
+@app.middleware("http")
+async def no_stale_pages(request, call_next):
+    """Browsers must re-check the page and its scripts, so a reload always gets the current UI."""
+    resp = await call_next(request)
+    if not request.url.path.startswith("/api/"):
+        resp.headers["Cache-Control"] = "no-cache"
+    return resp
+
+
 # ---------------------------------------------------------------- REST
 class NewChannel(BaseModel):
     freq_hz: float
