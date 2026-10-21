@@ -29,6 +29,7 @@ class Supervisor:
     def __init__(self, radio, spectrum, store):
         self.radio, self.spectrum, self.store = radio, spectrum, store
         self._restarting = False
+        self.on_restart = []          # async callbacks after radiod came back (re-apply manual gain, ...)
         self.busy = lambda: False   # set by the server: True while a scan is reconfiguring the spectrum
         self.proc = None
         self.restarts = 0
@@ -167,6 +168,8 @@ class Supervisor:
             self._last_over = None
             await self.radio.restore()
             await self.spectrum.retarget()
+            for cb in self.on_restart:
+                await cb()
             self.fails = 0
         finally:
             self._restarting = False

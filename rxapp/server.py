@@ -17,6 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .config import BAND_MODES, CONFIG, MODES, RADIOD_CONFS, RUNTIME, VHF_MAX_HZ, VHF_MIN_HZ
+from .hfgain import GAIN_MAX, SLIDER_MIN, HfGain
 from .jobs import BANDS, Recorder, Scanner
 from .monitor import Monitor
 from .radio import Radio
@@ -37,6 +38,7 @@ class State:
     scanner: Scanner
     supervisor: Supervisor
     monitor: Monitor
+    hfgain: HfGain
     recorders: Dict[int, Recorder] = {}
 
 
@@ -60,12 +62,30 @@ async def lifespan(app):
     S.supervisor.start()
     S.monitor = Monitor(S.radio, S.rtp, S.scanner, S.store)
     await S.monitor.start()
+
+    def any_ssrc():
+        st = S.spectrum._stream
+        if st is not None and st.ssrc:
+            return st.ssrc
+        return next((c.ssrc for c in S.radio.active()), None)
+
+    S.hfgain = HfGain(S.radio, S.supervisor._probe, any_ssrc)
+    S.supervisor.on_restart.append(lambda: S.hfgain.apply(restarted=True))
+    await S.hfgain.apply(restarted=True)
+    S.hfgain.start()
+    if RUNTIME.band == "vhf":           # come back on the input that was selected last time
+        try:
+            await S.radio.switch_band("vhf", RUNTIME.vhf_center_hz)
+            await S.spectrum.band_changed("hf")
+        except Exception as e:
+            log.warning("could not restore VHF: %s", e)
     S.store.event("app_start")
     log.info("rxapp ready on http://%s:%d", CONFIG.host, CONFIG.port)
     yield
     for ssrc, rec in list(S.recorders.items()):
         rec.stop()
     await S.monitor.stop()
+    await S.hfgain.stop()
     await S.supervisor.stop()
     await S.spectrum.stop()
     await S.radio.close()
@@ -107,7 +127,8 @@ async def info():
     return {"modes": list(MODES), "band_modes": BAND_MODES, "bands": {k: vars(b) for k, b in BANDS.items()},
             "max_freq_hz": CONFIG.max_freq_hz, "vhf_range_hz": [VHF_MIN_HZ, VHF_MAX_HZ],
             "adc_rates_hz": sorted(RADIOD_CONFS), "adc_rate_hz": RUNTIME.adc_rate_hz,
-            "band": S.radio.band, "vhf": S.radio.vhf.info(), "spectrum": S.spectrum.info()}
+            "band": S.radio.band, "vhf": S.radio.vhf.info(), "spectrum": S.spectrum.info(),
+            "hf_gain": {"db": RUNTIME.hf_gain_db, "min": SLIDER_MIN, "max": GAIN_MAX}}
 
 
 class BandSwitch(BaseModel):
@@ -121,6 +142,10 @@ class Coverage(BaseModel):
 
 class VhfGain(BaseModel):
     vga: int
+
+
+class HfGainSet(BaseModel):
+    gain_db: Optional[float] = None     # None = automatic
 
 
 @app.post("/api/band")
@@ -139,6 +164,7 @@ async def set_band(body: BandSwitch):
             S.recorders.pop(ssrc).stop()
     if body.band != old:
         await S.spectrum.band_changed(old)
+        await S.hfgain.apply()          # manual HF gain back on HF; auto (rxapp's AGC) on VHF
     return await info()
 
 
@@ -150,6 +176,13 @@ async def set_coverage(body: Coverage):
     except ValueError as e:
         raise HTTPException(400, str(e))
     return await info()
+
+
+@app.post("/api/hf/gain")
+async def hf_gain(body: HfGainSet):
+    """HF front-end gain in dB (-41.5..+34; below -10 dB the attenuator is used), or null for auto."""
+    await S.hfgain.set(body.gain_db)
+    return {"db": RUNTIME.hf_gain_db, **S.hfgain.last}
 
 
 @app.post("/api/vhf/gain")
@@ -172,6 +205,8 @@ async def channels():
 
 @app.post("/api/channels")
 async def create_channel(body: NewChannel):
+    if (body.band or S.radio.band) == "vhf" and S.radio.band == "vhf":
+        await S.spectrum.ensure_live(body.freq_hz)
     try:
         ch = await S.radio.create(body.freq_hz, body.mode, body.label, band=body.band)
     except ValueError as e:
@@ -184,6 +219,8 @@ async def update_channel(ssrc: int, body: ChannelUpdate):
     ch = _channel(ssrc)
     if ssrc in S.recorders and (body.mode not in (None, ch.mode)):
         raise HTTPException(409, "stop the recording before changing mode")
+    if ch.band == "vhf" and S.spectrum.sweeping and body.freq_hz is not None:
+        await S.spectrum.ensure_live(body.freq_hz)     # tuning means listening: tuner back to live
     try:
         ch = await S.radio.tune(ssrc, body.freq_hz, body.mode, body.label)
     except ValueError as e:
@@ -422,6 +459,7 @@ async def ws_status(ws: WebSocket):
                 await S.radio.refresh(ch.ssrc)
             await ws.send_json({
                 "band": S.radio.band, "vhf": S.radio.vhf.info(), "adc_rate_hz": RUNTIME.adc_rate_hz,
+                "hf_gain_db": RUNTIME.hf_gain_db,
                 "max_freq_hz": CONFIG.max_freq_hz,
                 "t": time.time(),
                 "channels": [c.to_dict() | {"recording": c.ssrc in S.recorders} for c in S.radio.channels.values()],

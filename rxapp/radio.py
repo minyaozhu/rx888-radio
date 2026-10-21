@@ -16,7 +16,7 @@ from typing import Dict, Optional
 from ka9q import RadiodControl
 
 from .addr import maddr
-from .config import BAND_MODES, CONFIG, MODES, VHF_MAX_HZ, VHF_MIN_HZ
+from .config import BAND_MODES, CONFIG, MODES, RUNTIME, VHF_MAX_HZ, VHF_MIN_HZ
 from .vhf import Vhf
 
 log = logging.getLogger(__name__)
@@ -72,6 +72,7 @@ class Radio:
         self.band = "hf"
         self.vhf = Vhf()
         self.on_tuner_move = []          # async callbacks (the spectrum follows the tuner)
+        self.vhf_paused = False          # a VHF sweep owns the tuner; VHF channels are parked
         self.store_event = lambda kind, **kw: None
 
     # -- lifecycle -------------------------------------------------------
@@ -135,13 +136,13 @@ class Radio:
                      band: Optional[str] = None) -> Channel:
         band = band or self.band
         self._check(freq_hz, mode, band)
-        if band == "vhf" and band == self.band and not self.vhf.in_window(freq_hz):
+        if band == "vhf" and band == self.band and not self.vhf_paused and not self.vhf.in_window(freq_hz):
             await self.move_tuner(freq_hz)
         ssrc = secrets.randbelow(0x7FFFFFFF - 1000) + 1000  # stay clear of radiod's static channels
         ch = Channel(ssrc=ssrc, freq_hz=freq_hz, mode=mode, label=label, kind=kind, band=band,
                      sample_rate=MODES[mode][1] or 48000, parked=True)
         self.channels[ssrc] = ch
-        if band == self.band:
+        if band == self.band and not (band == "vhf" and self.vhf_paused):
             await self._open(ch)
         log.info("created %s %s channel %d at %.3f kHz (%s)%s", band, kind, ssrc, freq_hz / 1e3, mode,
                  "" if band == self.band else " (parked)")
@@ -159,6 +160,8 @@ class Radio:
             ch.label = label
         if ch.parked:
             return ch
+        if ch.band == "vhf" and self.vhf_paused:
+            return ch
         if ch.band == "vhf" and not self.vhf.in_window(freq_hz):
             await self.move_tuner(freq_hz)       # re-maps every VHF channel, this one included
         else:
@@ -173,11 +176,23 @@ class Radio:
             ch.sample_rate = rate or ch.sample_rate
         return ch
 
+    async def pause_vhf(self):
+        """Hand the tuner to a sweep: park every VHF channel."""
+        self.vhf_paused = True
+        for ch in self.active():
+            if ch.band == "vhf":
+                await self._close(ch)
+
+    async def resume_vhf(self, center_hz: float):
+        """Sweep finished: tuner to center_hz, VHF channels in the window come back."""
+        self.vhf_paused = False
+        await self.move_tuner(center_hz)
+
     async def move_tuner(self, center_hz: float):
         """Retune the VHF tuner so center_hz sits at the IF, and re-map the VHF channels."""
         await self.vhf.retune(center_hz)
         for ch in list(self.channels.values()):
-            if ch.band != "vhf" or self.band != "vhf":
+            if ch.band != "vhf" or self.band != "vhf" or self.vhf_paused:
                 continue
             if self.vhf.in_window(ch.freq_hz):
                 if ch.parked:
@@ -196,6 +211,7 @@ class Radio:
             return
         for ch in self.active():
             await self._close(ch)
+        self.vhf_paused = False
         if band == "vhf":
             center = center_hz or self.vhf.center_hz or 97.4e6
             await self.vhf.enable(center)
@@ -208,6 +224,8 @@ class Radio:
                     continue                      # outside the tuner window; stays parked
                 await self._open(ch)
         log.info("band -> %s", band)
+        RUNTIME.band, RUNTIME.vhf_center_hz = band, self.vhf.center_hz
+        RUNTIME.save()
         self.store_event("band", band=band, center_hz=self.vhf.center_hz if band == "vhf" else None)
 
     async def restore(self):

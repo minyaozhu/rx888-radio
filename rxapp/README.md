@@ -24,7 +24,7 @@ or the SoapySDDC scripts.
 | | |
 |---|---|
 | **Inputs** | **HF** (direct sampling) or **VHF** (the R828D tuner, 24–1700 MHz), switched from the page. HF **coverage** 0–32 MHz (radiod at 64.8 MS/s) or 0–64 MHz (129.6 MS/s, ~90% of one core); switching restarts radiod and restores the channels. |
-| **Listen** | Spectrum + waterfall (2048 bins, ~10 fps), click to tune (snaps to the nearest signal), wheel to step, drag to pan, span 100 kHz up to the full coverage (HF) or the 7.2 MHz tuner window (VHF). HF modes AM, SAM, USB, LSB, CW, NFM; VHF modes WFM, NFM, AM. Audio in the browser over a WebSocket, S-meter and SNR. |
+| **Listen** | Spectrum + waterfall (2048 bins, ~10 fps), click to tune (snaps to the nearest signal), ←/→ or wheel to step (Shift ×10), drag to pan. The same Coverage and Span menus on both inputs (100 kHz up to 0–32 or 0–64 MHz); on VHF, spans up to 8.4 MHz are live and wider ones are *swept* (the tuner steps across the range, ~2.3 s per update for 64 MHz, VHF audio paused; clicking a signal returns to live). **Gain**: HF −41.5…+34 dB (below −10 dB the attenuator) or Auto; VHF tuner IF gain 0–15. HF modes AM, SAM, USB, LSB, CW, NFM; VHF modes WFM, NFM, AM. Audio in the browser over a WebSocket, S-meter and SNR. |
 | **Channels** | Any number at once (radiod demodulates them all); listen to one, record any. |
 | **Scan** | HF: AM broadcast, shortwave broadcast bands, ham bands (peak finding for SSB), CB, WWV propagation check. VHF: FM broadcast, airband, 2 m, NOAA weather; bands wider than the tuner window are scanned in steps (FM: 4 steps, ~25 s), which briefly moves the tuner. HF scans use their own spectrum channel, so the display doesn't move. |
 | **Monitor** (server-side) | Scheduled scans (default: AM every 10 min, WWV every 30 min) and *watches*: a channel recorded automatically whenever its SNR rises above a threshold, optionally transcribed on-device. |
@@ -50,6 +50,13 @@ right after a switch) are re-created automatically.
 
 Channels of the input not in use are *parked* (kept by rxapp, absent from radiod); HF watches and HF scan
 schedules pause while VHF is selected, and the other way round.
+
+## HF gain
+
+Manual gain goes to radiod as RF gain (AD8370) plus attenuation (PE4312). radiod's own RF AGC turns
+off for good after the first manual command, so **Auto** is rxapp's AGC (`rxapp/hfgain.py`), holding the
+ADC between −26 and −15 dBFS like radiod's. The same amplifier sits in the VHF tuner's IF path, so on VHF
+the gain is always automatic and a manual HF value comes back when you return to HF.
 
 ## Design notes
 

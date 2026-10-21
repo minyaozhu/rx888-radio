@@ -43,7 +43,10 @@
     <span class="spacer"></span>
     <label id="coverageWrap" title="HF coverage: restarts radiod at 64.8 MS/s (0-32 MHz) or 129.6 MS/s (0-64 MHz)">Coverage
       <select id="coverage"><option value="64800000">0–32 MHz</option><option value="129600000">0–64 MHz</option></select></label>
-    <label id="vgaWrap" style="display:none" title="VHF tuner IF gain (0-15); the tuner's LNA and mixer run on their own AGC">Tuner gain
+    <label id="hfGainWrap" title="HF front-end gain. Auto holds the ADC near -20 dBFS; below -10 dB the attenuator is used">Gain
+      <input id="hfGain" type="range" min="-41.5" max="34" step="0.5"> <span id="hfGainVal" class="dim"></span>
+      <label class="dim"><input id="hfAuto" type="checkbox"> Auto</label></label>
+    <label id="vgaWrap" style="display:none" title="VHF tuner IF gain (0-15); the tuner's LNA and mixer run on their own AGC">Gain
       <input id="vga" type="range" min="0" max="15" step="1"> <span id="vgaVal" class="dim"></span></label>
     <label>Span <select id="zoom"></select></label>
     <button id="center" title="Center the view on the tuned frequency">Center</button>
@@ -51,7 +54,7 @@
   </div>
   <canvas id="spectrum" height="160"></canvas>
   <canvas id="waterfall" height="300"></canvas>
-  <div class="hint dim">Click to tune · wheel to step · drag to pan</div>
+  <div class="hint dim">Click to tune · ← → or wheel to step (Shift ×10) · drag to pan</div>
 </section>
 
 <nav class="tabs">

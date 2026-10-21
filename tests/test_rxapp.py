@@ -109,9 +109,21 @@ def test_hf_span_never_exceeds_nyquist(rate, monkeypatch):
     assert s.center_hz - s.span_hz / 2 >= -1 and s.center_hz + s.span_hz / 2 <= rate / 2 + 1
 
 
-def test_vhf_view_stays_in_tuner_window():
+def test_vhf_live_view_stays_in_tuner_window():
     s = _spectrum("vhf", center=100e6)
-    s.bin_hz, s.center_hz = 10000.0, 110e6
+    s.bin_hz, s.center_hz = 4000.0, 110e6        # 8.2 MHz: live, so it must stay on the tuner
     s._clamp()
-    assert s.span_hz <= 2 * WINDOW_HZ + 1
+    assert not s.wants_sweep
     assert abs(s.center_hz - 100e6) + s.span_hz / 2 <= WINDOW_HZ + 1
+
+
+def test_vhf_wide_view_becomes_a_sweep(monkeypatch):
+    monkeypatch.setattr(RUNTIME, "adc_rate_hz", 129.6e6)
+    s = _spectrum("vhf", center=100e6)
+    s.bin_hz, s.center_hz = 40000.0, 90e6          # asks for 82 MHz: capped at the 64.8 MHz coverage
+    s._clamp()
+    assert s.wants_sweep and s.span_hz == pytest.approx(64.8e6)
+    s.sweeping = True                              # leaving a sweep: the view picks the tuner position
+    s.bin_hz, s.center_hz = 4000.0, 87.5e6
+    s._clamp(follow_tuner=False)
+    assert s.center_hz == 87.5e6 and not s.wants_sweep

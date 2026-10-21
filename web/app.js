@@ -46,8 +46,9 @@ async function applyBand(band) {
   $('bandHF').classList.toggle('active', band === 'hf');
   $('bandVHF').classList.toggle('active', band === 'vhf');
   $('unit').textContent = band === 'vhf' ? 'MHz' : 'kHz';
-  $('coverageWrap').style.display = band === 'hf' ? '' : 'none';
   $('vgaWrap').style.display = band === 'vhf' ? '' : 'none';
+  $('hfGainWrap').style.display = band === 'hf' ? '' : 'none';
+  renderHfGain(state.info.hf_gain?.db ?? null);
   $('coverage').value = String(state.info.adc_rate_hz);
   $('vga').value = state.info.vhf.vga; $('vgaVal').textContent = state.info.vhf.vga;
   const modes = state.info.band_modes[band];
@@ -77,14 +78,27 @@ async function switchBand(band) {
 }
 
 // Span choices: what the input can show (HF: up to Nyquist; VHF: the tuner window).
+// Same span choices on both inputs, up to the coverage. On VHF, spans wider than the tuner
+// window are built by sweeping the tuner (slower updates, VHF audio paused).
 function buildZoom() {
-  const maxSpan = state.band === 'vhf' ? 2 * state.info.vhf.window_hz : state.info.max_freq_hz;
+  const maxSpan = state.info.max_freq_hz;
+  const live = 2 * state.info.vhf.window_hz;
   const spans = [100e3, 200e3, 500e3, 1e6, 2e6, 5e6, 10e6, 20e6].filter((x) => x < maxSpan * 0.98);
   $('zoom').innerHTML = '';
-  for (const sp of spans) $('zoom').add(new Option(sp >= 1e6 ? sp / 1e6 + ' MHz' : sp / 1e3 + ' kHz', sp));
-  const full = state.band === 'vhf' ? `${(maxSpan / 1e6).toFixed(1)} MHz (tuner)` : `0–${Math.floor(maxSpan / 1e6)} MHz (full)`;
+  const tag = (sp) => state.band === 'vhf' && sp > live + 1 ? ' (sweep)' : '';
+  for (const sp of spans) $('zoom').add(new Option((sp >= 1e6 ? sp / 1e6 + ' MHz' : sp / 1e3 + ' kHz') + tag(sp), sp));
+  const full = state.band === 'vhf' ? `${Math.floor(maxSpan / 1e6)} MHz (sweep)` : `0–${Math.floor(maxSpan / 1e6)} MHz (full)`;
   $('zoom').add(new Option(full, maxSpan));
+  if (state.band === 'vhf') $('zoom').add(new Option(`${(live / 1e6).toFixed(1)} MHz (tuner, live)`, live));
   syncZoom();
+}
+
+function renderHfGain(db) {
+  const auto = db === null || db === undefined;
+  $('hfAuto').checked = auto;
+  $('hfGain').disabled = auto;
+  if (!auto) $('hfGain').value = db;
+  $('hfGainVal').textContent = auto ? 'auto' : `${(+$('hfGain').value).toFixed(1)} dB`;
 }
 
 function syncZoom() {
@@ -317,7 +331,8 @@ function drawSpectrum() {
   }
   drawSpectrumOverlay();
   $('viewInfo').textContent = `${fmtHz(Math.max(0, state.view.center - span / 2))} – ${fmtHz(state.view.center + span / 2)} · ${Math.round(state.view.bin)} Hz bins` +
-    (state.band === 'vhf' ? ` · tuner ${fmtMHz(state.info.vhf.center_hz)} MHz` : '');
+    (state.band === 'vhf' ? (state.sweeping ? ` · sweep, ${state.sweepSec ? state.sweepSec.toFixed(1) + ' s/update' : 'starting…'} · VHF audio paused (click a signal to listen)`
+                                            : ` · tuner ${fmtMHz(state.info.vhf.center_hz)} MHz`) : '');
 }
 
 function drawSpectrumOverlay() {
@@ -387,6 +402,10 @@ function openStatus() {
   ws.onmessage = (e) => {
     const s = JSON.parse(e.data);
     state.info.vhf = s.vhf; state.info.max_freq_hz = s.max_freq_hz; state.info.adc_rate_hz = s.adc_rate_hz;
+    state.sweeping = !!s.spectrum?.sweeping; state.sweepSec = s.spectrum?.sweep_sec;
+    if (!state.gainDragging && (s.hf_gain_db ?? null) !== (state.info.hf_gain?.db ?? null)) {
+      state.info.hf_gain = {...state.info.hf_gain, db: s.hf_gain_db ?? null}; renderHfGain(s.hf_gain_db ?? null);
+    }
     if (s.band !== state.band && !state.switching) {   // another page switched the input
       state.channels = s.channels; applyBand(s.band); return;
     }
@@ -575,7 +594,12 @@ function wire() {
     if (e.key === 'Enter') { const f = parseFreq($('freq').value); f ? tune(f) : flash('frequency? e.g. 860, 7.2M, 14074k'); $('freq').blur(); }
   });
   $('mode').addEventListener('change', () => { tune(null, $('mode').value); $('step').value = defaultStep($('mode').value, current().freq_hz); });
-  $('listen').addEventListener('click', () => state.listening ? stopAudio() : startAudio());
+  $('listen').addEventListener('click', () => {
+    if (!state.listening && state.band === 'vhf' && state.sweeping) {   // the tuner is sweeping: go live first
+      setView(current().freq_hz, 2 * state.info.vhf.window_hz / state.view.n);
+    }
+    state.listening ? stopAudio() : startAudio();
+  });
   $('volume').addEventListener('input', () => { if (audio.gain) audio.gain.gain.value = parseFloat($('volume').value); });
   $('record').addEventListener('click', async () => {
     const ch = current(); if (!ch) return;
@@ -596,6 +620,29 @@ function wire() {
       buildZoom(); flash(`coverage 0–${Math.floor(state.info.max_freq_hz / 1e6)} MHz`);
     } catch (e) { flash(e.message); $('coverage').value = String(state.info.adc_rate_hz); }
     finally { $('coverage').disabled = false; }
+  });
+  $('hfGain').addEventListener('input', () => { state.gainDragging = true; $('hfGainVal').textContent = `${(+$('hfGain').value).toFixed(1)} dB`; });
+  $('hfGain').addEventListener('change', async () => {
+    state.gainDragging = false;
+    const db = +$('hfGain').value;
+    try { await api('POST', '/api/hf/gain', {gain_db: db}); state.info.hf_gain = {...state.info.hf_gain, db}; }
+    catch (e) { flash(e.message); }
+  });
+  $('hfAuto').addEventListener('change', async () => {
+    const db = $('hfAuto').checked ? null : +$('hfGain').value;
+    try { await api('POST', '/api/hf/gain', {gain_db: db}); state.info.hf_gain = {...state.info.hf_gain, db}; renderHfGain(db); }
+    catch (e) { flash(e.message); }
+  });
+  // Left/right arrows step the tuning (Shift: 10 steps), unless typing in a field
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    const t = e.target, tag = t && t.tagName;
+    if (tag === 'INPUT' && t.type !== 'range' && t.type !== 'checkbox' || tag === 'SELECT' || tag === 'TEXTAREA') return;
+    if (tag === 'INPUT' && t.type === 'range') return;   // let sliders use the arrows
+    const ch = current(); if (!ch) return;
+    e.preventDefault();
+    const step = +$('step').value * (e.shiftKey ? 10 : 1);
+    tune(Math.round(ch.freq_hz / +$('step').value) * +$('step').value + (e.key === 'ArrowRight' ? step : -step));
   });
   $('vga').addEventListener('input', () => { $('vgaVal').textContent = $('vga').value; });
   $('vga').addEventListener('change', () => api('POST', '/api/vhf/gain', {vga: +$('vga').value}).catch((e) => flash(e.message)));

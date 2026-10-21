@@ -112,6 +112,8 @@ class Scanner:
                 return await self._scan_wwv(frames)
             width = band.stop_hz - band.start_hz
             if band.band == "vhf":
+                if self.spectrum.sweeping:          # the scan needs the tuner
+                    await self.spectrum.ensure_live(radio.vhf.center_hz)
                 bin_hz = 2500.0 if band.step_hz >= 100e3 else 500.0
                 freqs, db, n = await self._capture_vhf(band.start_hz, band.stop_hz, bin_hz, frames)
             else:

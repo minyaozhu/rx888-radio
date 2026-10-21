@@ -24,7 +24,9 @@ import rx888_vhf  # noqa: E402
 log = logging.getLogger(__name__)
 
 HF_GPIO = 0            # radiod's GPIO word on HF with dither and randomizer off
-WINDOW_HZ = 3.6e6      # usable half-width around the IF with the 8 MHz channel filter
+# Usable half-width around the IF. Measured with the 8 MHz channel filter: the IF passband is
+# flat from ~0.3 to ~10.5 MHz, so +-4.2 MHz around 4.57 MHz (IF 0.37-8.77 MHz) is all in it.
+WINDOW_HZ = 4.2e6
 SWAP = {"usb": "lsb", "lsb": "usb", "cwu": "cwl", "cwl": "cwu"}
 
 

@@ -82,10 +82,15 @@ class Runtime:
             pass
         self.adc_rate_hz = float(d.get("adc_rate_hz", 64.8e6))
         self.vga = int(d.get("vga", 6))
+        self.hf_gain_db = d.get("hf_gain_db")        # None = automatic
+        self.band = d.get("band", "hf")
+        self.vhf_center_hz = d.get("vhf_center_hz")
 
     def save(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps({"adc_rate_hz": self.adc_rate_hz, "vga": self.vga}))
+        self.path.write_text(json.dumps({"adc_rate_hz": self.adc_rate_hz, "vga": self.vga,
+                                         "hf_gain_db": self.hf_gain_db, "band": self.band,
+                                         "vhf_center_hz": self.vhf_center_hz}))
 
 
 RUNTIME = Runtime(CONFIG.data_dir / "settings.json")
