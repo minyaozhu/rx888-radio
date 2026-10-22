@@ -5,6 +5,7 @@ Run:  .venv/bin/python -m rxapp          (then open http://127.0.0.1:8090)
 
 import asyncio
 import logging
+import re
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -235,13 +236,28 @@ async def ft8_set(body: Ft8Set):
     return S.ft8.info()
 
 
+class Qth(BaseModel):
+    grid: str
+
+
+@app.post("/api/ft8/qth")
+async def ft8_qth(body: Qth):
+    """The receiver's Maidenhead locator, for distances and the home marker on the map."""
+    g = body.grid.strip()
+    if not re.fullmatch(r"[A-Ra-r]{2}\d{2}([A-Xa-x]{2})?", g):
+        raise HTTPException(400, "give a Maidenhead locator like CM87 or CM87tj")
+    RUNTIME.qth = g[:2].upper() + g[2:4] + g[4:].lower()
+    RUNTIME.save()
+    return S.ft8.info()
+
+
 @app.get("/api/ft8/decodes")
 async def ft8_decodes(since: float = 0, after_id: int = 0, band: Optional[str] = None, limit: int = 500):
     """Newest first. Poll with after_id = the largest id seen (slots on different bands finish apart)."""
     sql, args = "SELECT * FROM ft8 WHERE t > ? AND id > ?", [since, after_id]
     if band:
         sql, args = sql + " AND band = ?", args + [band]
-    return S.store.query(sql + " ORDER BY t DESC, band, hz LIMIT ?", args + [min(limit, 5000)])
+    return S.store.query(sql + " ORDER BY t DESC, band, hz LIMIT ?", args + [min(limit, 50000)])
 
 
 @app.get("/api/ft8/conversations")

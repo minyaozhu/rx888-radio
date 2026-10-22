@@ -244,7 +244,7 @@ class Ft8:
             self.store.add_ft8(t0, feed.band, feed.dial_hz, rows)
 
     def info(self):
-        return {"running": self.running, "decoder": DECODER.exists(),
+        return {"running": self.running, "decoder": DECODER.exists(), "qth": RUNTIME.qth,
                 "available": [b for b, _ in self.available()], "slot_sec": SLOT_SEC,
                 "bands": [{"band": f.band, "dial_hz": f.dial_hz, "ssrc": f.ssrc,
                            "parked": getattr(self.radio.channels.get(f.ssrc), "parked", True),

@@ -73,6 +73,15 @@ corrected for radiod's ~0.3 s filter delay; measured decode `dt` is centred on 0
 clock must be right (macOS keeps it NTP-synced). `score` is ft8_lib's rough SNR estimate, not WSJT-X's.
 Decodes are in the `ft8` table of `rxapp_data/rxapp.sqlite`; the audio isn't kept.
 
+**FT8 Skywatch** (`/ft8.html`, linked from the FT8 tab) shows the decodes like the
+[airband page](https://minyaozhu.github.io/malahit-airband-monitor/): a world map (stations at their grid
+centre, coloured by band; hollow when placed only by callsign prefix; lines from each station to the one
+it's calling; rings for CQ) and a timeline with one lane per station, dots coloured by message phase
+(CQ → answer + grid → report → roger + report → RR73/73). Scrub or Play to replay a window of 15 min to
+24 h; at the end of the slider it follows live. Click a dot or station to read the message in plain
+English, with distance from your locator ("Home", default CM87; `POST /api/ft8/qth`). The map libraries
+(d3, topojson, world-atlas) load from jsDelivr, so the page needs internet.
+
 API: `GET/POST /api/ft8` (status / `{on, bands}`), `GET /api/ft8/decodes?after_id=`,
 `GET /api/ft8/conversations?hours=`, `GET /api/ft8/stats?hours=`.
 
