@@ -63,6 +63,7 @@
   <button data-tab="channels" class="active">Channels</button>
   <button data-tab="scan">Scan</button>
   <button data-tab="monitor">Monitor</button>
+  <button data-tab="ft8">FT8</button>
   <button data-tab="recordings">Recordings</button>
   <button data-tab="dashboard">Dashboard</button>
 </nav>
@@ -103,6 +104,26 @@
     <tbody id="watchRows"></tbody></table>
 </section>
 
+<section id="tab-ft8" class="tab">
+  <div class="row">
+    <button id="ft8Toggle" class="primary">Start FT8 monitor</button>
+    <span id="ft8Bands" class="chips"></span>
+  </div>
+  <p id="ft8Status" class="dim">Decodes FT8 on every chosen band at once, every 15 s slot. Runs on the server, so it keeps going with this page closed.</p>
+  <table class="compact"><thead><tr><th>Band</th><th>Dial</th><th>Last slot</th><th>Decodes since start</th><th>Stations (24 h)</th><th></th></tr></thead>
+    <tbody id="ft8BandRows"></tbody></table>
+  <div class="row" style="margin-top:14px">
+    <div class="seg"><button class="seg-btn active" data-ft8view="msgs">Messages</button><button class="seg-btn" data-ft8view="qso">Conversations</button></div>
+    <label>Band <select id="ft8Filter"><option value="">all</option></select></label>
+    <label>Find <input id="ft8Find" placeholder="callsign or grid" size="14"></label>
+    <span id="ft8Count" class="dim"></span>
+  </div>
+  <div id="ft8Msgs"><table class="compact"><thead><tr><th>UTC</th><th>Band</th><th>SNR*</th><th>dt</th><th>Hz</th><th>Message</th></tr></thead>
+    <tbody id="ft8Rows"></tbody></table>
+    <p class="dim">* ft8_lib's rough SNR estimate, not WSJT-X's.</p></div>
+  <div id="ft8Qso" style="display:none"></div>
+</section>
+
 <section id="tab-recordings" class="tab">
   <table><thead><tr><th>Start</th><th>Freq</th><th>Mode</th><th>Length</th><th>Peak</th><th></th></tr></thead>
     <tbody id="recRows"></tbody></table>
@@ -126,6 +147,6 @@
   <table><tbody id="eventRows"></tbody></table>
 </section>
 
-<script src="app.js?v=4"></script>
+<script src="app.js?v=5"></script>
 </body>
 </html>

@@ -28,6 +28,7 @@ or the SoapySDDC scripts.
 | **Channels** | Any number at once (radiod demodulates them all); listen to one, record any. |
 | **Scan** | HF: AM broadcast, shortwave broadcast bands, ham bands (peak finding for SSB), CB, WWV propagation check. VHF: FM broadcast, airband, 2 m, NOAA weather; bands wider than the tuner window are scanned in steps (FM: 4 steps, ~25 s), which briefly moves the tuner. HF scans use their own spectrum channel, so the display doesn't move. |
 | **Monitor** (server-side) | Scheduled scans (default: AM every 10 min, WWV every 30 min) and *watches*: a channel recorded automatically whenever its SNR rises above a threshold, optionally transcribed on-device. |
+| **FT8** (server-side) | Every FT8 band at once (160 m–10 m, plus 6 m with 0–64 MHz coverage): one USB channel per dial frequency, cut into 15 s UTC slots and decoded with ft8_lib. Live message list, conversations grouped by station pair (✓ when they reach RR73/73), CQ callers with grids, search by callsign or grid. Keeps running across restarts; pauses while VHF is selected. |
 | **Dashboard** | Occupancy per channel, detections over time, receiver health (IF power, RF gain, spectrum rate, ADC overloads), event log. |
 | **Recovery** | A supervisor restarts radiod when it stops answering (USB unplug, crash) and re-creates every channel with the same SSRC; open pages reconnect and re-create their channel. |
 
@@ -57,6 +58,23 @@ Manual gain goes to radiod as RF gain (AD8370) plus attenuation (PE4312). radiod
 off for good after the first manual command, so **Auto** is rxapp's AGC (`rxapp/hfgain.py`), holding the
 ADC between −26 and −15 dBFS like radiod's. The same amplifier sits in the VHF tuner's IF path, so on VHF
 the gain is always automatic and a manual HF value comes back when you return to HF.
+
+## FT8
+
+Needs ft8_lib's decoder, built into `tools/ft8_lib` (not committed):
+
+```bash
+git clone --depth 1 https://github.com/kgoba/ft8_lib.git tools/ft8_lib
+make -C tools/ft8_lib decode_ft8 CFLAGS="-O3 -DHAVE_STPCPY -I. -include stdio.h"   # stdio.h: current macOS SDKs
+```
+
+Slot timing comes from RTP timestamps, anchored to the wall clock by the least-delayed packet, and
+corrected for radiod's ~0.3 s filter delay; measured decode `dt` is centred on 0 like WSJT-X. The host
+clock must be right (macOS keeps it NTP-synced). `score` is ft8_lib's rough SNR estimate, not WSJT-X's.
+Decodes are in the `ft8` table of `rxapp_data/rxapp.sqlite`; the audio isn't kept.
+
+API: `GET/POST /api/ft8` (status / `{on, bands}`), `GET /api/ft8/decodes?after_id=`,
+`GET /api/ft8/conversations?hours=`, `GET /api/ft8/stats?hours=`.
 
 ## Design notes
 

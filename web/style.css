@@ -71,3 +71,16 @@ audio { height: 28px; vertical-align: middle; }
 .seg-btn:disabled { opacity: .5; cursor: wait; }
 #vga { width: 90px; padding: 0; }
 .stepbtn { font-size: 16px; padding: 6px 10px; align-self: center; }
+
+.chips { display: inline-flex; gap: 6px; flex-wrap: wrap; }
+.chips label { border: 1px solid var(--line); border-radius: 12px; padding: 2px 8px; font-size: 12px; }
+.chips label.off { opacity: .45; }
+table.compact td, table.compact th { padding: 3px 8px; }
+.msg { font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+.cq { color: var(--good); }
+.mine { color: var(--accent2); }
+tr.fresh td { background: #13283a; }
+.qso { border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; margin-bottom: 8px; }
+.qso h4 { margin: 0 0 4px; font-size: 13px; }
+.qso .done { color: var(--good); font-weight: normal; }
+.qso div { font: 12px/1.5 ui-monospace, "SF Mono", Menlo, monospace; }

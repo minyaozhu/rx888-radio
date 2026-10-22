@@ -17,6 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .config import BAND_MODES, CONFIG, MODES, RADIOD_CONFS, RUNTIME, VHF_MAX_HZ, VHF_MIN_HZ
+from .ft8 import Ft8, conversations
 from .hfgain import GAIN_MAX, SLIDER_MIN, HfGain
 from .jobs import BANDS, Recorder, Scanner
 from .monitor import Monitor
@@ -39,6 +40,7 @@ class State:
     supervisor: Supervisor
     monitor: Monitor
     hfgain: HfGain
+    ft8: Ft8
     recorders: Dict[int, Recorder] = {}
 
 
@@ -73,6 +75,12 @@ async def lifespan(app):
     S.supervisor.on_restart.append(lambda: S.hfgain.apply(restarted=True))
     await S.hfgain.apply(restarted=True)
     S.hfgain.start()
+    S.ft8 = Ft8(S.radio, S.rtp, S.store)
+    if RUNTIME.ft8_bands:                # the FT8 monitor was on: carry on
+        try:
+            await S.ft8.start(RUNTIME.ft8_bands)
+        except Exception as e:
+            log.warning("could not restart FT8: %s", e)
     if RUNTIME.band == "vhf":           # come back on the input that was selected last time
         try:
             await S.radio.switch_band("vhf", RUNTIME.vhf_center_hz)
@@ -85,6 +93,7 @@ async def lifespan(app):
     for ssrc, rec in list(S.recorders.items()):
         rec.stop()
     await S.monitor.stop()
+    await S.ft8.stop(save=False)
     await S.hfgain.stop()
     await S.supervisor.stop()
     await S.spectrum.stop()
@@ -184,6 +193,8 @@ async def set_coverage(body: Coverage):
         await S.supervisor.set_coverage(body.adc_rate_hz)
     except ValueError as e:
         raise HTTPException(400, str(e))
+    if S.ft8.running:                    # 6 m comes and goes with the coverage
+        await S.ft8.start(RUNTIME.ft8_bands)
     return await info()
 
 
@@ -200,6 +211,56 @@ async def vhf_gain(body: VhfGain):
     RUNTIME.save()
     await S.radio.vhf.set_vga(RUNTIME.vga)
     return S.radio.vhf.info()
+
+
+class Ft8Set(BaseModel):
+    on: bool
+    bands: Optional[list] = None        # band names ("40m", ...); None = every band the coverage allows
+
+
+@app.get("/api/ft8")
+async def ft8_info():
+    return S.ft8.info()
+
+
+@app.post("/api/ft8")
+async def ft8_set(body: Ft8Set):
+    try:
+        if body.on:
+            await S.ft8.start(body.bands)
+        else:
+            await S.ft8.stop()
+    except (ValueError, RuntimeError) as e:
+        raise HTTPException(400, str(e))
+    return S.ft8.info()
+
+
+@app.get("/api/ft8/decodes")
+async def ft8_decodes(since: float = 0, after_id: int = 0, band: Optional[str] = None, limit: int = 500):
+    """Newest first. Poll with after_id = the largest id seen (slots on different bands finish apart)."""
+    sql, args = "SELECT * FROM ft8 WHERE t > ? AND id > ?", [since, after_id]
+    if band:
+        sql, args = sql + " AND band = ?", args + [band]
+    return S.store.query(sql + " ORDER BY t DESC, band, hz LIMIT ?", args + [min(limit, 5000)])
+
+
+@app.get("/api/ft8/conversations")
+async def ft8_conversations(hours: float = 1.0, band: Optional[str] = None):
+    sql, args = "SELECT * FROM ft8 WHERE t > ?", [time.time() - hours * 3600]
+    if band:
+        sql, args = sql + " AND band = ?", args + [band]
+    return conversations(S.store.query(sql + " ORDER BY t, id", args))
+
+
+@app.get("/api/ft8/stats")
+async def ft8_stats(hours: float = 24.0):
+    """Decodes and distinct stations per band, and per band per 15 min for a heat map."""
+    t0 = time.time() - hours * 3600
+    per_band = S.store.query("SELECT band, COUNT(*) AS decodes, COUNT(DISTINCT from_call) AS stations "
+                             "FROM ft8 WHERE t > ? GROUP BY band", (t0,))
+    buckets = S.store.query("SELECT band, CAST(t / 900 AS INTEGER) * 900 AS t, COUNT(*) AS n "
+                            "FROM ft8 WHERE t > ? GROUP BY band, CAST(t / 900 AS INTEGER)", (t0,))
+    return {"per_band": per_band, "buckets": buckets}
 
 
 @app.get("/api/health")
@@ -241,6 +302,8 @@ async def update_channel(ssrc: int, body: ChannelUpdate):
 async def delete_channel(ssrc: int):
     if _channel(ssrc).kind == "watch":
         raise HTTPException(409, "this channel belongs to a watch; delete the watch instead")
+    if _channel(ssrc).kind == "ft8":
+        raise HTTPException(409, "this channel belongs to the FT8 monitor; stop it on the FT8 tab")
     if ssrc in S.recorders:
         S.recorders.pop(ssrc).stop()
     await S.radio.remove(ssrc)

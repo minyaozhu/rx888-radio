@@ -458,7 +458,7 @@ function renderMeter() {
 }
 
 function renderChannels() {
-  const rows = state.channels.filter((c) => c.band === state.band).map((c) => `
+  const rows = state.channels.filter((c) => c.band === state.band && c.kind !== 'ft8').map((c) => `
     <tr class="${c.ssrc === state.selected ? 'sel' : ''}">
       <td>${fmtHz(c.freq_hz)}${c.parked ? ' <span class="dim">(paused: outside tuner window)</span>' : ''}</td><td>${c.mode.toUpperCase()}</td><td>${c.label || ''}${c.recording ? ' <span style="color:var(--rec)">● rec</span>' : ''}</td>
       <td>${c.power_db != null ? c.power_db.toFixed(1) + ' dB' : ''}</td>
@@ -517,6 +517,115 @@ async function refreshMonitor() {
     <td><button data-act="delwatch" data-id="${w.id}">✕</button></td></tr>`).join('');
 }
 let monitorTimer = null;
+
+// ---------------------------------------------------------------- FT8
+let ft8Timer = null;
+const ft8 = {info: null, rows: [], since: 0, view: 'msgs', stations: {}};
+const utc = (t) => new Date(t * 1000).toISOString().slice(11, 19);
+const esc = (x) => String(x ?? '').replace(/[&<>"]/g, (c) => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'})[c]);
+
+function wireFt8() {
+  $('ft8Toggle').addEventListener('click', async () => {
+    const on = !(ft8.info && ft8.info.running);
+    const bands = [...document.querySelectorAll('#ft8Bands input:checked')].map((x) => x.value);
+    $('ft8Toggle').disabled = true;
+    try { ft8.info = await api('POST', '/api/ft8', {on, bands: on ? bands : null}); }
+    catch (e) { flash(e.message); }
+    $('ft8Toggle').disabled = false;
+    renderFt8Info();
+  });
+  document.querySelectorAll('[data-ft8view]').forEach((b) => b.addEventListener('click', () => {
+    document.querySelectorAll('[data-ft8view]').forEach((x) => x.classList.toggle('active', x === b));
+    ft8.view = b.dataset.ft8view;
+    $('ft8Msgs').style.display = ft8.view === 'msgs' ? '' : 'none';
+    $('ft8Qso').style.display = ft8.view === 'qso' ? '' : 'none';
+    refreshFt8(true);
+  }));
+  $('ft8Filter').addEventListener('change', () => refreshFt8(true));
+  $('ft8BandRows').addEventListener('click', (e) => {   // hear a band: the main receiver goes there in USB
+    const b = e.target.closest('button'); if (!b) return;
+    const band = ft8.info.bands.find((x) => x.band === b.dataset.band);
+    if (state.band !== 'hf') return flash('switch to HF first');
+    $('mode').value = 'usb'; tune(band.dial_hz, 'usb');
+  });
+  $('ft8Find').addEventListener('input', () => ft8.view === 'msgs' ? renderFt8Rows() : refreshFt8(true));
+}
+
+function renderFt8Info() {
+  const i = ft8.info; if (!i) return;
+  $('ft8Toggle').textContent = i.running ? 'Stop FT8 monitor' : 'Start FT8 monitor';
+  $('ft8Toggle').classList.toggle('on', i.running);
+  const active = new Set(i.bands.map((b) => b.band));
+  const chips = $('ft8Bands');
+  if (!chips.dataset.built || chips.dataset.built !== i.available.join()) {
+    chips.innerHTML = i.available.map((b) => `<label><input type="checkbox" value="${b}" checked> ${b}</label>`).join('');
+    chips.dataset.built = i.available.join();
+    $('ft8Filter').innerHTML = '<option value="">all</option>' + i.available.map((b) => `<option>${b}</option>`).join('');
+  }
+  if (i.running) chips.querySelectorAll('input').forEach((x) => { x.checked = active.has(x.value); });
+  chips.querySelectorAll('input').forEach((x) => { x.disabled = i.running; x.parentElement.classList.toggle('off', !x.checked); });
+  const next = i.slot_sec - (Date.now() / 1000) % i.slot_sec;
+  $('ft8Status').textContent = !i.decoder ? 'decode_ft8 is missing: build tools/ft8_lib (see README).'
+    : i.running ? `Decoding ${i.bands.length} bands · next slot ends in ${next.toFixed(0)} s · runs on the server, keeps going with this page closed.`
+    : 'Decodes FT8 on every chosen band at once, every 15 s slot. Runs on the server, so it keeps going with this page closed.';
+  $('ft8BandRows').innerHTML = i.bands.map((b) => `<tr><td>${b.band}</td><td>${fmtHz(b.dial_hz)}</td>
+    <td>${b.parked ? '<span class="dim">paused (VHF selected)</span>' : b.last_count == null ? '<span class="dim">waiting</span>' : `${b.last_count} at ${utc(b.last_slot)}`}</td>
+    <td>${b.decodes}</td><td>${ft8.stations[b.band] ?? ''}</td>
+    <td><button data-band="${b.band}">Listen</button></td></tr>`).join('');
+}
+
+function ft8Match(r, q) {
+  if (!q) return true;
+  return r.msg.includes(q);
+}
+
+function renderFt8Rows() {
+  const q = $('ft8Find').value.trim().toUpperCase();
+  const rows = ft8.rows.filter((r) => ft8Match(r, q));
+  const newest = ft8.rows.length ? ft8.rows[0].t : 0;
+  $('ft8Rows').innerHTML = rows.slice(0, 400).map((r) => `<tr class="${r.t === newest ? 'fresh' : ''}">
+    <td>${utc(r.t)}</td><td>${r.band}</td><td>${r.score.toFixed(0)}</td><td>${r.dt.toFixed(1)}</td><td>${r.hz.toFixed(0)}</td>
+    <td class="msg ${r.to_call === 'CQ' ? 'cq' : ''}">${esc(r.msg)}</td></tr>`).join('');
+  $('ft8Count').textContent = `${rows.length} messages${q ? ' matching' : ''} (latest 1 h)`;
+}
+
+function renderFt8Qso(d) {
+  const q = $('ft8Find').value.trim().toUpperCase();
+  const convs = d.conversations.filter((c) => !q || c.a.includes(q) || c.b.includes(q) || c.messages.some((m) => m.msg.includes(q)));
+  $('ft8Count').textContent = `${convs.length} conversations · ${d.cq.length} stations calling CQ (last 1 h)`;
+  $('ft8Qso').innerHTML = convs.slice(0, 150).map((c) => `<div class="qso">
+      <h4>${esc(c.a)} ↔ ${esc(c.b)} <span class="dim">${c.band} · ${c.messages.length} msgs · ${utc(c.first)}–${utc(c.last)} UTC</span>
+        ${c.complete ? '<span class="done">✓ completed</span>' : ''}</h4>
+      ${c.messages.map((m) => `<div>${utc(m.t)} ${String(m.score.toFixed(0)).padStart(3)}  ${esc(m.msg)}</div>`).join('')}
+    </div>`).join('') || '<p class="dim">No conversations yet.</p>';
+}
+
+async function refreshFt8(reset) {
+  try {
+    ft8.info = await api('GET', '/api/ft8');
+    const band = $('ft8Filter').value;
+    if (reset === true || ft8.band !== band) { ft8.rows = []; ft8.lastId = 0; ft8.band = band; }
+    if (ft8.view === 'msgs') {
+      const since = Date.now() / 1000 - 3600;
+      const add = await api('GET', `/api/ft8/decodes?since=${since}&after_id=${ft8.lastId}${band ? '&band=' + band : ''}&limit=2000`);
+      if (add.length) {
+        ft8.rows = add.concat(ft8.rows).sort((a, b) => b.t - a.t || a.band.localeCompare(b.band) || a.hz - b.hz);
+        ft8.lastId = Math.max(ft8.lastId, ...add.map((r) => r.id));
+      }
+      const cut = Date.now() / 1000 - 3600;
+      ft8.rows = ft8.rows.filter((r) => r.t > cut);
+      renderFt8Rows();
+    } else {
+      renderFt8Qso(await api('GET', `/api/ft8/conversations?hours=1${band ? '&band=' + band : ''}`));
+    }
+    if (reset === true || !ft8.statsT || Date.now() - ft8.statsT > 60000) {
+      const st = await api('GET', '/api/ft8/stats?hours=24');
+      ft8.stations = Object.fromEntries(st.per_band.map((b) => [b.band, b.stations]));
+      ft8.statsT = Date.now();
+    }
+    renderFt8Info();
+  } catch (e) { console.warn('ft8', e); }
+}
 
 // ------------------------------------------------------------------ dashboard
 async function refreshDashboard() {
@@ -666,7 +775,10 @@ function wire() {
     clearInterval(monitorTimer);
     if (b.dataset.tab === 'monitor') { refreshMonitor(); monitorTimer = setInterval(refreshMonitor, 2000); }
     if (b.dataset.tab === 'dashboard') refreshDashboard();
+    clearInterval(ft8Timer);
+    if (b.dataset.tab === 'ft8') { refreshFt8(true); ft8Timer = setInterval(refreshFt8, 3000); }
   }));
+  wireFt8();
 
   $('addChannel').addEventListener('click', async () => {
     const ch = current();

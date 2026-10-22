@@ -1,4 +1,4 @@
-"""SQLite log: scans and their detections, recordings, health samples, events."""
+"""SQLite log: scans and their detections, recordings, health samples, events, FT8 decodes."""
 
 import json
 import sqlite3
@@ -20,6 +20,14 @@ CREATE TABLE IF NOT EXISTS health (
   t REAL NOT NULL, if_power_db REAL, rf_gain_db REAL, ad_over INTEGER,
   input_samples INTEGER, spectrum_fps REAL, channels INTEGER);
 CREATE TABLE IF NOT EXISTS events (t REAL NOT NULL, kind TEXT, detail TEXT);
+"""
+
+FT8_SCHEMA = """
+CREATE TABLE IF NOT EXISTS ft8 (
+  id INTEGER PRIMARY KEY, t REAL NOT NULL, band TEXT NOT NULL, dial_hz REAL, hz REAL,
+  score REAL, dt REAL, msg TEXT, to_call TEXT, from_call TEXT, extra TEXT);
+CREATE INDEX IF NOT EXISTS ft8_t ON ft8(t);
+CREATE INDEX IF NOT EXISTS ft8_from ON ft8(from_call);
 """
 
 
@@ -61,6 +69,18 @@ class Store:
 
     def finish_recording(self, rid, stop, seconds, peak):
         self._exec("UPDATE recordings SET stop=?, seconds=?, peak_dbfs=? WHERE id=?", (stop, seconds, peak, rid))
+
+    def ensure_ft8(self):
+        with self.lock:
+            self.db.executescript(FT8_SCHEMA)
+
+    def add_ft8(self, t, band, dial_hz, rows):
+        with self.lock:
+            self.db.executemany(
+                "INSERT INTO ft8 (t,band,dial_hz,hz,score,dt,msg,to_call,from_call,extra) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                [(t, band, dial_hz, r["hz"], r["score"], r["dt"], r["msg"], r["to_call"], r["from_call"], r["extra"])
+                 for r in rows])
+            self.db.commit()
 
     def add_health(self, **h):
         self._exec("INSERT INTO health (t,if_power_db,rf_gain_db,ad_over,input_samples,spectrum_fps,channels) "

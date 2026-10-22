@@ -32,10 +32,11 @@ class Channel:
     freq_hz: float
     mode: str
     label: str = ""
-    kind: str = "listen"            # listen | watch
+    kind: str = "listen"            # listen | watch | ft8
     band: str = "hf"                # hf | vhf
     sample_rate: int = 12000
     parked: bool = False            # True: not in radiod (other band selected)
+    filter_hz: Optional[tuple] = None  # (low, high) audio passband instead of the preset's
     packets: Optional[int] = None   # radiod's output packet count, for stall detection
     packets_t: Optional[float] = None
     reopens: int = 0
@@ -120,6 +121,8 @@ class Radio:
             agc_enable=1, destination=self.pcm_group, ssrc=ch.ssrc, lifetime=LIFETIME_FRAMES)
         # create_channel's agc flag doesn't take on this radiod; without AGC the audio sits near -55 dBFS
         await asyncio.to_thread(self.ctl.set_agc, ch.ssrc, True)
+        if ch.filter_hz:
+            await asyncio.to_thread(self.ctl.set_filter, ch.ssrc, *ch.filter_hz)
         ch.parked = False
 
     async def _close(self, ch):
@@ -133,14 +136,14 @@ class Radio:
         return [c for c in self.channels.values() if not c.parked]
 
     async def create(self, freq_hz: float, mode: str = "am", label: str = "", kind: str = "listen",
-                     band: Optional[str] = None) -> Channel:
+                     band: Optional[str] = None, filter_hz: Optional[tuple] = None) -> Channel:
         band = band or self.band
         self._check(freq_hz, mode, band)
         if band == "vhf" and band == self.band and not self.vhf_paused and not self.vhf.in_window(freq_hz):
             await self.move_tuner(freq_hz)
         ssrc = secrets.randbelow(0x7FFFFFFF - 1000) + 1000  # stay clear of radiod's static channels
         ch = Channel(ssrc=ssrc, freq_hz=freq_hz, mode=mode, label=label, kind=kind, band=band,
-                     sample_rate=MODES[mode][1] or 48000, parked=True)
+                     sample_rate=MODES[mode][1] or 48000, parked=True, filter_hz=filter_hz)
         self.channels[ssrc] = ch
         if band == self.band and not (band == "vhf" and self.vhf_paused):
             await self._open(ch)

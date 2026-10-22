@@ -127,3 +127,64 @@ def test_vhf_wide_view_becomes_a_sweep(monkeypatch):
     s.bin_hz, s.center_hz = 4000.0, 87.5e6
     s._clamp(follow_tuner=False)
     assert s.center_hz == 87.5e6 and not s.wants_sweep
+
+
+# ---- FT8 ------------------------------------------------------------------
+from rxapp import ft8
+
+
+def test_ft8_parse_and_parties():
+    out = ("000000 +13.5 +0.08 1497 ~  N2SAB W5WCA DN70\n"
+           "000000  -4.0 -0.30  812 ~  CQ DX JA1XYZ PM95\n"
+           "000000  -9.1 +1.10 2210 ~  CQ K1ABC FN42\n"
+           "000000  -9.1 +1.10 2210 ~  CQ K1ABC FN42\n"          # duplicate line
+           "decoded 3 messages\n")
+    rows = ft8.parse(out)
+    assert [r["msg"] for r in rows] == ["N2SAB W5WCA DN70", "CQ DX JA1XYZ PM95", "CQ K1ABC FN42"]
+    assert (rows[0]["score"], rows[0]["dt"], rows[0]["hz"]) == (13.5, 0.08, 1497)
+    assert (rows[0]["to_call"], rows[0]["from_call"], rows[0]["extra"]) == ("N2SAB", "W5WCA", "DN70")
+    assert (rows[1]["to_call"], rows[1]["from_call"], rows[1]["extra"]) == ("CQ", "JA1XYZ", "PM95")
+    assert ft8.grid_of("PM95") == "PM95" and ft8.grid_of("RR73") is None and ft8.grid_of("-12") is None
+
+
+def _packets(feed, t_start, seconds, delay_jitter=0.0, ts0=1000, monkeypatch=None, ramp=True):
+    """Feed 20 ms packets whose first sample was taken at wall time t_start."""
+    rng = np.random.default_rng(1)
+    n = ft8.RATE // 50
+    for k in range(int(seconds * 50)):
+        t_end = t_start + (k + 1) * n / ft8.RATE
+        arrival = t_end + 0.05 + abs(rng.normal(0, delay_jitter))
+        monkeypatch.setattr(ft8.time, "time", lambda a=arrival: a)
+        a = (np.arange(k * n, (k + 1) * n) % 30000).astype("<i2") if ramp else np.zeros(n, "<i2")
+        feed.add(a.tobytes(), (ts0 + k * n) & 0xFFFFFFFF)
+
+
+def test_ft8_slot_cut_uses_rtp_time_not_arrival(monkeypatch):
+    feed = ft8.Feed("40m", 7.074e6)
+    t_start = 1_800_000_000.0                                  # a slot boundary (divisible by 15)
+    _packets(feed, t_start - 2, 20, delay_jitter=0.2, monkeypatch=monkeypatch)
+    a = feed.cut(t_start, 15.0)
+    assert a is not None and len(a) == 15 * ft8.RATE
+    # The slot starts at the sample taken at t_start: 2 s into the stream. The simulated network delay
+    # is 50 ms but the cut assumes LATENCY_SEC, so it lands (LATENCY_SEC - 0.05) s later than that.
+    first = int(a[0])
+    assert abs(first - (2 + ft8.LATENCY_SEC - 0.05) * ft8.RATE) <= 0.01 * ft8.RATE
+
+
+def test_ft8_slot_cut_handles_timestamp_wrap_and_gaps(monkeypatch):
+    feed = ft8.Feed("20m", 14.074e6)
+    t_start = 1_800_000_015.0
+    _packets(feed, t_start - 1, 17, ts0=0xFFFFFFFF - ft8.RATE * 3, monkeypatch=monkeypatch)
+    assert feed.ts_hi == 1 << 32
+    assert feed.cut(t_start, 15.0) is not None
+    assert feed.cut(t_start + 30, 15.0) is None                # no audio for that slot
+
+
+def test_ft8_conversations_group_pairs_and_cq():
+    rows = [dict(t=t, band="40m", score=0, hz=1000, msg=m, **ft8.parties(m)) for t, m in [
+        (0, "CQ W5WCA DN70"), (15, "W5WCA N2SAB FN20"), (30, "N2SAB W5WCA -08"),
+        (45, "W5WCA N2SAB R-10"), (60, "N2SAB W5WCA RR73"), (60, "CQ K1ABC FN42")]]
+    d = ft8.conversations(rows)
+    (c,) = d["conversations"]
+    assert (c["a"], c["b"], len(c["messages"]), c["complete"]) == ("N2SAB", "W5WCA", 4, True)
+    assert {q["call"]: q["grid"] for q in d["cq"]} == {"W5WCA": "DN70", "K1ABC": "FN42"}
