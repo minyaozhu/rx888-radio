@@ -1,6 +1,6 @@
 # rx888-toolkit
 
-Python tools for driving an **RX-888 MkII** SDR from a Mac (Apple Silicon, macOS 27). A companion to the [Malahit DSP2 toolkit](../Malahit), using the same approach: talk to the hardware directly, no vendor software.
+Tools for driving an **RX-888 MkII** SDR from a Mac (Apple Silicon): **rxapp**, a browser SDR and monitoring app built on ka9q-radio's `radiod`; macOS ports of ka9q-radio and ka9q-web; SoapySDDC/SDR++ setup; and Python scripts that talk to the hardware directly. A companion to the [Malahit DSP2 toolkit](https://github.com/minyaozhu/malahit-dsp2-toolkit).
 
 ## The hardware
 
@@ -29,7 +29,7 @@ python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 ```
 
-`pyusb` needs `libusb` (`brew install libusb`, already installed on this Mac).
+`pyusb` needs `libusb` (`brew install libusb`).
 
 Firmware: put `SDDC_FX3.img` from the [ik1xpv/ExtIO_sddc](https://github.com/ik1xpv/ExtIO_sddc) releases in `fw/` (it isn't committed).
 
@@ -69,11 +69,10 @@ In the SoapySDR source menu: antenna **HF** for 0–64 MHz (AM broadcast, shortw
 
 ### Superseded: SDR++'s own SDDC input
 
-SDR++ also has a built-in `sddc_source`, but it's an unfinished stub (hard-coded serial and firmware path, VHF port selected while doing HF direct sampling, USB reads that overflow on macOS and wedge the device). `tools/sdrpp_sddc_macos.patch` makes it work for HF, but it has no gain or port controls. Use the SoapySDR input instead.
+SDR++ also has a built-in `sddc_source`, but it's an unfinished stub (hard-coded serial and firmware path, VHF port selected while doing HF direct sampling, USB reads that overflow on macOS and wedge the device). `tools/sdrpp_sddc_macos.patch` makes it work for HF, but it has no gain or port controls. Use the SoapySDR input instead. (The patch's firmware path reads `@ROOT@/fw/SDDC_FX3.img`; replace `@ROOT@` with this folder before applying it.)
 
 ## Roadmap
 
-1. Firmware upload to the FX3 bootloader from Python.
-2. Streaming raw ADC samples (HF direct sampling) and checking the achieved rate.
-3. Digital downconversion to narrow IQ channels, then reuse the Malahit scanners and decoders (FT8, SSB, airband) against them.
-4. Wideband HF survey: the whole 0–30 MHz spectrum at once, instead of the Malahit's 192 kHz window.
+- Wider live VHF window (~10 MHz) by moving the tuner IF up and opening its widest filter.
+- Run the Malahit scanners and decoders (FT8, SSB, airband) against rxapp channels.
+- Stereo and RDS for WFM.

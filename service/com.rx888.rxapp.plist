@@ -1,19 +1,19 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- Runs rxapp at login and restarts it if it exits. Install:
-     cp service/com.rx888.rxapp.plist ~/Library/LaunchAgents/
+<!-- Runs rxapp at login and restarts it if it exits. Install (from the project folder):
+     sed "s#@ROOT@#$PWD#g" service/com.rx888.rxapp.plist > ~/Library/LaunchAgents/com.rx888.rxapp.plist
      launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.rx888.rxapp.plist
    Remove:
      launchctl bootout gui/$(id -u)/com.rx888.rxapp -->
 <plist version="1.0">
 <dict>
   <key>Label</key><string>com.rx888.rxapp</string>
-  <key>ProgramArguments</key><array><string>/Users/minyaozhu/ClaudeFileSystem/RX888/run_rxapp.sh</string></array>
-  <key>WorkingDirectory</key><string>/Users/minyaozhu/ClaudeFileSystem/RX888</string>
+  <key>ProgramArguments</key><array><string>@ROOT@/run_rxapp.sh</string></array>
+  <key>WorkingDirectory</key><string>@ROOT@</string>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>ThrottleInterval</key><integer>10</integer>
-  <key>StandardOutPath</key><string>/Users/minyaozhu/ClaudeFileSystem/RX888/rxapp_data/rxapp.log</string>
-  <key>StandardErrorPath</key><string>/Users/minyaozhu/ClaudeFileSystem/RX888/rxapp_data/rxapp.log</string>
+  <key>StandardOutPath</key><string>@ROOT@/rxapp_data/rxapp.log</string>
+  <key>StandardErrorPath</key><string>@ROOT@/rxapp_data/rxapp.log</string>
 </dict>
 </plist>

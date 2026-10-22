@@ -42,7 +42,7 @@ signal, so the IF spectrum is inverted:
     radiod frequency = 4.57 MHz − (RF − tuner centre)       (USB/LSB swap)
 
 Channels keep their real frequency and band; rxapp maps them, flips and relabels the spectrum, and moves
-the tuner when you tune outside its ±3.6 MHz window (channels outside the window pause until it returns).
+the tuner when you tune outside its ±4.2 MHz window (channels outside the window pause until it returns).
 The tuner's LNA and mixer run on their own AGC with the IF VGA at 6 (adjustable, "Tuner gain"); radiod's
 RF AGC then holds the ADC at about −20 dBFS. Expect a burst of ADC overloads for a second or two right
 after switching to VHF while radiod's AGC settles. Channels that stop producing audio for 5 s (seen once,

@@ -86,7 +86,7 @@ index c0ddf37..bfa62cd 100644
  
          // Set firmware image path for debugging
 -        sddc_set_firmware_path("C:/Users/ryzerth/Downloads/SDDC_FX3 (1).img");
-+        sddc_set_firmware_path("/Users/minyaozhu/ClaudeFileSystem/RX888/fw/SDDC_FX3.img");
++        sddc_set_firmware_path("@ROOT@/fw/SDDC_FX3.img");
  
          sampleRate = 128e6;
  
