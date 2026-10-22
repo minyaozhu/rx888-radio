@@ -49,12 +49,13 @@ const AIRLINES = {
   envoy: 'ENY', republic: 'RPA', cactus: 'AWE', 'air france': 'AFR', klm: 'KLM', condor: 'CFG', 'virgin': 'VIR',
   'china airlines': 'CAL', 'china southern': 'CSN', 'air china': 'CCA', 'philippine': 'PAL', 'turkish': 'THY',
 };
-const AIRLINE_RE = new RegExp(`\\b(${Object.keys(AIRLINES).sort((a, b) => b.length - a.length).join('|')})\\s*(?:flight\\s*)?(\\d{1,4})\\b`, 'i');
+// Whisper often splits a flight number: "United 15, 75", "American 24-10" -> 1575, 2410
+const AIRLINE_RE = new RegExp(`\\b(${Object.keys(AIRLINES).sort((a, b) => b.length - a.length).join('|')})\\s*(?:flight\\s*)?(\\d{1,2}[ ,-]+\\d{2}(?!\\d)|\\d{1,4})\\b`, 'i');
 const title = (s) => s.replace(/\b\w/g, (c) => c.toUpperCase());
 function callsignOf(texts) {
   for (const t of texts) {
     const m = t && t.match(AIRLINE_RE);
-    if (m) return {id: AIRLINES[m[1].toLowerCase()] + m[2], name: `${title(m[1].toLowerCase())} ${m[2]}`, num: m[2]};
+    if (m) { const n = m[2].replace(/\D/g, ''); return {id: AIRLINES[m[1].toLowerCase()] + n, name: `${title(m[1].toLowerCase())} ${n}`, num: n}; }
   }
   // a read-back ends with the call sign: "…, 664." Not altitudes, speeds or headings.
   for (const t of texts) {

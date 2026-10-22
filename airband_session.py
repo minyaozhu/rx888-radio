@@ -48,6 +48,8 @@ GRID_HZ = 25e3
 AIR_LO, AIR_HI = 118.0e6, 136.975e6
 BIN_HZ = 2050.0
 BINS = 4096                      # 8.4 MHz: the tuner's usable window
+WIDE_PEAK_DB = 10.0              # how far a spilling voice carrier stands above its neighbours
+NEIGHBOURS = 3                   # grid channels either side a carrier can spill into
 OPEN_DB = 12.0                   # carrier this far above the window's median floor = keyed
 HANG_SEC = 0.7                   # carrier gone this long = transmission over
 MIN_TX_SEC = 0.6
@@ -295,10 +297,19 @@ class Session:
                 continue
             last_frame = t
             floor = float(np.median(db))
-            for f in self.grid:
-                i = self.bin_of[f]
-                level = float(db[max(0, i - 1):i + 2].max()) - floor
-                keyed = level >= OPEN_DB and f not in self.spurs
+            levels = np.array([float(db[max(0, self.bin_of[f] - 1):self.bin_of[f] + 2].max()) - floor for f in self.grid])
+            for k, f in enumerate(self.grid):
+                level = levels[k]
+                # A strong carrier spills into the neighbouring 25 kHz channels; only the strongest
+                # channel within +-NEIGHBOURS counts, or one transmission turns into five.
+                lo, hi = max(0, k - NEIGHBOURS), k + NEIGHBOURS + 1
+                near = np.sort(levels[lo:hi])
+                keyed = level >= OPEN_DB and f not in self.spurs and level >= near[-1]
+                # Lit across 3+ channels at once with no clear peak: a wide non-voice signal (data,
+                # interference), not AM voice, which fits in one channel. Voice strong enough to spill
+                # stands well above its neighbours.
+                if keyed and (near >= OPEN_DB).sum() >= 3 and level - near[-2] < WIDE_PEAK_DB:
+                    keyed = False
                 h = self.history[f]
                 h.append((t, keyed))
                 while h and t - h[0][0] > SPUR_WINDOW:
