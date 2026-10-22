@@ -280,7 +280,7 @@ class Session:
         self.end = time.time() + self.minutes * 60 if self.minutes > 0 else None
         last_frame = last_status = time.time()
         while self.end is None or time.time() < self.end:
-            if time.time() - last_status >= 0.5:
+            if time.time() - last_status >= 0.25:     # the page follows who's on the air from this
                 self.write_status(time.time())
                 last_status = time.time()
             try:

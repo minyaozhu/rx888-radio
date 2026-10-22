@@ -226,17 +226,41 @@ function loudest() {
   }
   return best;
 }
+// Follow: stay on the channel being heard while it's active; once it has been quiet for SILENT_MS,
+// jump to whichever channel is on the air (the strongest, if several). Nobody on the air: stay put.
+const SILENT_MS = 800;
+const freqOf = (ssrc) => Object.entries(S.status.channels || {}).find(([, s]) => s === ssrc)?.[0];
 function wantedSsrc() {
   const ch = S.status.channels || {};
   const mode = $('chan').value;
   if (mode === 'loudest') { const f = loudest(); return f ? ch[f] : Object.values(ch)[0]; }
   if (mode === 'follow') {
-    const keyed = Object.entries(S.status.keyed || {}).sort((a, b) => b[1] - a[1]);
-    if (keyed.length && ch[keyed[0][0]]) { audio.lastKey = Date.now(); return ch[keyed[0][0]]; }
-    return audio.ssrc || (loudest() ? ch[loudest()] : Object.values(ch)[0]);     // stay until someone else talks
+    const keyed = S.status.keyed || {};
+    const cur = freqOf(audio.ssrc);
+    if (cur && keyed[cur] != null) { audio.lastKey = Date.now(); return audio.ssrc; }       // still talking
+    if (cur && Date.now() - audio.lastKey < SILENT_MS) return audio.ssrc;                  // a short pause
+    const on = Object.entries(keyed).filter(([f]) => ch[f]).sort((a, b) => b[1] - a[1]);
+    if (on.length) { audio.lastKey = Date.now(); return ch[on[0][0]]; }
+    return audio.ssrc || (loudest() ? ch[loudest()] : Object.values(ch)[0]);
   }
   return ch[mode];
 }
+function followTick() {
+  if (!audio.on || $('chan').value !== 'follow') return;
+  const want = wantedSsrc();
+  if (want && want !== audio.ssrc) { connect(want); drawChans(); }
+}
+// While following, check who is on the air several times a second (the page's main poll is slower).
+setInterval(async () => {
+  if (!audio.on || $('chan').value !== 'follow' || !S.session) return;
+  try {
+    const info = await api(`/api/airband?session=${S.session}`);
+    const was = JSON.stringify(S.status.keyed || {});
+    S.status = info.status || {};
+    followTick();
+    if (JSON.stringify(S.status.keyed || {}) !== was) drawChans();
+  } catch (e) { /* the main poll reports problems */ }
+}, 300);
 function connect(ssrc) {
   if (audio.ws) { const w = audio.ws; audio.ws = null; w.onmessage = w.onclose = null; w.close(); }
   audio.ssrc = ssrc;
@@ -279,11 +303,13 @@ function drawChans() {
   const counts = {};
   for (const r of S.recs) counts[Math.round(r.freq_hz)] = (counts[Math.round(r.freq_hz)] || 0) + 1;
   const freqs = Object.keys(ch).sort();
-  const prev = $('chan').value || 'loudest';
+  const prev = $('chan').value || 'follow';
   const lf = loudest();
-  $('chan').innerHTML = `<option value="loudest">Loudest${lf ? ' · ' + mhz(lf) : ''}</option><option value="follow">Follow who's talking</option>`
+  $('chan').innerHTML = `<option value="follow">Follow activity</option><option value="loudest">Loudest${lf ? ' · ' + mhz(lf) : ''}</option>`
     + freqs.map((f) => `<option value="${f}">${mhz(+f)} MHz</option>`).join('');
-  $('chan').value = [...$('chan').options].some((o) => o.value === prev) ? prev : 'loudest';
+  $('chan').value = [...$('chan').options].some((o) => o.value === prev) ? prev : 'follow';
+  const cur = freqOf(audio.ssrc);
+  $('now').textContent = audio.on && cur ? `playing ${mhz(+cur)}${keyed[cur] != null ? ' · on air' : ''}` : '';
   $('chans').innerHTML = freqs.map((f) => `<li data-f="${f}" class="${keyed[f] != null ? 'on' : ''} ${ch[f] === audio.ssrc && audio.on ? 'sel' : ''}"
       title="${keyed[f] != null ? 'on the air now' : 'quiet'}"><b>${mhz(+f)}</b> · ${counts[f] || 0}${keyed[f] != null ? ' · ON AIR' : ''}</li>`).join('')
     || '<li>no channels yet</li>';
@@ -318,10 +344,7 @@ async function poll(full) {
       if (S.follow && add.length) select(add[add.length - 1]);
       if (S.cursor == null) S.cursor = S.live ? Date.now() / 1000 : (S.recs.length ? S.recs[S.recs.length - 1].t1 : Date.now() / 1000);
     }
-    if (audio.on && $('chan').value === 'follow') {
-      const want = wantedSsrc();
-      if (want && want !== audio.ssrc) connect(want);
-    }
+    followTick();
     drawChans();
     render();
   } catch (e) { console.warn('airband', e); }
