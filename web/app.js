@@ -458,7 +458,7 @@ function renderMeter() {
 }
 
 function renderChannels() {
-  const rows = state.channels.filter((c) => c.band === state.band && c.kind !== 'ft8' && c.kind !== 'sstv').map((c) => `
+  const rows = state.channels.filter((c) => c.band === state.band && c.kind === 'listen').map((c) => `
     <tr class="${c.ssrc === state.selected ? 'sel' : ''}">
       <td>${fmtHz(c.freq_hz)}${c.parked ? ' <span class="dim">(paused: outside tuner window)</span>' : ''}</td><td>${c.mode.toUpperCase()}</td><td>${c.label || ''}${c.recording ? ' <span style="color:var(--rec)">● rec</span>' : ''}</td>
       <td>${c.power_db != null ? c.power_db.toFixed(1) + ' dB' : ''}</td>
@@ -844,7 +844,10 @@ function wire() {
       if (ssrc === state.selected && state.channels.length === 1) return flash('keep at least one channel');
       await api('DELETE', `/api/channels/${ssrc}`);
       state.channels = state.channels.filter((c) => c.ssrc !== ssrc);
-      if (ssrc === state.selected) select(state.channels[0].ssrc);
+      if (ssrc === state.selected) {
+        const next = state.channels.find((c) => c.kind === 'listen' && c.band === state.band);
+        if (next) select(next.ssrc, next);
+      }
       renderChannels();
     }
   });

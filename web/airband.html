@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bay Approach Live</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root{
+  --bg:#F2F4EE; --panel:#FFFFFF; --ink:#1D2833; --muted:#5A6774; --line:#CBD3D8;
+  --land:#E6EBD8; --land-edge:#B9C4A4; --water:#CFE2EC; --water-edge:#9CBCD0;
+  --magenta:#A3316F; --blue:#2A5A93; --runway:#2B3440;
+  --c-check:#6C7C8C; --c-alt:#B26E12; --c-vec:#2A5A93; --c-trf:#A3316F; --c-app:#2E7B57; --c-hand:#6A4DA1; --c-other:#9AA5AE;
+  --shadow:0 1px 2px rgba(29,40,51,.08);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme:dark;
+    --bg:#0E151B; --panel:#151F27; --ink:#E4EAEE; --muted:#93A2AE; --line:#2B3843;
+    --land:#1B2621; --land-edge:#33443A; --water:#10222D; --water-edge:#24475C;
+    --magenta:#E07BB2; --blue:#7FAEE6; --runway:#D5DCE2;
+    --c-check:#9AAAB8; --c-alt:#E3A54B; --c-vec:#7FAEE6; --c-trf:#E07BB2; --c-app:#6CC99A; --c-hand:#B39AE8; --c-other:#66737D;
+    --shadow:none;
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --bg:#0E151B; --panel:#151F27; --ink:#E4EAEE; --muted:#93A2AE; --line:#2B3843;
+  --land:#1B2621; --land-edge:#33443A; --water:#10222D; --water-edge:#24475C;
+  --magenta:#E07BB2; --blue:#7FAEE6; --runway:#D5DCE2;
+  --c-check:#9AAAB8; --c-alt:#E3A54B; --c-vec:#7FAEE6; --c-trf:#E07BB2; --c-app:#6CC99A; --c-hand:#B39AE8; --c-other:#66737D;
+  --shadow:none;
+}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font:15px/1.5 "Barlow",system-ui,-apple-system,"Segoe UI",sans-serif;padding:0 20px;}
+.wrap{max-width:1180px;margin:0 auto;padding-block:28px 48px;display:grid;gap:22px}
+header{display:grid;gap:6px}
+.eyebrow{font:600 13px/1 "Barlow Condensed",sans-serif;letter-spacing:.14em;text-transform:uppercase;color:var(--magenta)}
+h1{font:700 clamp(34px,5vw,54px)/1 "Barlow Condensed","Arial Narrow",sans-serif;letter-spacing:.01em;margin:0;text-wrap:balance}
+.sub{color:var(--muted);max-width:70ch;margin:0}
+.facts{display:flex;flex-wrap:wrap;gap:8px 22px;margin-top:6px;font:500 14px/1.3 "IBM Plex Mono",ui-monospace,monospace;color:var(--ink)}
+.facts span b{font-weight:500;color:var(--muted);margin-right:6px}
+.main{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(0,1fr);gap:18px;align-items:start}
+@media (max-width:860px){.main{grid-template-columns:1fr}}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:6px;box-shadow:var(--shadow)}
+.map{padding:10px}
+.map svg{width:100%;height:auto;display:block}
+.maplabel{font:600 12px "Barlow Condensed",sans-serif;letter-spacing:.08em;text-transform:uppercase;fill:var(--muted)}
+.placelabel{font:500 13px "Barlow Condensed",sans-serif;letter-spacing:.06em;fill:var(--muted)}
+.apt{font:700 15px "Barlow Condensed",sans-serif;letter-spacing:.06em;fill:var(--blue)}
+.fixlabel{font:600 11px "IBM Plex Mono",monospace;fill:var(--muted)}
+.tag{font:600 12px "IBM Plex Mono",monospace;fill:var(--ink)}
+.note{font:italic 400 12px "Barlow",sans-serif;fill:var(--muted)}
+.detail{padding:18px 18px 16px;display:grid;gap:12px}
+.detail h2{font:700 13px/1 "Barlow Condensed",sans-serif;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin:0}
+.dhead{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 12px}
+.dtime{font:500 22px/1 "IBM Plex Mono",monospace}
+.dflight{font:700 22px/1 "Barlow Condensed",sans-serif;letter-spacing:.03em}
+.chip{display:inline-flex;align-items:center;gap:6px;font:600 12px/1 "Barlow Condensed",sans-serif;letter-spacing:.08em;text-transform:uppercase;padding:5px 8px;border-radius:3px;border:1px solid currentColor}
+.raw{font:400 14px/1.45 "IBM Plex Mono",monospace;background:var(--bg);border-left:3px solid var(--line);padding:10px 12px;margin:0;overflow-wrap:anywhere}
+.meaning{margin:0;font-size:16px}
+.meta{font:400 13px "IBM Plex Mono",monospace;color:var(--muted);margin:0}
+.flights{display:grid;gap:4px;margin:4px 0 0;padding:0;list-style:none;font-size:14px}
+.flights li{display:flex;justify-content:space-between;gap:10px;border-top:1px solid var(--line);padding-top:5px}
+.flights li span:last-child{color:var(--muted);text-align:right}
+.controls{display:flex;flex-wrap:wrap;align-items:center;gap:12px 16px;padding:12px 16px}
+button{font:600 14px/1 "Barlow Condensed",sans-serif;letter-spacing:.1em;text-transform:uppercase;background:var(--ink);color:var(--bg);border:0;border-radius:4px;padding:10px 14px;cursor:pointer;min-width:84px}
+button:focus-visible,input:focus-visible{outline:2px solid var(--magenta);outline-offset:2px}
+#scrub{flex:1 1 260px;accent-color:var(--magenta)}
+#clock{font:500 18px "IBM Plex Mono",monospace;font-variant-numeric:tabular-nums;min-width:8ch}
+.legend{display:flex;flex-wrap:wrap;gap:6px 14px;font:600 13px "Barlow Condensed",sans-serif;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px;vertical-align:-1px}
+.tl{padding:8px 0 4px}
+.tlscroll{overflow-x:auto}
+.tl svg{display:block;min-width:760px;width:100%;height:auto}
+.lane{font:600 13px "Barlow Condensed",sans-serif;letter-spacing:.05em;fill:var(--ink)}
+.lanesub{font:400 11px "IBM Plex Mono",monospace;fill:var(--muted)}
+.tick{font:400 11px "IBM Plex Mono",monospace;fill:var(--muted)}
+.ev{cursor:pointer}
+.ev:focus{outline:none}
+.ev:focus-visible circle,.ev.sel circle{stroke:var(--ink);stroke-width:2.5}
+.caveat{color:var(--muted);font-size:13.5px;max-width:95ch;margin:0}
+.vids{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px}
+.vids figure{margin:0;display:grid;gap:6px}
+.vids video{width:100%;max-height:520px;background:#000;border-radius:4px}
+.vids figcaption{color:var(--muted);font-size:14px}
+@media (prefers-reduced-motion: reduce){*{transition:none!important;animation:none!important}}
+</style>
+<style>
+.live{display:inline-flex;align-items:center;gap:6px;color:var(--c-app)}
+.live i{width:9px;height:9px;border-radius:50%;background:currentColor;display:inline-block;animation:pulse 1.4s infinite}
+.live.off{color:var(--muted)} .live.off i{animation:none}
+@keyframes pulse{50%{opacity:.25}}
+.chans{display:flex;flex-wrap:wrap;gap:6px;margin:2px 0 0;padding:0;list-style:none}
+.chans li{font:500 12px/1 "IBM Plex Mono",monospace;border:1px solid var(--line);border-radius:3px;padding:5px 7px;cursor:pointer;color:var(--muted)}
+.chans li b{font-weight:500;color:var(--ink)}
+.chans li.on{border-color:var(--magenta);color:var(--magenta);box-shadow:0 0 0 1px var(--magenta) inset}
+.chans li.sel{background:var(--bg)}
+.player{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px}
+.player select{font:500 13px "IBM Plex Mono",monospace;background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:4px;padding:7px 8px}
+.player input[type=range]{width:110px;accent-color:var(--magenta)}
+button.on{background:var(--magenta)}
+.clipbtn{min-width:0;padding:6px 10px;font-size:12px}
+.atc{font:400 13px/1.45 "IBM Plex Mono",monospace;color:var(--muted);margin:0}
+.log{max-height:340px;overflow:auto;margin:0;padding:0;list-style:none;font:400 13px/1.45 "IBM Plex Mono",monospace}
+.log li{display:grid;grid-template-columns:8ch 8ch 1fr;gap:10px;border-top:1px solid var(--line);padding:4px 2px;cursor:pointer}
+.log li:hover{background:var(--bg)} .log li .f{color:var(--muted)} .log li.sel{background:var(--bg)}
+.log li .t{color:var(--muted)}
+.planes-tag{font:600 12px "IBM Plex Mono",monospace;fill:var(--ink);paint-order:stroke;stroke:var(--land);stroke-width:3px}
+#onair circle{fill:none;stroke:var(--magenta);stroke-width:2}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="eyebrow"><a href="/" style="color:inherit">rxapp</a> · <span id="eyebrow">NorCal Approach · RX-888</span></div>
+    <h1>Bay Approach, Live</h1>
+    <p class="sub">Every airband channel in the RX-888's window, recorded and transcribed on this Mac as it happens. Aircraft move along the San Francisco arrival flow as their instructions are heard. Listen live, click any transmission to read it and hear the clip.</p>
+    <div class="facts">
+      <span><b>STATUS</b><em id="fLive" class="live off" style="font-style:normal"><i></i>–</em></span>
+      <span><b>WINDOW</b><em id="fWin" style="font-style:normal">–</em></span>
+      <span><b>TRANSMISSIONS</b><em id="nTx" style="font-style:normal">–</em></span>
+      <span><b>FLIGHTS</b><em id="nFlights" style="font-style:normal">–</em></span>
+      <span><b>SESSION</b><select id="session" style="font:500 13px 'IBM Plex Mono',monospace;background:transparent;color:var(--ink);border:1px solid var(--line);border-radius:3px"></select></span>
+    </div>
+  </header>
+
+  <div class="main">
+    <div class="panel map">
+      <svg id="map" viewBox="0 0 720 470" role="img" aria-label="Schematic map of the San Francisco Bay arrival flow, with aircraft placed by the last instruction heard">
+        <rect x="0" y="0" width="720" height="470" fill="var(--land)"/>
+        <!-- bay (schematic) -->
+        <polygon points="300,0 470,0 520,60 540,120 600,170 680,215 720,240 720,330 640,320 560,330 470,330 400,300 330,250 285,215 275,160 300,110 285,50" fill="var(--water)" stroke="var(--water-edge)" stroke-width="1.2"/>
+        <polygon points="0,0 60,0 40,40 0,50" fill="var(--water)" stroke="var(--water-edge)" stroke-width="1.2"/>
+        <!-- Class B rings around SFO -->
+        <g fill="none" stroke="var(--magenta)" stroke-width="1.4" opacity=".55">
+          <circle cx="250" cy="200" r="70"/>
+          <circle cx="250" cy="200" r="150" stroke-dasharray="1 0"/>
+          <circle cx="250" cy="200" r="240"/>
+        </g>
+        <text class="fixlabel" x="258" y="126" fill="var(--magenta)">B</text>
+        <!-- places -->
+        <text class="placelabel" x="120" y="60">SAN FRANCISCO</text>
+        <text class="placelabel" x="560" y="80">OAKLAND</text>
+        <text class="placelabel" x="600" y="370">HAYWARD</text>
+        <text class="placelabel" x="300" y="370">FOSTER CITY</text>
+        <text class="apt" x="555" y="118">OAK</text>
+        <circle cx="545" cy="113" r="5" fill="none" stroke="var(--blue)" stroke-width="2"/>
+        <!-- San Mateo Bridge -->
+        <line x1="345" y1="318" x2="640" y2="262" stroke="var(--ink)" stroke-width="3" stroke-dasharray="10 4" opacity=".75"/>
+        <text class="maplabel" x="400" y="330" transform="rotate(-10.7 400 330)">San Mateo Bridge</text>
+        <!-- final approach course 28L (heading 284) -->
+        <line x1="262" y1="203" x2="660" y2="302" stroke="var(--blue)" stroke-width="1.4" stroke-dasharray="3 5"/>
+        <text class="fixlabel" x="600" y="298" fill="var(--blue)">28L LOC →284°</text>
+        <!-- typical flow -->
+        <path id="flow" d="M 420 450 L 520 425 L 640 405 L 660 330 L 575 283 L 440 250 L 262 203" fill="none" stroke="var(--magenta)" stroke-width="2" stroke-dasharray="6 6" opacity=".45"/>
+        <!-- SFO + runways -->
+        <circle cx="250" cy="200" r="22" fill="none" stroke="var(--blue)" stroke-width="2"/>
+        <g stroke="var(--runway)" stroke-width="4" stroke-linecap="round">
+          <line x1="229" y1="191" x2="268" y2="201"/>
+          <line x1="232" y1="182" x2="271" y2="192"/>
+        </g>
+        <text class="apt" x="205" y="240">SFO</text>
+        <text class="fixlabel" x="275" y="186">28R</text>
+        <text class="fixlabel" x="272" y="213">28L</text>
+        <!-- stage labels -->
+        <g class="fixlabel">
+          <text x="370" y="458">check-in · 6,000</text>
+          <text x="505" y="444">slow · descend</text>
+          <text x="646" y="420">vectors 100/180</text>
+          <text x="666" y="334">350/360</text>
+          <text x="560" y="272" text-anchor="end">hdg 310 · join LOC</text>
+          <text x="445" y="240" text-anchor="middle">at the bridge → tower</text>
+        </g>
+        <g id="planes"></g>
+        <text class="note" x="14" y="460">Schematic, not to scale. Positions inferred from instructions, not radar.</text>
+      </svg>
+    </div>
+
+    <div class="panel detail" aria-live="polite">
+      <h2>Listen</h2>
+      <div class="player">
+        <button id="listen" type="button">Listen</button>
+        <select id="chan" aria-label="Channel to listen to"></select>
+        <label class="lanesub" style="display:inline-flex;gap:6px;align-items:center">vol <input id="vol" type="range" min="0" max="3" step="0.05" value="1"></label>
+      </div>
+      <ul class="chans" id="chans"></ul>
+      <h2 style="margin-top:6px">Selected transmission</h2>
+      <div class="dhead"><span class="dtime" id="dTime">–</span><span class="dflight" id="dFlight">–</span><span class="chip" id="dPhase">–</span></div>
+      <p class="raw" id="dRaw">Waiting for the first transmission…</p>
+      <p class="atc" id="dAtc"></p>
+      <p class="meta" id="dMeta"></p>
+      <div><button id="clip" class="clipbtn" type="button" disabled>Play clip</button></div>
+      <h2 style="margin-top:6px">Arrival line</h2>
+      <ul class="flights" id="flightList"></ul>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="controls">
+      <button id="play" type="button" aria-pressed="false">Play</button>
+      <input id="scrub" type="range" min="0" max="1000" value="1000" aria-label="Time">
+      <span id="clock">–</span>
+      <div class="legend" id="legend"></div>
+    </div>
+    <div class="tl tlscroll"><svg id="timeline" role="img" aria-label="Timeline of transmissions by flight"></svg></div>
+  </div>
+
+  <div class="panel" style="padding:14px 18px;display:grid;gap:8px">
+    <h2 style="font:700 13px/1 'Barlow Condensed',sans-serif;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin:0">Transcript</h2>
+    <ul class="log" id="log"></ul>
+  </div>
+
+  <p class="caveat">Transcripts are raw Whisper (large-v3-turbo) output from noisy AM audio, shown twice: plain, and with an air-traffic vocabulary hint, which helps with call signs and phrases but can also pull a garbled call towards stock phrases. Flights and phases are picked out automatically from that text (airline name + number, or a 3–4 digit number ending a read-back; key words like "descend", "heading", "in sight", "cleared", "contact tower"), so expect misses and mix-ups. The map is the San Francisco 28L/28R arrival flow; a flight sits at the furthest stage it has been told, which only fits arrivals. Received on an RX-888 MkII through radiod; every channel in the tuner's 8.4 MHz window at once.</p>
+</div>
+<script src="airband.js?v=1"></script>
+</body>
+</html>

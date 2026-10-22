@@ -4,6 +4,7 @@ Run:  .venv/bin/python -m rxapp          (then open http://127.0.0.1:8090)
 """
 
 import asyncio
+import json
 import logging
 import re
 import time
@@ -130,6 +131,7 @@ class NewChannel(BaseModel):
     mode: str = "am"
     label: str = ""
     band: Optional[str] = None
+    kind: str = "listen"                # listen (a page's own) | air (airband_session.py's recorders)
 
 
 class ChannelUpdate(BaseModel):
@@ -340,6 +342,71 @@ async def sstv_delete(pid: int):
     return {"ok": True}
 
 
+# ---------------------------------------------------------------- airband sessions
+AIRBAND_DIR = CONFIG.data_dir / "airband"
+
+
+def _airband_session(name: Optional[str]) -> Path:
+    if name:
+        d = AIRBAND_DIR / Path(name).name
+        if not d.is_dir():
+            raise HTTPException(404, f"no airband session {name}")
+        return d
+    dirs = sorted(p for p in AIRBAND_DIR.glob("*") if p.is_dir()) if AIRBAND_DIR.exists() else []
+    if not dirs:
+        raise HTTPException(404, "no airband session yet (run airband_session.py)")
+    return dirs[-1]
+
+
+def _jsonl(path: Path):
+    if not path.exists():
+        return []
+    out = []
+    for line in path.read_text().splitlines():
+        try:
+            out.append(json.loads(line))
+        except ValueError:
+            pass                    # a line being written right now
+    return out
+
+
+@app.get("/api/airband")
+async def airband_info(session: Optional[str] = None):
+    """The latest (or a named) airband_session.py run: its live status and the other sessions."""
+    d = _airband_session(session)
+    status = {}
+    try:
+        status = json.loads((d / "status.json").read_text())
+    except (OSError, ValueError):
+        pass
+    live = bool(status) and time.time() - status.get("t", 0) < 10
+    return {"session": d.name, "live": live, "status": status,
+            "sessions": sorted((p.name for p in AIRBAND_DIR.glob("*") if p.is_dir()), reverse=True)}
+
+
+@app.get("/api/airband/transmissions")
+async def airband_transmissions(session: Optional[str] = None, after: int = -1):
+    """Transmissions in order (index = position); later transcripts (transcripts.jsonl) win."""
+    d = _airband_session(session)
+    recs = _jsonl(d / "transmissions.jsonl")
+    better = {r["wav"]: r for r in _jsonl(d / "transcripts.jsonl")}
+    recs = sorted((better.get(r["wav"], r) for r in recs), key=lambda r: r["t0"])
+    out = []
+    for i, r in enumerate(recs):
+        if i > after:
+            out.append({"i": i, **{k: r.get(k) for k in ("t0", "t1", "freq_hz", "peak_db", "text", "text_atc")},
+                        "clip": Path(r["wav"]).name})
+    return out
+
+
+@app.get("/api/airband/clip/{session}/{name}")
+async def airband_clip(session: str, name: str):
+    path = _airband_session(session) / Path(name).name
+    if path.suffix != ".wav" or not path.exists():
+        raise HTTPException(404, "no such clip")
+    return FileResponse(path, media_type="audio/wav")
+
+
 @app.get("/api/health")
 async def health():
     return S.supervisor.health
@@ -355,7 +422,9 @@ async def create_channel(body: NewChannel):
     if (body.band or S.radio.band) == "vhf" and S.radio.band == "vhf":
         await S.spectrum.ensure_live(body.freq_hz)
     try:
-        ch = await S.radio.create(body.freq_hz, body.mode, body.label, band=body.band)
+        if body.kind not in ("listen", "air"):
+            raise ValueError("kind is listen or air")
+        ch = await S.radio.create(body.freq_hz, body.mode, body.label, kind=body.kind, band=body.band)
     except ValueError as e:
         raise HTTPException(400, str(e))
     return ch.to_dict()
@@ -364,6 +433,8 @@ async def create_channel(body: NewChannel):
 @app.patch("/api/channels/{ssrc}")
 async def update_channel(ssrc: int, body: ChannelUpdate):
     ch = _channel(ssrc)
+    if ch.kind != "listen":       # a monitor's channel: retuning it would silently break the monitor
+        raise HTTPException(409, f"channel {ssrc} belongs to the {ch.kind} monitor and can't be retuned")
     if ssrc in S.recorders and (body.mode not in (None, ch.mode)):
         raise HTTPException(409, "stop the recording before changing mode")
     if ch.band == "vhf" and S.spectrum.sweeping and body.freq_hz is not None:
