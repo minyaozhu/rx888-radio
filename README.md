@@ -76,3 +76,7 @@ SDR++ also has a built-in `sddc_source`, but it's an unfinished stub (hard-coded
 - Wider live VHF window (~10 MHz) by moving the tuner IF up and opening its widest filter.
 - Run the Malahit scanners and decoders (FT8, SSB, airband) against rxapp channels.
 - Stereo and RDS for WFM.
+
+## License
+
+GPL-3.0 (see [LICENSE](LICENSE)), matching ka9q-radio, whose patched sources and configs this repo ships.
