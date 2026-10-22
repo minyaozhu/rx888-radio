@@ -24,6 +24,7 @@ import argparse
 import json
 import logging
 import queue
+import re
 import signal
 import socket
 import struct
@@ -140,7 +141,8 @@ def transcribe(a: np.ndarray) -> dict:
                                    condition_on_previous_text=False, temperature=0.0)
         segs = r.get("segments") or []
         text = " ".join(s["text"].strip() for s in segs if s.get("no_speech_prob", 0) < 0.8).strip()
-        out[key] = "" if text.lower() in HALLUCINATIONS else text
+        caption = re.fullmatch(r"[\[(]?[A-Z][A-Z ,.'!-]*[\])]?", text) is not None   # "BELL RINGS": a sound caption
+        out[key] = "" if text.lower() in HALLUCINATIONS or caption else text
     return out
 
 
