@@ -458,7 +458,7 @@ function renderMeter() {
 }
 
 function renderChannels() {
-  const rows = state.channels.filter((c) => c.band === state.band && c.kind !== 'ft8').map((c) => `
+  const rows = state.channels.filter((c) => c.band === state.band && c.kind !== 'ft8' && c.kind !== 'sstv').map((c) => `
     <tr class="${c.ssrc === state.selected ? 'sel' : ''}">
       <td>${fmtHz(c.freq_hz)}${c.parked ? ' <span class="dim">(paused: outside tuner window)</span>' : ''}</td><td>${c.mode.toUpperCase()}</td><td>${c.label || ''}${c.recording ? ' <span style="color:var(--rec)">● rec</span>' : ''}</td>
       <td>${c.power_db != null ? c.power_db.toFixed(1) + ' dB' : ''}</td>
@@ -517,6 +517,55 @@ async function refreshMonitor() {
     <td><button data-act="delwatch" data-id="${w.id}">✕</button></td></tr>`).join('');
 }
 let monitorTimer = null;
+
+// ---------------------------------------------------------------- SSTV
+let sstvTimer = null;
+const sstv = {info: null, ids: null};
+
+function wireSstv() {
+  $('sstvToggle').addEventListener('click', async () => {
+    $('sstvToggle').disabled = true;
+    try { sstv.info = await api('POST', '/api/sstv', {on: !(sstv.info && sstv.info.running)}); }
+    catch (e) { flash(e.message); }
+    $('sstvToggle').disabled = false;
+    refreshSstv();
+  });
+  $('sstvRows').addEventListener('click', (e) => {     // hear a frequency on the main receiver
+    const b = e.target.closest('button'); if (!b) return;
+    if (state.band !== 'hf') return flash('switch to HF first');
+    $('mode').value = b.dataset.mode; tune(+b.dataset.f, b.dataset.mode);
+  });
+  $('sstvGallery').addEventListener('click', async (e) => {
+    const del = e.target.closest('button[data-del]');
+    if (del && confirm('Delete this picture?')) { await api('DELETE', `/api/sstv/pictures/${del.dataset.del}`); sstv.ids = null; refreshSstv(); }
+    const img = e.target.closest('img'); if (img) window.open(img.src, '_blank');
+  });
+}
+
+async function refreshSstv() {
+  try {
+    const i = sstv.info = await api('GET', '/api/sstv');
+    $('sstvToggle').textContent = i.running ? 'Stop SSTV monitor' : 'Start SSTV monitor';
+    $('sstvToggle').classList.toggle('on', i.running);
+    $('sstvRows').innerHTML = i.channels.map((c) => `<tr><td>${c.band}</td><td>${fmtHz(c.freq_hz)} ${c.mode.toUpperCase()}</td>
+      <td>${c.parked ? '<span class="dim">paused (VHF selected)</span>' : c.state.startsWith('capturing') ? `<span style="color:var(--rec)">● ${c.state}</span>` : c.state}</td>
+      <td class="dim">${c.last && c.last.sync != null ? `sync ${c.last.sync.toFixed(2)} · video ${c.last.video.toFixed(2)}${c.last.mode !== '?' && c.last.sync >= 0.25 ? ' · ' + c.last.mode : ''}` : ''}</td>
+      <td>${c.triggers}</td><td>${c.pictures}</td>
+      <td><button data-f="${c.freq_hz}" data-mode="${c.mode}">Listen</button></td></tr>`).join('')
+      || '<tr><td colspan="7" class="dim">Not running.</td></tr>';
+    const pics = await api('GET', '/api/sstv/pictures?limit=200');
+    const ids = pics.map((p) => p.id).join();
+    if (ids !== sstv.ids) {
+      sstv.ids = ids;
+      $('sstvCount').textContent = pics.length ? `(${pics.length})` : '';
+      $('sstvGallery').innerHTML = pics.map((p) => `<figure>
+        <img src="/api/sstv/pictures/${p.id}.png" alt="SSTV picture, ${p.mode}, ${fmtTime(p.t)}" loading="lazy">
+        <figcaption><span>${fmtTime(p.t)}</span><span>${fmtHz(p.freq_hz)} · ${p.mode.replace(/_/g, ' ')}${p.complete ? '' : ' · <span class="partial">partial</span>'}</span>
+          <span><a href="/api/sstv/pictures/${p.id}.wav" download>audio</a> <button data-del="${p.id}">delete</button></span></figcaption>
+      </figure>`).join('') || '<p class="dim">No pictures yet. SSTV is busiest on weekend daytimes on 14.230 MHz.</p>';
+    }
+  } catch (e) { console.warn('sstv', e); }
+}
 
 // ---------------------------------------------------------------- FT8
 let ft8Timer = null;
@@ -775,10 +824,12 @@ function wire() {
     clearInterval(monitorTimer);
     if (b.dataset.tab === 'monitor') { refreshMonitor(); monitorTimer = setInterval(refreshMonitor, 2000); }
     if (b.dataset.tab === 'dashboard') refreshDashboard();
-    clearInterval(ft8Timer);
+    clearInterval(ft8Timer); clearInterval(sstvTimer);
+    if (b.dataset.tab === 'sstv') { refreshSstv(); sstvTimer = setInterval(refreshSstv, 3000); }
     if (b.dataset.tab === 'ft8') { refreshFt8(true); ft8Timer = setInterval(refreshFt8, 3000); }
   }));
   wireFt8();
+  wireSstv();
 
   $('addChannel').addEventListener('click', async () => {
     const ch = current();

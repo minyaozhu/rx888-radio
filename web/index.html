@@ -64,6 +64,7 @@
   <button data-tab="scan">Scan</button>
   <button data-tab="monitor">Monitor</button>
   <button data-tab="ft8">FT8</button>
+  <button data-tab="sstv">SSTV</button>
   <button data-tab="recordings">Recordings</button>
   <button data-tab="dashboard">Dashboard</button>
 </nav>
@@ -125,6 +126,17 @@
   <div id="ft8Qso" style="display:none"></div>
 </section>
 
+<section id="tab-sstv" class="tab">
+  <div class="row">
+    <button id="sstvToggle" class="primary">Start SSTV monitor</button>
+    <span id="sstvStatus" class="dim">Watches the SSTV calling frequencies (3.845, 7.171, 14.230, 14.233, 21.340, 28.680 MHz) and decodes every picture. Runs on the server, so it keeps going with this page closed.</span>
+  </div>
+  <table class="compact"><thead><tr><th>Band</th><th>Freq</th><th>State</th><th>Detector now</th><th>Triggers</th><th>Pictures</th><th></th></tr></thead>
+    <tbody id="sstvRows"></tbody></table>
+  <h3>Pictures <span class="dim" id="sstvCount"></span></h3>
+  <div id="sstvGallery" class="gallery"></div>
+</section>
+
 <section id="tab-recordings" class="tab">
   <table><thead><tr><th>Start</th><th>Freq</th><th>Mode</th><th>Length</th><th>Peak</th><th></th></tr></thead>
     <tbody id="recRows"></tbody></table>
@@ -148,6 +160,6 @@
   <table><tbody id="eventRows"></tbody></table>
 </section>
 
-<script src="app.js?v=5"></script>
+<script src="app.js?v=7"></script>
 </body>
 </html>

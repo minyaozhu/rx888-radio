@@ -25,6 +25,7 @@ from .monitor import Monitor
 from .radio import Radio
 from .rtp import RtpHub
 from .spectrum import Spectrum
+from .sstvmon import SstvMonitor
 from .store import Store
 from .supervisor import Supervisor
 
@@ -42,6 +43,7 @@ class State:
     monitor: Monitor
     hfgain: HfGain
     ft8: Ft8
+    sstv: SstvMonitor
     recorders: Dict[int, Recorder] = {}
 
 
@@ -82,6 +84,12 @@ async def lifespan(app):
             await S.ft8.start(RUNTIME.ft8_bands)
         except Exception as e:
             log.warning("could not restart FT8: %s", e)
+    S.sstv = SstvMonitor(S.radio, S.rtp, S.store)
+    if RUNTIME.sstv_on:
+        try:
+            await S.sstv.start()
+        except Exception as e:
+            log.warning("could not restart the SSTV monitor: %s", e)
     if RUNTIME.band == "vhf":           # come back on the input that was selected last time
         try:
             await S.radio.switch_band("vhf", RUNTIME.vhf_center_hz)
@@ -95,6 +103,7 @@ async def lifespan(app):
         rec.stop()
     await S.monitor.stop()
     await S.ft8.stop(save=False)
+    await S.sstv.stop(save=False)
     await S.hfgain.stop()
     await S.supervisor.stop()
     await S.spectrum.stop()
@@ -279,6 +288,58 @@ async def ft8_stats(hours: float = 24.0):
     return {"per_band": per_band, "buckets": buckets}
 
 
+class SstvSet(BaseModel):
+    on: bool
+
+
+@app.get("/api/sstv")
+async def sstv_info():
+    return S.sstv.info()
+
+
+@app.post("/api/sstv")
+async def sstv_set(body: SstvSet):
+    if body.on:
+        await S.sstv.start()
+    else:
+        await S.sstv.stop()
+    return S.sstv.info()
+
+
+@app.get("/api/sstv/pictures")
+async def sstv_pictures(limit: int = 200):
+    return S.store.query("SELECT id, t, band, freq_hz, mode, complete, width, height FROM sstv "
+                         "ORDER BY t DESC, id LIMIT ?", (min(limit, 2000),))
+
+
+def _sstv_row(pid):
+    r = S.store.query("SELECT * FROM sstv WHERE id = ?", (pid,))
+    if not r:
+        raise HTTPException(404, f"no picture {pid}")
+    return r[0]
+
+
+@app.get("/api/sstv/pictures/{pid}.png")
+async def sstv_png(pid: int):
+    return FileResponse(_sstv_row(pid)["png"], media_type="image/png")
+
+
+@app.get("/api/sstv/pictures/{pid}.wav")
+async def sstv_wav(pid: int):
+    r = _sstv_row(pid)
+    return FileResponse(r["wav"], media_type="audio/wav", filename=Path(r["wav"]).name)
+
+
+@app.delete("/api/sstv/pictures/{pid}")
+async def sstv_delete(pid: int):
+    r = _sstv_row(pid)
+    S.store._exec("DELETE FROM sstv WHERE id = ?", (pid,))
+    Path(r["png"]).unlink(missing_ok=True)
+    if not S.store.query("SELECT 1 FROM sstv WHERE wav = ?", (r["wav"],)):   # last picture from that audio
+        Path(r["wav"]).unlink(missing_ok=True)
+    return {"ok": True}
+
+
 @app.get("/api/health")
 async def health():
     return S.supervisor.health
@@ -320,6 +381,8 @@ async def delete_channel(ssrc: int):
         raise HTTPException(409, "this channel belongs to a watch; delete the watch instead")
     if _channel(ssrc).kind == "ft8":
         raise HTTPException(409, "this channel belongs to the FT8 monitor; stop it on the FT8 tab")
+    if _channel(ssrc).kind == "sstv":
+        raise HTTPException(409, "this channel belongs to the SSTV monitor; stop it on the SSTV tab")
     if ssrc in S.recorders:
         S.recorders.pop(ssrc).stop()
     await S.radio.remove(ssrc)

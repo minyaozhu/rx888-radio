@@ -4,3 +4,4 @@ ka9q-python
 fastapi
 uvicorn[standard]
 pytest
+sstv

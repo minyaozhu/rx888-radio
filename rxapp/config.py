@@ -86,13 +86,14 @@ class Runtime:
         self.band = d.get("band", "hf")
         self.vhf_center_hz = d.get("vhf_center_hz")
         self.ft8_bands = d.get("ft8_bands")          # None = FT8 monitor off
+        self.sstv_on = bool(d.get("sstv_on", False))
         self.qth = d.get("qth", "CM87")              # receiver's Maidenhead locator (FT8 map, distances)
 
     def save(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(json.dumps({"adc_rate_hz": self.adc_rate_hz, "vga": self.vga,
                                          "hf_gain_db": self.hf_gain_db, "band": self.band,
-                                         "vhf_center_hz": self.vhf_center_hz, "ft8_bands": self.ft8_bands, "qth": self.qth}))
+                                         "vhf_center_hz": self.vhf_center_hz, "ft8_bands": self.ft8_bands, "qth": self.qth, "sstv_on": self.sstv_on}))
 
 
 RUNTIME = Runtime(CONFIG.data_dir / "settings.json")

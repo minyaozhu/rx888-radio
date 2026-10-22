@@ -13,7 +13,7 @@ Tools for driving an **RX-888 MkII** SDR from a Mac (Apple Silicon): **rxapp**, 
 
 | Script | What it does |
 |---|---|
-| **`rxapp/`** | **Your own SDR app: HF (0–32 or 0–64 MHz) and VHF/UHF inputs, browser waterfall, click-to-tune, audio, scans, FT8 on every band at once, server-side monitoring, dashboard, auto-recovery. `./run_rxapp.sh`, then http://127.0.0.1:8090. See [rxapp/README.md](rxapp/README.md)** |
+| **`rxapp/`** | **Your own SDR app: HF (0–32 or 0–64 MHz) and VHF/UHF inputs, browser waterfall, click-to-tune, audio, scans, FT8 on every band at once with a world map, an SSTV picture monitor, server-side monitoring, dashboard, auto-recovery. `./run_rxapp.sh`, then http://127.0.0.1:8090. See [rxapp/README.md](rxapp/README.md)** |
 | `probe.py` | Finds the RX-888, reports firmware state and USB link speed |
 | `rx888/usb.py` | USB discovery (VID/PID for bootloader and SDDC states) |
 | `am_scan.py` | Scans the AM broadcast band through SoapySDDC, tries several IF gains, lists stations by SNR; `--tune` sets SDR++ to the strongest |

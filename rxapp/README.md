@@ -29,6 +29,7 @@ or the SoapySDDC scripts.
 | **Scan** | HF: AM broadcast, shortwave broadcast bands, ham bands (peak finding for SSB), CB, WWV propagation check. VHF: FM broadcast, airband, 2 m, NOAA weather; bands wider than the tuner window are scanned in steps (FM: 4 steps, ~25 s), which briefly moves the tuner. HF scans use their own spectrum channel, so the display doesn't move. |
 | **Monitor** (server-side) | Scheduled scans (default: AM every 10 min, WWV every 30 min) and *watches*: a channel recorded automatically whenever its SNR rises above a threshold, optionally transcribed on-device. |
 | **FT8** (server-side) | Every FT8 band at once (160 m–10 m, plus 6 m with 0–64 MHz coverage): one USB channel per dial frequency, cut into 15 s UTC slots and decoded with ft8_lib. Live message list, conversations grouped by station pair (✓ when they reach RR73/73), CQ callers with grids, search by callsign or grid. Keeps running across restarts; pauses while VHF is selected. |
+| **SSTV** (server-side) | Watches the SSTV calling frequencies (3.845 and 7.171 MHz LSB; 14.230, 14.233, 21.340, 28.680 MHz USB) and decodes every picture into a gallery, with the audio kept. |
 | **Dashboard** | Occupancy per channel, detections over time, receiver health (IF power, RF gain, spectrum rate, ADC overloads), event log. |
 | **Recovery** | A supervisor restarts radiod when it stops answering (USB unplug, crash) and re-creates every channel with the same SSRC; open pages reconnect and re-create their channel. |
 
@@ -84,6 +85,21 @@ English, with distance from your locator ("Home", default CM87; `POST /api/ft8/q
 
 API: `GET/POST /api/ft8` (status / `{on, bands}`), `GET /api/ft8/decodes?after_id=`,
 `GET /api/ft8/conversations?hours=`, `GET /api/ft8/stats?hours=`.
+
+## SSTV
+
+Each SSTV channel's last 20 s of audio is checked every 5 s with the Malahit toolkit's detector
+(energy in the 1100–2350 Hz video band, plus a 1200 Hz line-sync pulse repeating at the mode's line
+period). A hit starts a capture that includes the 40 s before it (so the VIS header that names the mode
+is in it) and ends 20 s after SSTV stops (or at 6 min). The capture goes to the
+[`sstv`](https://pypi.org/project/sstv/) decoder (a Rust crate: Martin, Scottie, Robot, PD, Pasokon,
+Wrasse modes); pictures go to `rxapp_data/sstv/` and the `sstv` table, and captures with no picture are
+dropped. Measured on band noise, the detector's sync score sits at 0.04–0.12 against a 0.25 trigger; each
+channel's first 30 s are ignored because its AGC settling looks like sync. The decoder needs the VIS
+header, so a picture already under way when the monitor starts is missed.
+
+API: `GET/POST /api/sstv` (status / `{on}`), `GET /api/sstv/pictures`, `GET /api/sstv/pictures/{id}.png|.wav`,
+`DELETE /api/sstv/pictures/{id}`.
 
 ## Design notes
 

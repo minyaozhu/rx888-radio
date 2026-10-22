@@ -1,4 +1,4 @@
-"""SQLite log: scans and their detections, recordings, health samples, events, FT8 decodes."""
+"""SQLite log: scans and their detections, recordings, health samples, events, FT8 decodes, SSTV pictures."""
 
 import json
 import sqlite3
@@ -28,6 +28,12 @@ CREATE TABLE IF NOT EXISTS ft8 (
   score REAL, dt REAL, msg TEXT, to_call TEXT, from_call TEXT, extra TEXT);
 CREATE INDEX IF NOT EXISTS ft8_t ON ft8(t);
 CREATE INDEX IF NOT EXISTS ft8_from ON ft8(from_call);
+"""
+
+SSTV_SCHEMA = """
+CREATE TABLE IF NOT EXISTS sstv (
+  id INTEGER PRIMARY KEY, t REAL NOT NULL, band TEXT, freq_hz REAL, mode TEXT, complete INTEGER,
+  width INTEGER, height INTEGER, png TEXT, wav TEXT);
 """
 
 
@@ -81,6 +87,14 @@ class Store:
                 [(t, band, dial_hz, r["hz"], r["score"], r["dt"], r["msg"], r["to_call"], r["from_call"], r["extra"])
                  for r in rows])
             self.db.commit()
+
+    def ensure_sstv(self):
+        with self.lock:
+            self.db.executescript(SSTV_SCHEMA)
+
+    def add_sstv(self, **r):
+        cols = ",".join(r)
+        return self._exec(f"INSERT INTO sstv ({cols}) VALUES ({','.join('?' * len(r))})", tuple(r.values())).lastrowid
 
     def add_health(self, **h):
         self._exec("INSERT INTO health (t,if_power_db,rf_gain_db,ad_over,input_samples,spectrum_fps,channels) "

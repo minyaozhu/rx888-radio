@@ -188,3 +188,49 @@ def test_ft8_conversations_group_pairs_and_cq():
     (c,) = d["conversations"]
     assert (c["a"], c["b"], len(c["messages"]), c["complete"]) == ("N2SAB", "W5WCA", 4, True)
     assert {q["call"]: q["grid"] for q in d["cq"]} == {"W5WCA": "DN70", "K1ABC": "FN42"}
+
+
+# ---- SSTV -----------------------------------------------------------------
+import asyncio
+
+from rxapp import sstvmon
+
+
+def _sstv_audio(seconds_before=30, seconds_after=40):
+    import sstv
+    from PIL import Image, ImageDraw
+    im = Image.new("RGB", (320, 256), "navy")
+    ImageDraw.Draw(im).rectangle([60, 60, 260, 196], fill="orange")
+    tx = sstv.encode(im, sstv.Mode.MARTIN_1, sample_rate=sstvmon.RATE).astype(float) * 0.3
+    rng = np.random.default_rng(0)
+    pad = lambda s: rng.normal(0, 600, int(s * sstvmon.RATE))
+    a = np.concatenate([pad(seconds_before), tx + rng.normal(0, 600, len(tx)), pad(seconds_after)])
+    return np.clip(a, -32767, 32767).astype("<i2")
+
+
+def test_sstv_detector_fires_on_sstv_not_on_noise():
+    a = _sstv_audio().astype(float) / 32768
+    r = sstvmon.RATE
+    assert sstvmon.looks_like_sstv(sstvmon.analyse(a[60 * r:80 * r]))          # mid-picture
+    assert not sstvmon.looks_like_sstv(sstvmon.analyse(a[:20 * r]))             # noise only
+
+
+def test_sstv_monitor_captures_and_decodes_a_picture(tmp_path):
+    saved = []
+    store = SimpleNamespace(add_sstv=lambda **r: saved.append(r), event=lambda *a, **k: None)
+    mon = sstvmon.SstvMonitor.__new__(sstvmon.SstvMonitor)
+    mon.store, mon.dir = store, tmp_path
+    w = sstvmon.Watch("20m", 14.230e6, "usb")
+    audio = _sstv_audio()
+    step = int(sstvmon.CHECK_EVERY * sstvmon.RATE)
+
+    async def run():
+        t = 1_800_000_000.0
+        for i in range(0, len(audio), step):
+            w.add(audio[i:i + step].tobytes())
+            t += sstvmon.CHECK_EVERY
+            await mon.check(w, t)
+    asyncio.run(run())
+    assert w.triggers == 1 and w.capture is None          # one capture, finished when the signal ended
+    assert len(saved) == 1 and saved[0]["mode"] == "MARTIN_1" and saved[0]["complete"]
+    assert (tmp_path / saved[0]["png"]).exists() and (tmp_path / saved[0]["wav"]).exists()
