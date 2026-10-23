@@ -14,6 +14,12 @@ said, not radar). Listen follows whichever channel is talking.*
 *The same session as a timeline: one lane per flight, each call coloured by phase, from check-in to the
 handoff to the tower. Scrub or Play to replay; click a dot to read the transcript and hear the clip.*
 
+**Hear one:** [▶ American 2105 on NorCal Approach, 135.650 MHz (5 s, AAC)](docs/audio/american2105-cleared-ils28r.m4a)
+([WAV](docs/audio/american2105-cleared-ils28r.wav)), 23 Oct 2026, 11:49 PDT. Whisper's transcript:
+*"210 knots and cleared ILS to a right, American 2105"*, a read-back of a speed and an ILS approach
+clearance to SFO's runway 28R. Recorded by `airband_session.py` and cleaned the same way the transcriber
+sees it (carrier removed, 250–3200 Hz, normalised).
+
 ## The hardware
 
 - **HF direct sampling:** LTC2208 16-bit ADC, up to ~130 MSPS, covering roughly 0–64 MHz in one stream.
