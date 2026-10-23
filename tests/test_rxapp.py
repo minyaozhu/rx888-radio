@@ -463,3 +463,29 @@ def test_sidebands_of_a_strong_fm_signal_are_ignored(monkeypatch):
     for i in range(3):
         s.step(1000 + i / 10, db)
     assert opened == [41.1e6]
+
+
+def test_focus_holds_the_rotation_on_one_kind_of_window(monkeypatch):
+    s = vs.Session.__new__(vs.Session)
+    s.windows = vs.parse_windows("lowband:hf:42.6:safety,vhfhigh:vhf:155:safety,approach:vhf:135.7,towers:vhf:120.6")
+    s.w, s.dwell, s.window_since, s.keyed_since, s.last_keyed = 2, 300, 0.0, {}, {}
+    moves = []
+    monkeypatch.setattr(s, "set_window", lambda w: (moves.append(s.windows[w].name), setattr(s, "w", w), setattr(s, "window_since", 1e9)))
+    s.focus = None
+    s.maybe_switch(400.0)
+    assert moves == ["towers"]                        # no focus: the normal rotation
+    s.focus, s.window_since = "safety", 0.0
+    s.maybe_switch(400.0)
+    assert moves[-1] == "lowband"                     # held on public safety: skips approach
+    s.window_since = 0.0
+    s.maybe_switch(400.0)
+    assert moves[-1] == "vhfhigh"
+    s.window_since = 0.0
+    s.maybe_switch(400.0)
+    assert moves[-1] == "lowband"                     # ...and back, never leaving public safety
+    s.focus, s.window_since = "hf", 0.0
+    n = len(moves)
+    s.maybe_switch(400.0)
+    assert len(moves) == n                            # the only HF window is the current one: stay
+    s.focus = "pause"
+    assert s.idle

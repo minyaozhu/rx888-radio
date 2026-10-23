@@ -325,6 +325,8 @@ class Session:
         self.stream = None
         self.spec_freq = None
         self.last_prune = 0.0
+        self.focus = None             # air | safety | hf | pause | None (all windows), from rxapp
+        self.focus_checked = 0.0
 
     @property
     def win(self) -> Window:
@@ -376,14 +378,54 @@ class Session:
             if any(a <= g <= b for a, b in rng):
                 self.ensure_channel(g)
 
+    # -- focus: the pages' "switch the receiver here" buttons ---------------------------
+    def allowed(self, w: Window) -> bool:
+        if self.focus in (None, ""):
+            return True
+        if self.focus == "hf":
+            return w.band == "hf"
+        return w.profile.service == self.focus
+
+    def read_focus(self, now):
+        """rxapp writes the focus to voice_control.json; check it once a second."""
+        if now - self.focus_checked < 1.0:
+            return
+        self.focus_checked = now
+        try:
+            f = json.loads((CONFIG.data_dir / "voice_control.json").read_text()).get("focus")
+        except (OSError, ValueError):
+            f = None
+        if f == self.focus:
+            return
+        was, self.focus = self.focus, f
+        log.info("focus: %s -> %s", was or "all", f or "all")
+        if f == "pause":
+            for g in list(self.keyed_since):
+                self.finish(g, self.keyed_since.pop(g), self.last_keyed.get(g, now))
+            return
+        if f == "hf" and not any(w.band == "hf" for w in self.windows):
+            call("POST", "/band", {"band": "hf"})          # no HF window: just put the radio on HF and wait
+            return
+        if was == "pause" or not self.allowed(self.win):
+            nxt = next((i for i in range(len(self.windows)) if self.allowed(self.windows[(self.w + i) % len(self.windows)])), 0)
+            self.set_window((self.w + nxt) % len(self.windows))   # now, not at the next quiet moment
+
+    @property
+    def idle(self) -> bool:
+        return self.focus == "pause" or (self.focus == "hf" and not any(w.band == "hf" for w in self.windows))
+
     def maybe_switch(self, now):
-        """After the dwell time, move to the next window in a quiet moment (or after another minute
-        regardless), so a conversation isn't cut in half."""
-        if len(self.windows) < 2 or now - self.window_since < self.dwell:
+        """After the dwell time, move to the next (allowed) window in a quiet moment (or after another
+        minute regardless), so a conversation isn't cut in half."""
+        if self.idle or now - self.window_since < self.dwell:
+            return
+        order = [(self.w + i) % len(self.windows) for i in range(1, len(self.windows) + 1)]
+        nxt = next((i for i in order if self.allowed(self.windows[i])), self.w)
+        if nxt == self.w:
             return
         quiet = not self.keyed_since and all(now - t >= 3.0 for t in self.last_keyed.values() if t)
         if quiet or now - self.window_since >= self.dwell + 60:
-            self.set_window((self.w + 1) % len(self.windows))
+            self.set_window(nxt)
 
     def _open_spectrum(self, freq):
         if self.stream is not None:
@@ -458,14 +500,15 @@ class Session:
 
     def write_status(self, now):
         """status.json per service: what the live pages show (channels, who is on the air, windows)."""
-        nxt = self.window_since + self.dwell if len(self.windows) > 1 else None
+        nxt = self.window_since + self.dwell if sum(self.allowed(w) for w in self.windows) > 1 else None
         half = BINS * BIN_HZ / 2 * 0.98
         for service, d in self.outs.items():
             here = self.win.profile.service == service
             mine = {f: c for f, c in self.channels.items() if c["profile"].service == service}
             st = {"t": now, "tuner_hz": self.tuner_hz, "lo": self.lo if here else None, "hi": self.hi if here else None,
                   "transmissions": self.n_tx, "window": self.win.name, "window_service": self.win.profile.service,
-                  "window_since": self.window_since, "next_switch": nxt, "listening": here,
+                  "window_since": self.window_since, "next_switch": None if self.idle else nxt,
+                  "listening": here and not self.idle, "focus": self.focus,
                   "windows": [{"name": w.name, "band": w.band, "service": w.profile.service,
                                "lo": max(w.profile.ranges[0][0], w.centre - half), "hi": min(w.profile.ranges[-1][1], w.centre + half)}
                               for w in self.windows],
@@ -500,8 +543,9 @@ class Session:
                     last_frame = time.time()
                 continue
             last_frame = t
+            self.read_focus(t)
             self.maybe_switch(t)
-            if t < self.settle_until or not len(self.grid):
+            if self.idle or t < self.settle_until or not len(self.grid):
                 continue
             self.step(t, db)
 

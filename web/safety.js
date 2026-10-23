@@ -43,11 +43,11 @@ function drawLog() {
       <span class="ch">${esc(chName(r.freq_hz))} · ${(r.t1 - r.t0).toFixed(1)} s</span></li>`).join('')
     || '<li><span class="t">—</span><span class="tx ns">Nothing yet. The receiver also spends time on the airband, so public-safety calls arrive in bursts.</span></li>';
 }
-$('log').addEventListener('click', (e) => { const li = e.target.closest('li[data-i]'); if (li) select(S.recs.find((r) => r.i === +li.dataset.i)); });
+$('log').addEventListener('click', (e) => { const li = e.target.closest('li[data-i]'); if (li) select(S.recs.find((r) => r.i === +li.dataset.i), true); });
 for (const id of ['fCh', 'fDigital', 'fEmpty']) $(id).addEventListener('change', drawLog);
 $('fFind').addEventListener('input', drawLog);
 
-function select(r) {
+function select(r, pan) {
   S.sel = r;
   $('dTime').textContent = hms(r.t0);
   $('dCh').textContent = chName(r.freq_hz);
@@ -57,8 +57,13 @@ function select(r) {
   const codes = [...new Map([...psCodes(r.text), ...psCodes(r.text_atc)].map((c) => [c[1], c])).values()];
   $('dMeta').textContent = `${(r.t1 - r.t0).toFixed(1)} s · carrier +${r.peak_db} dB over the floor`
     + (codes.length ? ' · ' + codes.map(([, k, m]) => `${k} = ${m}`).join(', ') : '');
+  const pl = (P.byI.get(r.i) || {places: []}).places;
+  if (pl.length) $('dMeta').textContent += ` · places: ${pl.map((p) => placeText(p) + (p.lat == null ? (p.pending ? ' (looking up)' : ' (not found)') : '')).join('; ')}`;
+  const pts = pl.filter((p) => p.lat != null).map((p) => [p.lat, p.lon]);
+  if (pan && pts.length) map.setView(pts[0], Math.max(map.getZoom(), 11));
   $('clip').disabled = false;
   document.querySelectorAll('#log li').forEach((li) => li.classList.toggle('sel', +li.dataset.i === r.i));
+  drawPins();
 }
 $('clip').addEventListener('click', () => {
   if (!S.sel) return;
@@ -187,6 +192,52 @@ $('chans').addEventListener('click', (e) => {
   drawChans();
 });
 
+// ------------------------------------------------------------------ map: places named in calls
+// Towns from a built-in list (wide circles: only the town is known); highway + cross street looked up on
+// OpenStreetMap by rxapp (small dots, still approximate). Colour = age; click a pin to read the call.
+const map = L.map('map', {zoomSnap: 0.25}).setView([37.42, -121.98], 9.5);
+L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom: 16,
+  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'}).addTo(map);
+for (const ms of [200, 800, 2000]) setTimeout(() => map.invalidateSize(), ms);
+new ResizeObserver(() => map.invalidateSize()).observe($('map'));
+const pinLayer = L.layerGroup().addTo(map);
+const P = {items: [], byI: new Map()};
+const ageColor = (t) => { const a = Date.now() / 1000 - t; return a < 600 ? '#D64545' : a < 3600 ? '#E0A030' : '#8A8F98'; };
+const placeText = (p) => p.kind === 'city' ? p.name.replace(/\b\w/g, (c) => c.toUpperCase())
+  : `${p.dir ? p.dir + 'bound ' : ''}${p.hwy} ${p.rel} ${p.cross}`.replace(/\b\w/g, (c) => c.toUpperCase());
+
+async function pollPlaces() {
+  if (!S.session) return;
+  try {
+    P.items = await api(`/api/safety/places?session=${S.session}`);
+    P.byI = new Map(P.items.map((x) => [x.i, x]));
+    drawPins();
+    const n = P.items.reduce((a, x) => a + x.places.filter((p) => p.lat != null).length, 0);
+    const pend = P.items.reduce((a, x) => a + x.places.filter((p) => p.pending).length, 0);
+    $('mapStatus').textContent = `${n} places${pend ? ` · ${pend} being looked up` : ''}`;
+  } catch (e) { $('mapStatus').textContent = 'places: ' + e.message; }
+}
+
+function drawPins() {
+  pinLayer.clearLayers();
+  const cut = Date.now() / 1000 - 6 * 3600;                       // the last 6 hours
+  const selI = S.sel ? S.sel.i : null;
+  for (const x of [...P.items].sort((a, b) => a.t0 - b.t0)) {
+    if (x.t0 < cut) continue;
+    for (const p of x.places) {
+      if (p.lat == null) continue;
+      const col = ageColor(x.t0), sel = x.i === selI;
+      const tip = `<b>${hms(x.t0)}</b> · ${esc(chName(x.freq_hz))}<br><b>${esc(placeText(p))}</b><br>${x.text ? '“' + marked(x.text) + '”' : ''}`;
+      const m = p.kind === 'city'
+        ? L.circle([p.lat, p.lon], {radius: 2500, color: col, weight: sel ? 3 : 1.5, fillOpacity: sel ? 0.25 : 0.08, opacity: sel ? 1 : 0.7})
+        : L.circleMarker([p.lat, p.lon], {radius: sel ? 9 : 6, color: sel ? '#A3316F' : '#fff', weight: 2, fillColor: col, fillOpacity: 0.95});
+      m.bindTooltip(tip, {className: 'pin-tip', direction: 'top', sticky: p.kind === 'city'})
+        .on('click', () => { const r = S.recs.find((y) => y.i === x.i); if (r) select(r, true); })
+        .addTo(pinLayer);
+    }
+  }
+}
+
 // ------------------------------------------------------------------ data
 async function loadSession(name) {
   const info = await api('/api/safety' + (name ? `?session=${name}` : ''));
@@ -222,5 +273,5 @@ async function poll(full) {
     $('log').innerHTML = `<li><span class="t">—</span><span class="tx ns">No public-safety session yet (${esc(e.message)}). Start voice_session.py with a safety window.</span></li>`;
   }
 }
-$('session').addEventListener('change', () => loadSession($('session').value));
-loadSession().catch(() => poll(true)).finally(() => setInterval(poll, 2000));
+$('session').addEventListener('change', () => loadSession($('session').value).then(pollPlaces));
+loadSession().catch(() => poll(true)).finally(() => { setInterval(poll, 2000); pollPlaces(); setInterval(pollPlaces, 8000); });

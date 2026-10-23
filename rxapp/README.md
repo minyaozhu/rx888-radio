@@ -111,6 +111,12 @@ channels, scans, monitors, FT8/SSTV controls, recordings, dashboard), **FT8 map*
 kept, so audio playing in one tab keeps playing in another; the address names the tab (`/#airband`). The bar
 shows radiod's health.
 
+**Switch receiver here.** Each page has a button that holds the voice session on that page's windows until
+released: Airband → approach and towers; Public safety → low band and VHF-high; FT8 map → the HF window (FT8 and
+SSTV then run all the time); Radio → *pause* the session altogether, for manual tuning. It switches at once
+rather than waiting for a quiet moment. (`GET/POST /api/voice/focus {focus: air|safety|hf|pause|null}`, kept in
+`rxapp_data/voice_control.json`, which the session reads every second.)
+
 ## Voice sessions (airband and public safety)
 
 `voice_session.py` runs next to rxapp and rotates through *windows*: pieces of spectrum the RX-888 sees at
@@ -140,6 +146,13 @@ While the low-band window is on, the FT8 and SSTV monitors (HF) run too. Output 
 - **Digital** (P25/DMR/NXDN) transmissions are recognised by a steady level and a flat spectrum, logged as
   digital and not transcribed. Nothing is decoded.
 - **Transcription** as for airband, with a police/CHP vocabulary hint (10-codes, 11-codes, highways).
+- **Map.** Places named in calls are pinned (last 6 hours, coloured by age): towns from a built-in list of ~80
+  Bay Area towns (shown as a wide circle, since only the town is known), and *highway + cross street* ("southbound
+  680, just north of Capitol Expressway") looked up on OpenStreetMap's Nominatim inside the Bay Area, near the
+  town mentioned or the channel's home city (`rxapp/places.py`). Lookups are cached
+  (`rxapp_data/geocache.json`) and run at most once a second, as Nominatim's policy asks; only road and place
+  names are sent, never house numbers. Approximate: a cross street can be miles long. A small table fixes
+  Whisper's usual misspellings ("capital expressway").
 - **The page** (`safety.html`): live transcript with radio codes explained on hover (common meanings; agencies
   differ), filters by channel and text, Listen with Follow activity, a per-channel timeline (voice / digital /
   no speech), and the codes heard. It says when the receiver is away on another window.
@@ -148,7 +161,8 @@ While the low-band window is on, the FT8 and SSTV monitors (HF) run too. Output 
 - Listening to unencrypted public-safety radio is generally legal in the US; publishing or acting on what you
   hear is restricted. Keep it on this machine.
 
-API: `GET /api/safety?session=`, `GET /api/safety/transmissions?session=&after=`, `GET /api/safety/clip/{session}/{wav}`.
+API: `GET /api/safety?session=`, `GET /api/safety/transmissions?session=&after=`, `GET /api/safety/places?session=`,
+`GET /api/safety/clip/{session}/{wav}`.
 
 ## Airband
 

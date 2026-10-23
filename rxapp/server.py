@@ -21,6 +21,7 @@ from pydantic import BaseModel
 from .config import BAND_MODES, CONFIG, MODES, RADIOD_CONFS, RUNTIME, VHF_MAX_HZ, VHF_MIN_HZ
 from .adsb import AdsbFeed
 from .ft8 import Ft8, conversations
+from .places import HOME_CITY, Geocoder, locate
 from .hfgain import GAIN_MAX, SLIDER_MIN, HfGain
 from .jobs import BANDS, Recorder, Scanner
 from .monitor import Monitor
@@ -47,6 +48,7 @@ class State:
     ft8: Ft8
     sstv: SstvMonitor
     adsb: AdsbFeed
+    geo: Geocoder
     recorders: Dict[int, Recorder] = {}
 
 
@@ -87,6 +89,7 @@ async def lifespan(app):
             await S.ft8.start(RUNTIME.ft8_bands)
         except Exception as e:
             log.warning("could not restart FT8: %s", e)
+    S.geo = Geocoder(CONFIG.data_dir / "geocache.json")
     S.adsb = AdsbFeed()
     S.adsb.start()                      # fetches only while a page is asking for aircraft
     S.sstv = SstvMonitor(S.radio, S.rtp, S.store)
@@ -435,6 +438,48 @@ async def safety_transmissions(session: Optional[str] = None, after: int = -1):
 @app.get("/api/safety/clip/{session}/{name}")
 async def safety_clip(session: str, name: str):
     return _session_clip(SAFETY_DIR, session, name)
+
+
+@app.get("/api/safety/places")
+async def safety_places(session: Optional[str] = None, after: int = -1):
+    """Places mentioned in public-safety transmissions (towns; highway + cross street via OpenStreetMap),
+    with coordinates once looked up. Transmissions without a place are left out."""
+    out = []
+    for r in _session_transmissions(SAFETY_DIR, session, after):
+        places = locate(r, S.geo, HOME_CITY.get(round((r["freq_hz"] or 0) / 1000) * 1000))
+        if places:
+            out.append({"i": r["i"], "t0": r["t0"], "freq_hz": r["freq_hz"], "text": r["text"], "places": places})
+    return out
+
+
+# ---------------------------------------------------------------- receiver focus (voice_session.py reads this)
+FOCUS_FILE = CONFIG.data_dir / "voice_control.json"
+FOCUS_VALUES = {"air": "airband windows", "safety": "public-safety windows", "hf": "the HF input (FT8, SSTV, low band)",
+                "pause": "paused for manual tuning"}
+
+
+class Focus(BaseModel):
+    focus: Optional[str] = None         # air | safety | hf | pause | null (rotate through everything)
+
+
+@app.get("/api/voice/focus")
+async def get_focus():
+    try:
+        d = json.loads(FOCUS_FILE.read_text())
+    except (OSError, ValueError):
+        d = {"focus": None}
+    return {**d, "label": FOCUS_VALUES.get(d.get("focus"), "rotating through all windows")}
+
+
+@app.post("/api/voice/focus")
+async def set_focus(body: Focus):
+    """Hold the voice session on one kind of window (the pages' "switch the receiver here" buttons)."""
+    if body.focus is not None and body.focus not in FOCUS_VALUES:
+        raise HTTPException(400, f"focus is one of {', '.join(FOCUS_VALUES)} or null")
+    FOCUS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    FOCUS_FILE.write_text(json.dumps({"focus": body.focus, "since": time.time()}))
+    S.store.event("voice_focus", focus=body.focus)
+    return await get_focus()
 
 
 @app.get("/api/adsb")

@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Bay Public Safety Live</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <style>
 :root{
@@ -159,6 +160,13 @@ abbr.code{text-decoration:underline dotted var(--magenta);text-underline-offset:
 .codes li{border-top:1px solid var(--line);padding:3px 0}
 .codes b{color:var(--magenta);font-weight:500;margin-right:8px}
 .away{color:var(--c-alt)}
+.main2{grid-template-columns:minmax(0,1.7fr) minmax(0,1fr)}
+#map{height:600px;border-radius:4px;background:var(--water)}
+.leaflet-container{font:500 12px "IBM Plex Mono",monospace}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) #map .leaflet-tile-pane{filter:invert(1) hue-rotate(180deg) brightness(.85) contrast(.9)}}
+.acbar{display:flex;flex-wrap:wrap;align-items:center;gap:6px 14px;margin-top:8px;font:500 12px "IBM Plex Mono",monospace;color:var(--muted)}
+.acbar i{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:4px;vertical-align:-1px}
+.pin-tip{font:500 12px "Barlow",sans-serif;max-width:280px;white-space:normal}
 </style>
 </head>
 <body>
@@ -166,28 +174,23 @@ abbr.code{text-decoration:underline dotted var(--magenta);text-underline-offset:
   <header>
     <div class="eyebrow"><a href="/" target="_top" style="color:inherit">rxapp</a> · public safety · RX-888</div>
     <h1>Bay Public Safety, Live</h1>
-    <p class="sub">Unencrypted public-safety radio around the Bay: CHP's low-band channels on the HF input and VHF-high channels through the tuner, recorded and transcribed on this Mac. Digital (P25/DMR) transmissions are logged, not decoded. Recordings and transcripts are deleted after 7 days.</p>
+    <p class="sub">Unencrypted public-safety radio around the Bay: CHP's low-band channels on the HF input and VHF-high channels through the tuner, recorded and transcribed on this Mac. Digital (P25/DMR) transmissions are logged, not decoded. Places named in calls are pinned on the map. Recordings and transcripts are deleted after 7 days.</p>
     <div class="facts">
       <span><b>STATUS</b><em id="fLive" class="live off" style="font-style:normal"><i></i>–</em></span>
       <span><b>NOW</b><em id="fWin" style="font-style:normal">–</em></span>
       <span><b>TRANSMISSIONS</b><em id="nTx" style="font-style:normal">–</em></span>
       <span><b>CHANNELS</b><em id="nCh" style="font-style:normal">–</em></span>
       <span><b>SESSION</b><select id="session" style="font:500 13px 'IBM Plex Mono',monospace;background:transparent;color:var(--ink);border:1px solid var(--line);border-radius:3px"></select></span>
+      <span id="focusBox"></span>
     </div>
   </header>
 
   <div class="main2">
-    <div class="panel feed">
-      <div class="feedbar">
-        <h2 style="font:700 13px/1 'Barlow Condensed',sans-serif;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin:0">Transcript</h2>
-        <select id="fCh" aria-label="Channel"><option value="">all channels</option></select>
-        <input type="text" id="fFind" placeholder="search" size="16" aria-label="Search the transcript">
-        <label><input type="checkbox" id="fDigital"> show digital</label>
-        <label><input type="checkbox" id="fEmpty"> show no-speech</label>
-      </div>
-      <ul class="plog" id="log"></ul>
+    <div class="panel map">
+      <div id="map" role="img" aria-label="Map of places mentioned in public-safety calls"></div>
+      <div class="acbar"><span><i style="background:#D64545"></i>last 10 min</span><span><i style="background:#E0A030"></i>last hour</span><span><i style="background:#8A8F98"></i>older</span>
+        <span>● road location (approximate) · ◯ town</span><span id="mapStatus"></span></div>
     </div>
-
     <div class="panel detail" aria-live="polite">
       <h2>Listen</h2>
       <div class="player">
@@ -208,6 +211,17 @@ abbr.code{text-decoration:underline dotted var(--magenta);text-underline-offset:
     </div>
   </div>
 
+  <div class="panel feed" style="margin:0">
+      <div class="feedbar">
+        <h2 style="font:700 13px/1 'Barlow Condensed',sans-serif;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin:0">Transcript</h2>
+        <select id="fCh" aria-label="Channel"><option value="">all channels</option></select>
+        <input type="text" id="fFind" placeholder="search" size="16" aria-label="Search the transcript">
+        <label><input type="checkbox" id="fDigital"> show digital</label>
+        <label><input type="checkbox" id="fEmpty"> show no-speech</label>
+      </div>
+      <ul class="plog" id="log"></ul>
+  </div>
+
   <div class="panel">
     <div class="controls">
       <span class="lanesub">Activity by channel</span>
@@ -216,9 +230,11 @@ abbr.code{text-decoration:underline dotted var(--magenta);text-underline-offset:
     <div class="tl tlscroll"><svg id="timeline" role="img" aria-label="Timeline of transmissions by channel"></svg></div>
   </div>
 
-  <p class="caveat">Transcripts are raw Whisper output from noisy FM audio, shown twice: plain, and with a police vocabulary hint. Code meanings are the common ones and vary by agency. Digital detection is a heuristic (steady level and a flat spectrum), so some noisy voice may be flagged digital and the other way round. The receiver rotates through airband and public-safety windows, so each channel is heard part of the time; the header says what's being listened to now. Listening to unencrypted public-safety radio is generally legal in the US; publishing or acting on what you hear is restricted, so this stays on this Mac.</p>
+  <p class="caveat">Transcripts are raw Whisper output from noisy FM audio, shown twice: plain, and with a police vocabulary hint. Code meanings are the common ones and vary by agency. Digital detection is a heuristic (steady level and a flat spectrum), so some noisy voice may be flagged digital and the other way round. The receiver rotates through airband and public-safety windows, so each channel is heard part of the time; the header says what's being listened to now. Listening to unencrypted public-safety radio is generally legal in the US; publishing or acting on what you hear is restricted, so this stays on this Mac. Map positions are approximate: towns from a built-in list, highway + cross street looked up on OpenStreetMap (only road and place names are sent, never house numbers).</p>
 </div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="bayps.js?v=1"></script>
-<script src="safety.js?v=1"></script>
+<script src="safety.js?v=2"></script>
+<script src="focus.js?v=1" data-focus="safety" data-what="public safety (low band and VHF-high)"></script>
 </body>
 </html>
