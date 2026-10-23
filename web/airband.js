@@ -134,12 +134,63 @@ function drawTimeline() {
 }
 
 // ------------------------------------------------------------------ map
-const STAGE = [[420, 450], [520, 425], [640, 405], [660, 330], [575, 283], [440, 250]];
-const OFFSETS = [[0, 0], [14, -14], [-14, 12], [16, 14], [-16, -12], [0, 18], [18, 0], [-18, 0], [0, -18], [20, 20], [-20, -20]];
-const planes = $('planes');
+// Real Bay Area map: airports at their reference points (lit while one of their frequencies is on
+// the air, with the latest words), flights at the airport whose tower/ground they're talking to, or
+// along the SFO Quiet Bridge arrival flow when they're with NorCal Approach.
+const map = L.map('map', {zoomControl: true, attributionControl: true}).setView([37.62, -122.16], 9);
+// Leaflet measures its box when created; fonts and the panel layout settle later, so measure again
+const fitAirports = () => map.fitBounds(BAY_AIRPORTS.map((a) => [a.lat, a.lon]), {padding: [24, 24]});
+for (const ms of [200, 800, 2000]) setTimeout(() => { map.invalidateSize(); if (ms === 800) fitAirports(); }, ms);
+new ResizeObserver(() => map.invalidateSize()).observe($('map'));
+L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {      // darkened by CSS in dark mode
+  maxZoom: 15, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+}).addTo(map);
+const cssv = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+// SFO Quiet Bridge Visual 28R, roughly: up from the south-east, along the San Mateo Bridge, to SFO
+const STAGE = [[37.30, -121.86], [37.42, -121.97], [37.52, -122.03], [37.61, -122.08], [37.585, -122.20], [37.60, -122.28]];
+L.polyline(STAGE.concat([[37.6188, -122.3754]]), {color: cssv('--magenta'), weight: 2, dashArray: '6 6', opacity: 0.5})
+  .addTo(map).bindTooltip('SFO arrivals: Quiet Bridge Visual 28R (schematic)', {sticky: true});
+const STAGE_NAMES = ['check-in', 'slow · descend', 'vectors', 'base', 'join · in sight', 'at the bridge → tower'];
+const APT = {};
+for (const a of BAY_AIRPORTS) {
+  const m = L.circleMarker([a.lat, a.lon], {radius: 7, color: cssv('--blue'), weight: 2, fillColor: cssv('--panel'), fillOpacity: 1, className: 'apt-dot'}).addTo(map);
+  m.bindTooltip(a.id, {permanent: true, direction: 'right', offset: [6, 0], className: 'apt-tip'});
+  m.bindPopup(`<b>${a.name} (${a.id})</b><br>` + Object.entries(a.f).map(([f, r]) => `${f} ${r}`).join('<br>'));
+  APT[a.id] = {a, m, say: null};
+}
 const pl = {};
+
+function planeIcon(name, sel) {
+  return L.divIcon({className: 'plane-ic' + (sel ? ' sel' : ''), html: `<div><i></i>${esc(name.replace('…', ''))}</div>`, iconSize: null, iconAnchor: [7, 7]});
+}
+
 function drawMap() {
   const t = S.cursor;
+  // airports: lit while a frequency of theirs is on the air (live) or transmitted in the last 8 s (replay)
+  const lit = {};
+  if (S.follow && S.live) for (const f of Object.keys(S.status.keyed || {})) { const i = freqInfo(+f); if (i && i.airport) lit[i.airport.id] = true; }
+  const recent = S.recs.filter((r) => r.t0 <= t && t - r.t1 < 8);
+  for (const r of recent) { const i = freqInfo(r.freq_hz); if (i && i.airport) lit[i.airport.id] = r; }
+  for (const [id, A] of Object.entries(APT)) {
+    const on = !!lit[id];
+    A.m.setStyle({color: on ? cssv('--magenta') : cssv('--blue'), radius: on ? 10 : 7});
+    const el = A.m.getElement(); if (el) el.classList.toggle('on', on);
+    const tip = A.m.getTooltip(); if (tip && tip.getElement()) tip.getElement().classList.toggle('on', on);
+    const r = typeof lit[id] === 'object' ? lit[id] : null;
+    if (r && r.text) {
+      const html = `<b>${esc(freqInfo(r.freq_hz).label)}</b>${esc(r.text)}`;
+      if (!A.say) A.say = L.tooltip({permanent: true, direction: 'top', offset: [0, -10], className: 'say'}).setLatLng([A.a.lat, A.a.lon]).setContent(html).addTo(map);
+      else A.say.setContent(html);
+    } else if (A.say) { A.say.remove(); A.say = null; }
+  }
+  // approach/departure sectors (not tied to one airport)
+  const secOn = {};
+  for (const r of recent) { const i = freqInfo(r.freq_hz); if (i && i.sector) secOn[`${i.sector} ${mhz(r.freq_hz)}`] = true; }
+  if (S.follow && S.live) for (const f of Object.keys(S.status.keyed || {})) { const i = freqInfo(+f); if (i && i.sector) secOn[`${i.sector} ${mhz(+f)}`] = true; }
+  const heardSec = [...new Set(S.recs.map((r) => { const i = freqInfo(r.freq_hz); return i && i.sector ? `${i.sector} ${mhz(r.freq_hz)}` : null; }).filter(Boolean))].sort();
+  $('sectors').innerHTML = heardSec.map((s) => `<span class="${secOn[s] ? 'on' : ''}">${s}${secOn[s] ? ' · ON AIR' : ''}</span>`).join('');
+
+  // flights
   const occupied = {};
   const list = $('flightList');
   list.innerHTML = '';
@@ -147,36 +198,37 @@ function drawMap() {
   for (const f of S.flights) {
     if (f.id === '?') continue;
     const past = S.recs.filter((r) => r.f === f.id && r.t0 <= t);
-    let p = pl[f.id];
-    if (!p) {
-      const g = el('g', {opacity: 0}, planes);
-      g.style.transition = 'transform .6s ease, opacity .4s';
-      el('circle', {r: 7, fill: 'var(--panel)', stroke: 'var(--ink)', 'stroke-width': 2}, g);
-      el('path', {d: 'M-4 2 L0 -5 L4 2 Z', fill: 'var(--ink)'}, g);
-      el('text', {x: 10, y: -8, class: 'tag'}, g).textContent = f.name.replace('…', '');
-      g.addEventListener('click', () => { const r = S.recs.filter((x) => x.f === f.id && x.t0 <= S.cursor).pop(); if (r) select(r); });
-      g.style.cursor = 'pointer';
-      p = pl[f.id] = {g};
-    }
     seen.add(f.id);
-    if (!past.length || t - past[past.length - 1].t0 > 20 * 60) { p.g.setAttribute('opacity', 0); continue; }  // not heard (lately)
-    const last = [...past].reverse().find((r) => PH[r.ph].stage !== null);
-    const stage = last ? PH[last.ph].stage : 0, at = last ? last.t0 : past[0].t0;
-    const gone = stage === 5 && t - at > 90;                         // with the tower by now
-    const key = gone ? 'tower' : stage;
-    const n = (occupied[key] = (occupied[key] || 0) + 1) - 1;
-    const [bx, by] = gone ? [238, 218] : STAGE[stage];
-    const [ox, oy] = gone ? [n * 6, n * 6] : OFFSETS[n % OFFSETS.length];
-    p.g.setAttribute('opacity', gone ? 0.3 : 1);
-    p.g.style.transform = `translate(${bx + ox}px, ${by + oy}px)`;
-    p.g.querySelector('circle').setAttribute('stroke', S.sel && S.sel.f === f.id ? 'var(--magenta)' : 'var(--ink)');
+    const p = pl[f.id];
+    if (!past.length || t - past[past.length - 1].t0 > 20 * 60) { if (p) { p.remove(); delete pl[f.id]; } continue; }
+    const lastAny = past[past.length - 1];
+    const fi = freqInfo(lastAny.freq_hz);
+    let pos, where;
+    if (fi && fi.airport) {                                   // talking to a tower / ground
+      const key = 'apt' + fi.airport.id, n = (occupied[key] = (occupied[key] || 0) + 1) - 1;
+      pos = [fi.airport.lat + 0.012 + 0.012 * Math.floor(n / 3), fi.airport.lon + 0.02 * (n % 3) - 0.02];
+      where = fi.label;
+    } else {                                                   // with approach: along the SFO flow
+      const last = [...past].reverse().find((r) => PH[r.ph].stage !== null);
+      const stage = last ? PH[last.ph].stage : 0, at = last ? last.t0 : past[0].t0;
+      const gone = stage === 5 && t - at > 90;
+      const key = gone ? 'tower' : stage, n = (occupied[key] = (occupied[key] || 0) + 1) - 1;
+      const [la, lo] = gone ? [37.6188, -122.3754] : STAGE[stage];
+      pos = [la + 0.012 * (n % 3), lo + 0.02 * Math.floor(n / 3)];
+      where = gone ? 'With SFO Tower' : `${fi ? fi.label : mhz(lastAny.freq_hz)} · ${last ? PH[last.ph].label : 'heard'}`;
+    }
+    const sel = S.sel && S.sel.f === f.id;
+    if (!p) {
+      pl[f.id] = L.marker(pos, {icon: planeIcon(f.name, sel), zIndexOffset: 500}).addTo(map)
+        .on('click', () => { const r = S.recs.filter((x) => x.f === f.id && x.t0 <= S.cursor).pop(); if (r) select(r); });
+    } else { p.setLatLng(pos); p.setIcon(planeIcon(f.name, sel)); }
     const li = document.createElement('li');
-    li.innerHTML = `<span><b>${f.name}</b></span><span>${gone ? 'With SFO Tower' : (last ? PH[last.ph].label : 'Heard')} · ${hms(past[past.length - 1].t0)}</span>`;
+    li.innerHTML = `<span><b>${esc(f.name)}</b></span><span>${esc(where)} · ${hms(lastAny.t0)}</span>`;
     li.style.cursor = 'pointer';
-    li.addEventListener('click', () => select(past[past.length - 1]));
+    li.addEventListener('click', () => select(lastAny));
     list.appendChild(li);
   }
-  for (const id in pl) if (!seen.has(id)) { pl[id].g.remove(); delete pl[id]; }
+  for (const id in pl) if (!seen.has(id)) { pl[id].remove(); delete pl[id]; }
   if (!list.children.length) list.innerHTML = '<li><span>No flights identified yet</span><span></span></li>';
 }
 
@@ -189,7 +241,7 @@ function select(r, moveTime) {
   $('dPhase').textContent = PH[r.ph].label; $('dPhase').style.color = `var(${PH[r.ph].c})`;
   $('dRaw').textContent = r.text ? `“${r.text}”` : '(no speech recognised)';
   $('dAtc').textContent = r.text_atc && r.text_atc !== r.text ? `with ATC hint: “${r.text_atc}”` : '';
-  $('dMeta').textContent = `${mhz(r.freq_hz)} MHz · ${(r.t1 - r.t0).toFixed(1)} s · carrier +${r.peak_db} dB over the floor`;
+  $('dMeta').textContent = `${mhz(r.freq_hz)} MHz${freqInfo(r.freq_hz) ? ' (' + freqInfo(r.freq_hz).label + ')' : ''} · ${(r.t1 - r.t0).toFixed(1)} s · carrier +${r.peak_db} dB over the floor`;
   $('clip').disabled = false;
   document.querySelectorAll('#log li').forEach((li) => li.classList.toggle('sel', +li.dataset.i === r.i));
   render();
@@ -197,7 +249,7 @@ function select(r, moveTime) {
 function drawLog() {
   const items = S.recs.slice(-300).reverse();
   $('log').innerHTML = items.map((r) => `<li data-i="${r.i}" class="${S.sel === r ? 'sel' : ''}"><span class="t">${hms(r.t0)}</span>
-    <span class="f">${mhz(r.freq_hz)}</span><span>${r.text ? esc(r.text) : '<span class="t">(no speech)</span>'}</span></li>`).join('')
+    <span class="f">${mhz(r.freq_hz)} ${esc(freqInfo(r.freq_hz)?.label.split(' ').slice(0, 2).join(' ') || '')}</span><span>${r.text ? esc(r.text) : '<span class="t">(no speech)</span>'}</span></li>`).join('')
     || '<li><span class="t">—</span><span></span><span class="t">Nothing yet.</span></li>';
 }
 $('log').addEventListener('click', (e) => { const li = e.target.closest('li[data-i]'); if (li) select(S.recs.find((r) => r.i === +li.dataset.i), true); });
@@ -306,12 +358,12 @@ function drawChans() {
   const prev = $('chan').value || 'follow';
   const lf = loudest();
   $('chan').innerHTML = `<option value="follow">Follow activity</option><option value="loudest">Loudest${lf ? ' · ' + mhz(lf) : ''}</option>`
-    + freqs.map((f) => `<option value="${f}">${mhz(+f)} MHz</option>`).join('');
+    + freqs.map((f) => `<option value="${f}">${mhz(+f)}${freqInfo(+f) ? ' ' + freqInfo(+f).label : ''}</option>`).join('');
   $('chan').value = [...$('chan').options].some((o) => o.value === prev) ? prev : 'follow';
   const cur = freqOf(audio.ssrc);
   $('now').textContent = audio.on && cur ? `playing ${mhz(+cur)}${keyed[cur] != null ? ' · on air' : ''}` : '';
   $('chans').innerHTML = freqs.map((f) => `<li data-f="${f}" class="${keyed[f] != null ? 'on' : ''} ${ch[f] === audio.ssrc && audio.on ? 'sel' : ''}"
-      title="${keyed[f] != null ? 'on the air now' : 'quiet'}"><b>${mhz(+f)}</b> · ${counts[f] || 0}${keyed[f] != null ? ' · ON AIR' : ''}</li>`).join('')
+      title="${keyed[f] != null ? 'on the air now' : 'quiet'}"><b>${mhz(+f)}</b>${freqInfo(+f) ? ' ' + esc(freqInfo(+f).label) : ''} · ${counts[f] || 0}${keyed[f] != null ? ' · ON AIR' : ''}</li>`).join('')
     || '<li>no channels yet</li>';
 }
 $('chans').addEventListener('click', (e) => {
@@ -325,7 +377,7 @@ $('chans').addEventListener('click', (e) => {
 async function loadSession(name) {
   const info = await api('/api/airband' + (name ? `?session=${name}` : ''));
   S.session = info.session; S.recs = []; S.after = -1; S.sel = null;
-  for (const id in pl) { pl[id].g.remove(); delete pl[id]; }
+  for (const id in pl) { pl[id].remove(); delete pl[id]; }
   $('session').innerHTML = info.sessions.map((s) => `<option ${s === info.session ? 'selected' : ''}>${s}</option>`).join('');
   await poll(true);
 }
@@ -335,7 +387,12 @@ async function poll(full) {
     S.status = info.status || {}; S.live = info.live;
     $('fLive').className = 'live' + (S.live ? '' : ' off');
     $('fLive').lastChild.textContent = S.live ? 'live' : 'recorded';
-    if (S.status.lo) $('fWin').textContent = `${mhz(S.status.lo)}–${mhz(S.status.hi)} MHz`;
+    if (S.status.lo) {
+      const nx = S.status.next_switch, other = (S.status.windows || []).find((w) => w.name !== S.status.window);
+      const left = nx ? Math.max(0, nx - Date.now() / 1000) : null;
+      $('fWin').textContent = `${S.status.window || ''} ${mhz(S.status.lo)}–${mhz(S.status.hi)} MHz`
+        + (other && left != null ? ` · ${other.name} ${left > 0 ? 'in ' + Math.floor(left / 60) + ':' + String(Math.floor(left % 60)).padStart(2, '0') : 'at the next pause'}` : '');
+    }
     const add = await api(`/api/airband/transmissions?session=${S.session}&after=${S.after}`);
     if (add.length || full) {
       S.recs.push(...add);

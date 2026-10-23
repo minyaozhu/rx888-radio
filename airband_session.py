@@ -15,6 +15,7 @@ At the end it removes its channels and puts rxapp back on the input it was on.
 
     .venv/bin/python airband_session.py --center 135.7e6                 # until stopped
     .venv/bin/python airband_session.py --center 135.7e6 --minutes 60 --preload 135.65,133.175
+    .venv/bin/python airband_session.py --windows approach:135.7,towers:120.6 --dwell 300   # alternate
     .venv/bin/python airband_session.py --retranscribe rxapp_data/airband/<stamp>
 
 Watch it live at http://127.0.0.1:8090/airband.html.
@@ -56,7 +57,7 @@ MIN_TX_SEC = 0.6
 PRE_SEC, POST_SEC = 0.4, 0.4
 SPUR_FRACTION = 0.9              # keyed this much of the last SPUR_WINDOW s = a spur, not voice
 SPUR_WINDOW = 60.0
-MAX_CHANNELS = 30
+MAX_CHANNELS = 48
 WHISPER = "mlx-community/whisper-large-v3-turbo"
 PROMPT = ("Air traffic control radio, Northern California. NorCal Approach, Oakland Center, San Francisco "
           "tower. United, Southwest, Alaska, SkyWest, Delta, American, JetBlue. Descend and maintain, "
@@ -173,15 +174,16 @@ class Transcriber(threading.Thread):
 
 
 class Session:
-    def __init__(self, center_hz, minutes, out_dir):
-        self.center_hz, self.minutes = center_hz, minutes
+    def __init__(self, windows, minutes, out_dir, dwell_sec=300.0, preload=()):
+        self.windows = windows                    # [(name, tuner centre Hz)], visited in turn
+        self.minutes, self.dwell = minutes, dwell_sec
+        self.preload = list(preload)
         self.out = out_dir
         self.out.mkdir(parents=True, exist_ok=True)
-        self.lo = max(AIR_LO, center_hz - BINS * BIN_HZ / 2 * 0.98)
-        self.hi = min(AIR_HI, center_hz + BINS * BIN_HZ / 2 * 0.98)
-        g0 = np.ceil(self.lo / GRID_HZ) * GRID_HZ
-        self.grid = np.arange(g0, self.hi + 1, GRID_HZ)
-        self.channels = {}            # freq -> ssrc
+        self.w = 0
+        self.window_since = time.time()
+        self.settle_until = 0.0
+        self.channels = {}            # freq -> ssrc (every window; rxapp parks those outside the tuner)
         self.spurs = set()
         self.keyed_since = {}         # freq -> start time of the current transmission
         self.last_keyed = {}
@@ -195,17 +197,46 @@ class Session:
     def start(self):
         info = call("GET", "/info")
         self.prev_band = info["band"]
-        call("POST", "/band", {"band": "vhf", "center_hz": self.center_hz})
-        time.sleep(2)
-        info = call("GET", "/info")
-        self.tuner_hz, self.if_hz = info["vhf"]["center_hz"], info["vhf"]["if_hz"]
-        log.info("VHF tuner at %.3f MHz; watching %.3f-%.3f MHz (%d channels on the 25 kHz grid)",
-                 self.tuner_hz / 1e6, self.lo / 1e6, self.hi / 1e6, len(self.grid))
         self.ctl = RadiodControl(maddr(CONFIG.status_name), client_id="airband", interface=CONFIG.iface_addr)
         self.audio = Audio(maddr(CONFIG.pcm_name))
         self.tx = Transcriber(self.out / "transmissions.jsonl")
         self.tx.start()
+        self.set_window(0)
         self._open_spectrum()
+
+    def set_window(self, w):
+        """Move the tuner to window w. Transmissions in progress end here; rxapp parks the channels
+        that fall outside the new window and brings back the ones inside it."""
+        now = time.time()
+        for f in list(self.keyed_since):
+            self.finish(f, self.keyed_since.pop(f), self.last_keyed.get(f, now))
+        name, centre = self.windows[w]
+        call("POST", "/band", {"band": "vhf", "center_hz": centre})
+        info = call("GET", "/info")
+        self.tuner_hz, self.if_hz = info["vhf"]["center_hz"], info["vhf"]["if_hz"]
+        self.w, self.window_since = w, time.time()
+        self.lo = max(AIR_LO, self.tuner_hz - BINS * BIN_HZ / 2 * 0.98)
+        self.hi = min(AIR_HI, self.tuner_hz + BINS * BIN_HZ / 2 * 0.98)
+        self.grid = np.arange(np.ceil(self.lo / GRID_HZ) * GRID_HZ, self.hi + 1, GRID_HZ)
+        # radiod's IF is inverted: RF = tuner + (IF_centre - f_if); bin i sits at f_if = IF + (i - N/2) * bin
+        rf_of_bin = self.tuner_hz - (np.arange(BINS) - BINS // 2) * BIN_HZ
+        self.bin_of = {f: int(np.argmin(np.abs(rf_of_bin - f))) for f in self.grid}
+        self.settle_until = time.time() + 1.0       # spectrum frames from before the move, PLL settling
+        log.info("window %s: tuner at %.3f MHz, watching %.3f-%.3f MHz (%d channels on the 25 kHz grid)",
+                 name, self.tuner_hz / 1e6, self.lo / 1e6, self.hi / 1e6, len(self.grid))
+        for f in self.preload:                      # channels known to be busy: ready before they key up
+            g = round(f / GRID_HZ) * GRID_HZ
+            if self.lo <= g <= self.hi:
+                self.ensure_channel(g)
+
+    def maybe_switch(self, now):
+        """After the dwell time, move to the next window in a quiet moment (or after another minute
+        regardless), so a conversation isn't cut in half."""
+        if len(self.windows) < 2 or now - self.window_since < self.dwell:
+            return
+        quiet = not self.keyed_since and all(now - t >= 3.0 for t in self.last_keyed.values() if t)
+        if quiet or now - self.window_since >= self.dwell + 60:
+            self.set_window((self.w + 1) % len(self.windows))
 
     def _open_spectrum(self):
         def on(st):
@@ -215,9 +246,6 @@ class Session:
         self.stream = SpectrumStream(control=self.ctl, frequency_hz=self.if_hz, bin_count=BINS,
                                      resolution_bw=BIN_HZ, on_spectrum=on)
         self.stream.start()
-        # radiod's IF is inverted: RF = tuner + (IF_centre - f_if); bin i sits at f_if = IF + (i - N/2) * bin
-        rf_of_bin = self.tuner_hz - (np.arange(BINS) - BINS // 2) * BIN_HZ
-        self.bin_of = {f: int(np.argmin(np.abs(rf_of_bin - f))) for f in self.grid}
 
     def stop(self):
         (self.out / "status.json").unlink(missing_ok=True)
@@ -244,6 +272,8 @@ class Session:
     def ensure_channel(self, f):
         if f in self.channels or f in self.spurs or len(self.channels) >= MAX_CHANNELS:
             return
+        if not self.lo <= f <= self.hi:     # outside the tuner window rxapp would move the tuner for it
+            return
         try:
             ch = call("POST", "/channels", {"freq_hz": float(f), "mode": "am", "label": f"AIR {f / 1e6:.3f}",
                                             "band": "vhf", "kind": "air"})
@@ -263,8 +293,12 @@ class Session:
 
     def write_status(self, now):
         """status.json: what rxapp's live airband page shows (channels, who is on the air now)."""
+        nxt = self.window_since + self.dwell if len(self.windows) > 1 else None
         st = {"t": now, "tuner_hz": self.tuner_hz, "lo": self.lo, "hi": self.hi, "transmissions": self.n_tx,
-              "channels": {f"{f:.0f}": ssrc for f, ssrc in self.channels.items()},
+              "window": self.windows[self.w][0], "window_since": self.window_since, "next_switch": nxt,
+              "windows": [{"name": n, "lo": max(AIR_LO, c - BINS * BIN_HZ / 2 * 0.98),
+                           "hi": min(AIR_HI, c + BINS * BIN_HZ / 2 * 0.98)} for n, c in self.windows],
+              "channels": {f"{f:.0f}": ssrc for f, ssrc in self.channels.items() if self.lo <= f <= self.hi},
               "keyed": {f"{f:.0f}": round(self.peak.get(f, 0), 1) for f in self.keyed_since},
               "spurs": [f"{f:.0f}" for f in sorted(self.spurs)], "end": self.end}
         tmp = self.out / "status.json.tmp"
@@ -272,11 +306,7 @@ class Session:
         tmp.replace(self.out / "status.json")
 
     # -- main loop --------------------------------------------------------------------
-    def run(self, preload=()):
-        for f in preload:                       # channels already known to be busy: ready before they key up
-            g = round(f / GRID_HZ) * GRID_HZ
-            if self.lo <= g <= self.hi:
-                self.ensure_channel(g)
+    def run(self):
         self.end = time.time() + self.minutes * 60 if self.minutes > 0 else None
         last_frame = last_status = time.time()
         while self.end is None or time.time() < self.end:
@@ -296,6 +326,9 @@ class Session:
                     last_frame = time.time()
                 continue
             last_frame = t
+            self.maybe_switch(t)
+            if t < self.settle_until:
+                continue
             floor = float(np.median(db))
             levels = np.array([float(db[max(0, self.bin_of[f] - 1):self.bin_of[f] + 2].max()) - floor for f in self.grid])
             for k, f in enumerate(self.grid):
@@ -363,6 +396,8 @@ def retranscribe(session_dir: Path):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--center", type=float, default=135.7e6, help="tuner centre, Hz (window is +-4.2 MHz)")
+    ap.add_argument("--windows", default="", help='alternate windows, e.g. "approach:135.7,towers:120.6" (MHz)')
+    ap.add_argument("--dwell", type=float, default=300, help="seconds on each window before switching")
     ap.add_argument("--minutes", type=float, default=0, help="0 (default): until stopped (Ctrl-C / SIGTERM)")
     ap.add_argument("--preload", default="", help="comma-separated MHz to open channels on right away")
     ap.add_argument("--retranscribe", type=Path, help="transcribe this session directory's WAVs again")
@@ -377,11 +412,13 @@ def main():
                         handlers=[logging.StreamHandler(), logging.FileHandler(out / "session.log")])
     for noisy in ("ka9q", "httpx", "huggingface_hub"):     # ka9q logs every spectrum poll at INFO
         logging.getLogger(noisy).setLevel(logging.WARNING)
-    s = Session(args.center, args.minutes, out)
+    windows = [(w.split(":")[0], float(w.split(":")[1]) * 1e6) for w in args.windows.split(",") if w.strip()] \
+        or [("window", args.center)]
+    s = Session(windows, args.minutes, out, args.dwell, [float(x) * 1e6 for x in args.preload.split(",") if x.strip()])
     signal.signal(signal.SIGTERM, lambda *a: (_ for _ in ()).throw(KeyboardInterrupt()))
     s.start()
     try:
-        s.run([float(x) * 1e6 for x in args.preload.split(",") if x.strip()])
+        s.run()
     except KeyboardInterrupt:
         pass
     finally:
