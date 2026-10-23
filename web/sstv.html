@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SSTV Pictures</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root{
+  --bg:#F2F4EE; --panel:#FFFFFF; --ink:#1D2833; --muted:#5A6774; --line:#CBD3D8;
+  --land:#E6EBD8; --land-edge:#B9C4A4; --water:#CFE2EC; --water-edge:#9CBCD0;
+  --magenta:#A3316F; --blue:#2A5A93; --runway:#2B3440;
+  --c-check:#6C7C8C; --c-alt:#B26E12; --c-vec:#2A5A93; --c-trf:#A3316F; --c-app:#2E7B57; --c-hand:#6A4DA1; --c-other:#9AA5AE;
+  --shadow:0 1px 2px rgba(29,40,51,.08);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme:dark;
+    --bg:#0E151B; --panel:#151F27; --ink:#E4EAEE; --muted:#93A2AE; --line:#2B3843;
+    --land:#1B2621; --land-edge:#33443A; --water:#10222D; --water-edge:#24475C;
+    --magenta:#E07BB2; --blue:#7FAEE6; --runway:#D5DCE2;
+    --c-check:#9AAAB8; --c-alt:#E3A54B; --c-vec:#7FAEE6; --c-trf:#E07BB2; --c-app:#6CC99A; --c-hand:#B39AE8; --c-other:#66737D;
+    --shadow:none;
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --bg:#0E151B; --panel:#151F27; --ink:#E4EAEE; --muted:#93A2AE; --line:#2B3843;
+  --land:#1B2621; --land-edge:#33443A; --water:#10222D; --water-edge:#24475C;
+  --magenta:#E07BB2; --blue:#7FAEE6; --runway:#D5DCE2;
+  --c-check:#9AAAB8; --c-alt:#E3A54B; --c-vec:#7FAEE6; --c-trf:#E07BB2; --c-app:#6CC99A; --c-hand:#B39AE8; --c-other:#66737D;
+  --shadow:none;
+}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font:15px/1.5 "Barlow",system-ui,-apple-system,"Segoe UI",sans-serif;padding:0 20px;}
+.wrap{max-width:1475px;margin:0 auto;padding-block:28px 48px;display:grid;gap:22px}
+header{display:grid;gap:6px}
+.eyebrow{font:600 13px/1 "Barlow Condensed",sans-serif;letter-spacing:.14em;text-transform:uppercase;color:var(--magenta)}
+h1{font:700 clamp(34px,5vw,54px)/1 "Barlow Condensed","Arial Narrow",sans-serif;letter-spacing:.01em;margin:0;text-wrap:balance}
+.sub{color:var(--muted);max-width:70ch;margin:0}
+.facts{display:flex;flex-wrap:wrap;gap:8px 22px;margin-top:6px;font:500 14px/1.3 "IBM Plex Mono",ui-monospace,monospace;color:var(--ink)}
+.facts span b{font-weight:500;color:var(--muted);margin-right:6px}
+.main{display:grid;grid-template-columns:minmax(0,1.7fr) minmax(0,1fr);gap:18px;align-items:start}
+@media (max-width:860px){.main{grid-template-columns:1fr}}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:6px;box-shadow:var(--shadow)}
+.map{padding:10px}
+.map > svg{width:100%;height:auto;display:block}
+.maplabel{font:600 12px "Barlow Condensed",sans-serif;letter-spacing:.08em;text-transform:uppercase;fill:var(--muted)}
+.placelabel{font:500 13px "Barlow Condensed",sans-serif;letter-spacing:.06em;fill:var(--muted)}
+.apt{font:700 15px "Barlow Condensed",sans-serif;letter-spacing:.06em;fill:var(--blue)}
+.fixlabel{font:600 11px "IBM Plex Mono",monospace;fill:var(--muted)}
+.tag{font:600 12px "IBM Plex Mono",monospace;fill:var(--ink)}
+.note{font:italic 400 12px "Barlow",sans-serif;fill:var(--muted)}
+.detail{padding:18px 18px 16px;display:grid;gap:12px}
+.detail h2{font:700 13px/1 "Barlow Condensed",sans-serif;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin:0}
+.dhead{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 12px}
+.dtime{font:500 22px/1 "IBM Plex Mono",monospace}
+.dflight{font:700 22px/1 "Barlow Condensed",sans-serif;letter-spacing:.03em}
+.chip{display:inline-flex;align-items:center;gap:6px;font:600 12px/1 "Barlow Condensed",sans-serif;letter-spacing:.08em;text-transform:uppercase;padding:5px 8px;border-radius:3px;border:1px solid currentColor}
+.raw{font:400 14px/1.45 "IBM Plex Mono",monospace;background:var(--bg);border-left:3px solid var(--line);padding:10px 12px;margin:0;overflow-wrap:anywhere}
+.meaning{margin:0;font-size:16px}
+.meta{font:400 13px "IBM Plex Mono",monospace;color:var(--muted);margin:0}
+.flights{display:grid;gap:4px;margin:4px 0 0;padding:0;list-style:none;font-size:14px}
+.flights li{display:flex;justify-content:space-between;gap:10px;border-top:1px solid var(--line);padding-top:5px}
+.flights li span:last-child{color:var(--muted);text-align:right}
+.controls{display:flex;flex-wrap:wrap;align-items:center;gap:12px 16px;padding:12px 16px}
+button{font:600 14px/1 "Barlow Condensed",sans-serif;letter-spacing:.1em;text-transform:uppercase;background:var(--ink);color:var(--bg);border:0;border-radius:4px;padding:10px 14px;cursor:pointer;min-width:84px}
+button:focus-visible,input:focus-visible{outline:2px solid var(--magenta);outline-offset:2px}
+#scrub{flex:1 1 260px;accent-color:var(--magenta)}
+#clock{font:500 18px "IBM Plex Mono",monospace;font-variant-numeric:tabular-nums;min-width:8ch}
+.legend{display:flex;flex-wrap:wrap;gap:6px 14px;font:600 13px "Barlow Condensed",sans-serif;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px;vertical-align:-1px}
+.tl{padding:8px 0 4px}
+.tlscroll{overflow-x:auto}
+.tl svg{display:block;min-width:760px;width:100%;height:auto}
+.lane{font:600 13px "Barlow Condensed",sans-serif;letter-spacing:.05em;fill:var(--ink)}
+.lanesub{font:400 11px "IBM Plex Mono",monospace;fill:var(--muted)}
+.tick{font:400 11px "IBM Plex Mono",monospace;fill:var(--muted)}
+.ev{cursor:pointer}
+.ev:focus{outline:none}
+.ev:focus-visible circle,.ev.sel circle{stroke:var(--ink);stroke-width:2.5}
+.caveat{color:var(--muted);font-size:13.5px;max-width:95ch;margin:0}
+.vids{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px}
+.vids figure{margin:0;display:grid;gap:6px}
+.vids video{width:100%;max-height:520px;background:#000;border-radius:4px}
+.vids figcaption{color:var(--muted);font-size:14px}
+@media (prefers-reduced-motion: reduce){*{transition:none!important;animation:none!important}}
+</style>
+<style>
+.live{display:inline-flex;align-items:center;gap:6px;color:var(--c-app)}
+.live i{width:9px;height:9px;border-radius:50%;background:currentColor;display:inline-block;animation:pulse 1.4s infinite}
+.live.off{color:var(--muted)} .live.off i{animation:none}
+@keyframes pulse{50%{opacity:.25}}
+.chans{display:flex;flex-wrap:wrap;gap:6px;margin:2px 0 0;padding:0;list-style:none}
+.chans li{font:500 12px/1 "IBM Plex Mono",monospace;border:1px solid var(--line);border-radius:3px;padding:5px 7px;cursor:pointer;color:var(--muted)}
+.chans li b{font-weight:500;color:var(--ink)}
+.chans li.on{border-color:var(--magenta);color:var(--magenta);box-shadow:0 0 0 1px var(--magenta) inset}
+.chans li.sel{background:var(--bg)}
+.player{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px}
+.player select{font:500 13px "IBM Plex Mono",monospace;background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:4px;padding:7px 8px}
+.player input[type=range]{width:110px;accent-color:var(--magenta)}
+button.on{background:var(--magenta)}
+.clipbtn{min-width:0;padding:6px 10px;font-size:12px}
+.atc{font:400 13px/1.45 "IBM Plex Mono",monospace;color:var(--muted);margin:0}
+.log{max-height:340px;overflow:auto;margin:0;padding:0;list-style:none;font:400 13px/1.45 "IBM Plex Mono",monospace}
+.log li{display:grid;grid-template-columns:8ch 8ch 1fr;gap:10px;border-top:1px solid var(--line);padding:4px 2px;cursor:pointer}
+.log li:hover{background:var(--bg)} .log li .f{color:var(--muted)} .log li.sel{background:var(--bg)}
+.log li .t{color:var(--muted)}
+.planes-tag{font:600 12px "IBM Plex Mono",monospace;fill:var(--ink);paint-order:stroke;stroke:var(--land);stroke-width:3px}
+#onair circle{fill:none;stroke:var(--magenta);stroke-width:2}
+#map{height:676px;border-radius:4px;background:var(--water)}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) #map .leaflet-tile-pane{filter:invert(1) hue-rotate(180deg) brightness(.85) contrast(.9)}}
+:root[data-theme="dark"] #map .leaflet-tile-pane{filter:invert(1) hue-rotate(180deg) brightness(.85) contrast(.9)}
+.leaflet-container{font:500 12px "IBM Plex Mono",monospace;background:var(--water)}
+.apt-dot{transition:all .3s}
+.viewctl a{font-size:15px;line-height:30px;color:var(--ink)!important;background:var(--panel)!important}
+.apt-dot.on{animation:aptpulse 1s infinite}
+@keyframes aptpulse{50%{stroke-opacity:.2;fill-opacity:.25}}
+.apt-tip{background:var(--panel);color:var(--ink);border:1px solid var(--line);box-shadow:none;font:600 11px "IBM Plex Mono",monospace;padding:1px 5px}
+.apt-tip.on{border-color:var(--magenta);color:var(--magenta)}
+.apt-tip:before{display:none}
+.say{background:var(--panel);color:var(--ink);border:1px solid var(--magenta);font:400 12px/1.35 "Barlow",sans-serif;max-width:260px;white-space:normal;padding:5px 8px}
+.say b{font:600 11px "IBM Plex Mono",monospace;color:var(--magenta);display:block}
+.plane-ic{background:none;border:none}
+.plane-ic div{font:600 11px "IBM Plex Mono",monospace;color:var(--ink);white-space:nowrap;text-shadow:0 0 3px var(--panel),0 0 3px var(--panel)}
+.plane-ic i{display:inline-block;width:10px;height:10px;border-radius:50%;border:2px solid var(--ink);background:var(--panel);margin-right:4px;vertical-align:-2px}
+.plane-ic.sel i{border-color:var(--magenta)}
+.sectors{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+.sectors span{font:500 12px "IBM Plex Mono",monospace;border:1px solid var(--line);border-radius:3px;padding:4px 7px;color:var(--muted)}
+.sectors span.on{border-color:var(--magenta);color:var(--magenta)}
+.log li{grid-template-columns:8ch 15ch 1fr}
+.ac-ic{background:none;border:none}
+.ac-ic svg{position:absolute;left:0;top:0;overflow:visible}
+.ac-lab{position:absolute;left:24px;top:-2px;font:600 11px "IBM Plex Mono",monospace;color:var(--ink);white-space:nowrap;text-shadow:0 0 3px var(--panel),0 0 3px var(--panel),0 0 3px var(--panel)}
+.ac-lab.m{color:var(--magenta)}
+.acbar{display:flex;flex-wrap:wrap;align-items:center;gap:6px 14px;margin-top:8px;font:500 12px "IBM Plex Mono",monospace;color:var(--muted)}
+.acbar label{display:inline-flex;gap:5px;align-items:center}
+.aclegend{display:inline-flex;flex-wrap:wrap;gap:4px 10px}
+.aclegend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:4px;vertical-align:-1px}
+</style>
+<style>
+.chtable{width:100%;border-collapse:collapse;font:500 13px "IBM Plex Mono",monospace}
+.chtable th{font:600 12px "Barlow Condensed",sans-serif;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);text-align:left;padding:6px 8px;border-bottom:1px solid var(--line)}
+.chtable td{padding:7px 8px;border-bottom:1px solid var(--line);vertical-align:middle}
+.chtable tr.cap td{background:var(--bg)}
+.meter{display:inline-block;width:90px;height:8px;border-radius:4px;background:var(--line);vertical-align:middle;position:relative;overflow:hidden}
+.meter b{position:absolute;left:0;top:0;bottom:0;background:var(--c-app)}
+.meter i{position:absolute;top:-2px;bottom:-2px;width:2px;background:var(--magenta)}
+.capture{color:var(--magenta);font-weight:600}
+.smallbtn{min-width:0;padding:6px 10px;font-size:12px}
+.gal{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px}
+.gal figure{margin:0;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:8px;cursor:zoom-in}
+.gal img{width:100%;display:block;border-radius:3px;aspect-ratio:320/256;object-fit:contain;background:#000}
+.gal figcaption{display:flex;justify-content:space-between;gap:6px;flex-wrap:wrap;font:500 12px "IBM Plex Mono",monospace;color:var(--muted);padding-top:6px}
+.gal .partial{color:var(--c-alt)}
+.empty{color:var(--muted);font-size:15px;max-width:70ch}
+.bar2{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;margin-bottom:12px}
+.bar2 select{font:500 13px "IBM Plex Mono",monospace;background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:4px;padding:6px 8px}
+.lb{position:fixed;inset:0;background:rgba(0,0,0,.82);display:none;align-items:center;justify-content:center;z-index:50;padding:20px}
+.lb.on{display:flex}
+.lb .box{background:var(--panel);border-radius:6px;padding:14px;max-width:min(96vw,1000px);max-height:94vh;overflow:auto;display:grid;gap:10px}
+.lb img{max-width:100%;max-height:72vh;display:block;margin:0 auto;image-rendering:auto}
+.lb .row{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;justify-content:space-between;font:500 13px "IBM Plex Mono",monospace}
+.away{color:var(--c-alt)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="eyebrow"><a href="/" target="_top" style="color:inherit">rxapp</a> · slow-scan television · RX-888</div>
+    <h1>SSTV Pictures</h1>
+    <p class="sub">Pictures sent by radio amateurs on the SSTV calling frequencies, decoded on this Mac. Each frequency is watched for SSTV's tones; a transmission is captured from 40 s before it's spotted until it ends, and decoded (Martin, Scottie, Robot, PD and other modes). Busiest on weekend daytimes, on 14.230 MHz.</p>
+    <div class="facts">
+      <span><b>MONITOR</b><em id="fMon" class="live off" style="font-style:normal"><i></i>–</em></span>
+      <span><b>RECEIVER</b><em id="fRx" style="font-style:normal">–</em></span>
+      <span><b>PICTURES</b><em id="fPics" style="font-style:normal">–</em></span>
+      <span><b>LAST</b><em id="fLast" style="font-style:normal">–</em></span>
+      <span id="focusBox"></span>
+    </div>
+  </header>
+
+  <div class="panel" style="padding:14px 18px;display:grid;gap:10px">
+    <div class="bar2">
+      <h2 style="font:700 13px/1 'Barlow Condensed',sans-serif;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin:0">Frequencies</h2>
+      <button id="toggle" type="button" class="smallbtn">–</button>
+      <button id="listen" type="button" class="smallbtn" disabled>Listen</button>
+      <span id="now" class="lanesub"></span>
+      <label class="lanesub" style="display:inline-flex;gap:6px;align-items:center">vol <input id="vol" type="range" min="0" max="3" step="0.05" value="1"></label>
+    </div>
+    <table class="chtable"><thead><tr><th>Band</th><th>Frequency</th><th>State</th><th>SSTV detector</th><th>Captures</th><th>Pictures</th><th></th></tr></thead>
+      <tbody id="rows"></tbody></table>
+    <p class="caveat" style="margin:0">The detector looks for SSTV's 1200 Hz line-sync pulses (the bar; a capture starts above the mark at 0.25) and most energy in the 1100–2350 Hz picture band. A capture without a decodable picture is dropped. A picture already under way when the monitor starts is missed: the decoder needs the opening tone burst (VIS header) that names the mode.</p>
+  </div>
+
+  <div class="panel" style="padding:14px 18px">
+    <div class="bar2">
+      <h2 style="font:700 13px/1 'Barlow Condensed',sans-serif;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin:0">Gallery</h2>
+      <select id="fBand" aria-label="Band"><option value="">all bands</option></select>
+      <span id="count" class="lanesub"></span>
+    </div>
+    <div class="gal" id="gal"></div>
+  </div>
+</div>
+
+<div class="lb" id="lb" role="dialog" aria-modal="true" aria-label="SSTV picture">
+  <div class="box">
+    <img id="lbImg" alt="">
+    <div class="row"><span id="lbMeta"></span>
+      <span><button id="lbPlay" class="smallbtn" type="button">Play audio</button> <a id="lbWav" download class="smallbtn" style="text-decoration:none">audio file</a>
+      <button id="lbDel" class="smallbtn" type="button">Delete</button> <button id="lbClose" class="smallbtn" type="button">Close</button></span></div>
+  </div>
+</div>
+<script src="sstv.js?v=1"></script>
+<script src="focus.js?v=1" data-focus="hf" data-what="the HF input, so SSTV (and FT8) run all the time"></script>
+</body>
+</html>

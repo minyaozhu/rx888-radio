@@ -107,12 +107,13 @@ API: `GET/POST /api/sstv` (status / `{on}`), `GET /api/sstv/pictures`, `GET /api
 
 http://127.0.0.1:8090 is a tab bar with one page per feature: **Radio** (`radio.html`: tuning, waterfall,
 channels, scans, monitors, FT8/SSTV controls, recordings, dashboard), **FT8 map** (`ft8.html`), **Airband**
-(`airband.html`) and **Public safety** (`safety.html`). A page is loaded the first time its tab is opened and then
+(`airband.html`), **Public safety** (`safety.html`) and **SSTV** (`sstv.html`: the monitor's frequencies with a
+live detector meter and Listen, and the picture gallery with a full-size viewer). A page is loaded the first time its tab is opened and then
 kept, so audio playing in one tab keeps playing in another; the address names the tab (`/#airband`). The bar
 shows radiod's health.
 
 **Switch receiver here.** Each page has a button that holds the voice session on that page's windows until
-released: Airband → approach and towers; Public safety → low band and VHF-high; FT8 map → the HF window (FT8 and
+released: Airband → approach and towers; Public safety → low band and VHF-high; FT8 map and SSTV → the HF window (FT8 and
 SSTV then run all the time); Radio → *pause* the session altogether, for manual tuning. It switches at once
 rather than waiting for a quiet moment. (`GET/POST /api/voice/focus {focus: air|safety|hf|pause|null}`, kept in
 `rxapp_data/voice_control.json`, which the session reads every second.)
