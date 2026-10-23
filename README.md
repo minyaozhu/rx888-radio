@@ -17,7 +17,7 @@ handoff to the tower. Scrub or Play to replay; click a dot to read the transcrip
 **Hear one:** [▶ American 2105 on NorCal Approach, 135.650 MHz (5 s, AAC)](docs/audio/american2105-cleared-ils28r.m4a)
 ([WAV](docs/audio/american2105-cleared-ils28r.wav)), 23 Oct 2026, 11:49 PDT. Whisper's transcript:
 *"210 knots and cleared ILS to a right, American 2105"*, a read-back of a speed and an ILS approach
-clearance to SFO's runway 28R. Recorded by `airband_session.py` and cleaned the same way the transcriber
+clearance to SFO's runway 28R. Recorded by `voice_session.py` and cleaned the same way the transcriber
 sees it (carrier removed, 250–3200 Hz, normalised).
 
 ## The hardware
@@ -31,8 +31,8 @@ sees it (carrier removed, 250–3200 Hz, normalised).
 
 | Script | What it does |
 |---|---|
-| **`rxapp/`** | **Your own SDR app: HF (0–32 or 0–64 MHz) and VHF/UHF inputs, browser waterfall, click-to-tune, audio, scans, FT8 on every band at once with a world map, an SSTV picture monitor, a live Bay Area airband map, server-side monitoring, dashboard, auto-recovery. `./run_rxapp.sh`, then http://127.0.0.1:8090. See [rxapp/README.md](rxapp/README.md)** |
-| **`airband_session.py`** | **Records and transcribes every airband channel in the VHF tuner's window at once (alternating approach and tower windows), for rxapp's live map at `/airband.html`. See [rxapp/README.md](rxapp/README.md#airband)** |
+| **`rxapp/`** | **Your own SDR app: HF (0–32 or 0–64 MHz) and VHF/UHF inputs, browser waterfall, click-to-tune, audio, scans, FT8 on every band at once with a world map, an SSTV picture monitor, a live Bay Area airband map, a public-safety monitor (CHP low band, VHF-high), server-side monitoring, dashboard, auto-recovery. `./run_rxapp.sh`, then http://127.0.0.1:8090: tabs for Radio, FT8 map, Airband and Public safety. See [rxapp/README.md](rxapp/README.md)** |
+| **`voice_session.py`** | **Records and transcribes every voice channel in view at once, rotating through windows: airband approach and towers, CHP's low band (HF input), VHF-high public safety. Feeds the Airband and Public safety tabs. See [rxapp/README.md](rxapp/README.md#voice-sessions-airband-and-public-safety)** (`airband_session.py` is the old name and still works) |
 | `probe.py` | Finds the RX-888, reports firmware state and USB link speed |
 | `rx888/usb.py` | USB discovery (VID/PID for bootloader and SDDC states) |
 | `am_scan.py` | Scans the AM broadcast band through SoapySDDC, tries several IF gains, lists stations by SNR; `--tune` sets SDR++ to the strongest |

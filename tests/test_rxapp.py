@@ -342,3 +342,124 @@ def test_adsb_feed_tracks_and_forgets():
     assert [len(x["trail"]) for x in snap["aircraft"] if x["hex"] == "a1b2c3"] == [1]
     f.ingest({"ac": []}, now=t0 + FORGET_SEC + 10)
     assert not f.aircraft and not f.tracks
+
+
+# ---- voice sessions: windows, digital detection, retention, FM channel finding ------------
+import json as _json
+import time
+import os
+
+import voice_session as vs
+
+
+def test_parse_windows_old_and_new_forms():
+    w = vs.parse_windows("approach:135.7,lowband:hf:42.6:safety,vhfhigh:vhf:155.0:safety")
+    assert [(x.name, x.band, x.centre, x.profile.service) for x in w] == [
+        ("approach", "vhf", 135.7e6, "air"), ("lowband", "hf", 42.6e6, "safety"), ("vhfhigh", "vhf", 155.0e6, "safety")]
+    with pytest.raises(ValueError):
+        vs.parse_windows("x:uhf:450")
+
+
+def _speech_like(rate, seconds, rng):
+    t = np.arange(int(rate * seconds)) / rate
+    syll = (np.sin(2 * np.pi * 3.5 * t) > 0.1).astype(float)          # syllables: bursts and gaps
+    f0 = 140 + 20 * np.sin(2 * np.pi * 0.7 * t)
+    voice = sum(np.sin(2 * np.pi * k * np.cumsum(f0) / rate) / k for k in range(1, 15))
+    return ((voice * syll + 0.02 * rng.normal(size=len(t))) * 8000).astype("<i2")
+
+
+def _p25_like(rate, seconds, rng):
+    from scipy.signal import lfilter, firwin
+    sym = rng.choice([-3, -1, 1, 3], int(4800 * seconds))
+    x = np.repeat(sym, rate // 4800 + 1)[: int(rate * seconds)].astype(float)
+    x = lfilter(firwin(63, 2400, fs=rate), 1, x)                        # band-limited 4-level symbols
+    return (x / np.abs(x).max() * 8000).astype("<i2")
+
+
+def test_digital_detector_separates_p25_from_speech():
+    rng = np.random.default_rng(7)
+    assert vs.looks_digital(_p25_like(24000, 3, rng), 24000)
+    assert not vs.looks_digital(_speech_like(24000, 3, rng), 24000)
+
+
+def test_prune_drops_old_recordings_and_lines(tmp_path):
+    now = 1_800_000_000.0
+    d = tmp_path / "20260101-000000"
+    d.mkdir()
+    old, new = d / "old.wav", d / "new.wav"
+    old.write_bytes(b"x"); new.write_bytes(b"x")
+    os.utime(old, (now - 8 * 86400,) * 2); os.utime(new, (now - 3600,) * 2)
+    (d / "transmissions.jsonl").write_text(_json.dumps({"t0": now - 8 * 86400}) + "\n" + _json.dumps({"t0": now - 60}) + "\n")
+    assert vs.prune(tmp_path, 7, now) == 1
+    assert not old.exists() and new.exists()
+    assert [_json.loads(l)["t0"] for l in (d / "transmissions.jsonl").read_text().splitlines()] == [now - 60]
+    fresh = tmp_path / "20260102-000000"            # a session that has just started: empty, but not old
+    fresh.mkdir()
+    vs.prune(tmp_path, 7, time.time())
+    assert fresh.exists()
+
+
+def test_fm_signal_on_fine_grid_is_one_channel(monkeypatch):
+    """A voice FM carrier lights several 2.5 kHz grid points; it must open exactly one channel."""
+    s = vs.Session.__new__(vs.Session)
+    s.windows = [vs.Window("lowband", "hf", 42.6e6, vs.SAFETY)]
+    s.w, s.preload, s.channels, s.spurs = 0, [42.5e6], {}, set()
+    s.keyed_since, s.last_keyed, s.peak, s.history = {}, {}, {}, __import__("collections").defaultdict(__import__("collections").deque)
+    s.pending = {}
+    s.lo, s.hi = 39e6, 46.6e6
+    s.grid = np.arange(42.45e6, 42.55e6 + 1, 2.5e3)
+    s.bin_of = {f: i for i, f in enumerate(s.grid)}
+    opened = []
+    monkeypatch.setattr(s, "ensure_channel", lambda f: (opened.append(f), s.channels.setdefault(f, {})))
+    monkeypatch.setattr(s, "finish", lambda *a: None)
+    db = np.full(len(s.grid), -100.0)
+    for off, lvl in ((-5e3, 18), (-2.5e3, 24), (0, 30), (2.5e3, 25), (5e3, 17)):       # FM voice around 42.5025
+        db[int(np.argmin(np.abs(s.grid - (42.5025e6 + off))))] = -100 + lvl
+    s.step(1000.0, db)
+    assert opened == []                  # one frame is not enough: noise spikes last one frame
+    s.step(1000.1, db)
+    s.step(1000.2, db)
+    assert opened == [42.5e6]            # three frames: snapped to the known channel, once
+    assert s.keyed_since[42.5e6] == 1000.0   # and the transmission starts at the first frame
+
+
+def test_busy_channel_is_not_mistaken_for_a_spur(monkeypatch):
+    """A channel keyed 60% of the time for over a minute is busy, not a spur (which is keyed ~100%)."""
+    s = vs.Session.__new__(vs.Session)
+    s.windows = [vs.Window("lowband", "hf", 42.6e6, vs.SAFETY)]
+    s.w, s.preload, s.spurs, s.pending = 0, [42.5e6], set(), {}
+    s.channels = {42.5e6: {}}
+    s.keyed_since, s.last_keyed, s.peak = {}, {}, {}
+    s.history = __import__("collections").defaultdict(__import__("collections").deque)
+    s.lo, s.hi = 39e6, 46.6e6
+    s.grid = np.arange(42.45e6, 42.55e6 + 1, 2.5e3)
+    s.bin_of = {f: i for i, f in enumerate(s.grid)}
+    monkeypatch.setattr(s, "ensure_channel", lambda f: None)
+    monkeypatch.setattr(s, "finish", lambda *a: None)
+    monkeypatch.setattr(s, "drop_spur", lambda f: s.spurs.add(f))
+    quiet = np.full(len(s.grid), -100.0)
+    busy = quiet.copy(); busy[int(np.argmin(np.abs(s.grid - 42.5e6)))] = -70
+    for i in range(900):                                  # 90 s at 10 frames/s: 6 s talking, 4 s quiet
+        s.step(1000 + i / 10, busy if (i // 10) % 10 < 6 else quiet)
+    assert 42.5e6 not in s.spurs
+
+
+def test_sidebands_of_a_strong_fm_signal_are_ignored(monkeypatch):
+    s = vs.Session.__new__(vs.Session)
+    s.windows = [vs.Window("lowband", "hf", 42.6e6, vs.SAFETY)]
+    s.w, s.preload, s.spurs, s.pending, s.channels = 0, [], set(), {}, {}
+    s.keyed_since, s.last_keyed, s.peak = {}, {}, {}
+    s.history = __import__("collections").defaultdict(__import__("collections").deque)
+    s.lo, s.hi = 39e6, 46.6e6
+    s.grid = np.arange(41.05e6, 41.15e6 + 1, 2.5e3)
+    s.bin_of = {f: i for i, f in enumerate(s.grid)}
+    opened = []
+    monkeypatch.setattr(s, "ensure_channel", lambda f: (opened.append(f), s.channels.setdefault(f, {})))
+    monkeypatch.setattr(s, "finish", lambda *a: None)
+    db = np.full(len(s.grid), -100.0)
+    idx = lambda f: int(np.argmin(np.abs(s.grid - f)))
+    db[idx(41.1e6)] = -70                                   # the signal, +30 dB
+    db[idx(41.08e6)] = db[idx(41.12e6)] = -84              # its sidebands, +16 dB
+    for i in range(3):
+        s.step(1000 + i / 10, db)
+    assert opened == [41.1e6]

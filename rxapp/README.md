@@ -29,7 +29,8 @@ or the SoapySDDC scripts.
 | **Scan** | HF: AM broadcast, shortwave broadcast bands, ham bands (peak finding for SSB), CB, WWV propagation check. VHF: FM broadcast, airband, 2 m, NOAA weather; bands wider than the tuner window are scanned in steps (FM: 4 steps, ~25 s), which briefly moves the tuner. HF scans use their own spectrum channel, so the display doesn't move. |
 | **Monitor** (server-side) | Scheduled scans (default: AM every 10 min, WWV every 30 min) and *watches*: a channel recorded automatically whenever its SNR rises above a threshold, optionally transcribed on-device. |
 | **FT8** (server-side) | Every FT8 band at once (160 m–10 m, plus 6 m with 0–64 MHz coverage): one USB channel per dial frequency, cut into 15 s UTC slots and decoded with ft8_lib. Live message list, conversations grouped by station pair (✓ when they reach RR73/73), CQ callers with grids, search by callsign or grid. Keeps running across restarts; pauses while VHF is selected. |
-| **Airband** (with `airband_session.py`) | Every airband channel in the tuner's 8.4 MHz window recorded and transcribed at once, alternating between the NorCal approach and Bay Area tower windows; a live map page with all Bay Area airports. See [Airband](#airband). |
+| **Airband** (with `voice_session.py`) | Every airband channel in the tuner's 8.4 MHz window recorded and transcribed at once, alternating between the NorCal approach and Bay Area tower windows; a live map page with all Bay Area airports. See [Airband](#airband). |
+| **Public safety** (with `voice_session.py`) | CHP's low band (HF input) and VHF-high conventional channels, recorded and transcribed; digital transmissions logged, not decoded; 7-day retention. See [Public safety](#public-safety). |
 | **SSTV** (server-side) | Watches the SSTV calling frequencies (3.845 and 7.171 MHz LSB; 14.230, 14.233, 21.340, 28.680 MHz USB) and decodes every picture into a gallery, with the audio kept. |
 | **Dashboard** | Occupancy per channel, detections over time, receiver health (IF power, RF gain, spectrum rate, ADC overloads), event log. |
 | **Recovery** | A supervisor restarts radiod when it stops answering (USB unplug, crash) and re-creates every channel with the same SSRC; open pages reconnect and re-create their channel. |
@@ -102,13 +103,60 @@ header, so a picture already under way when the monitor starts is missed.
 API: `GET/POST /api/sstv` (status / `{on}`), `GET /api/sstv/pictures`, `GET /api/sstv/pictures/{id}.png|.wav`,
 `DELETE /api/sstv/pictures/{id}`.
 
-## Airband
+## The web app
 
-`airband_session.py` runs next to rxapp. It switches rxapp to the VHF input and watches radiod's spectrum of
-the whole tuner window (a private spectrum stream; the page's view is untouched):
+http://127.0.0.1:8090 is a tab bar with one page per feature: **Radio** (`radio.html`: tuning, waterfall,
+channels, scans, monitors, FT8/SSTV controls, recordings, dashboard), **FT8 map** (`ft8.html`), **Airband**
+(`airband.html`) and **Public safety** (`safety.html`). A page is loaded the first time its tab is opened and then
+kept, so audio playing in one tab keeps playing in another; the address names the tab (`/#airband`). The bar
+shows radiod's health.
+
+## Voice sessions (airband and public safety)
+
+`voice_session.py` runs next to rxapp and rotates through *windows*: pieces of spectrum the RX-888 sees at
+once, an 8.4 MHz slice through the VHF tuner or the same slice of the HF input (direct sampling). The RX-888's
+input switch means HF and VHF are never heard at the same time, so each window gets its share:
 
 ```bash
-.venv/bin/python airband_session.py --windows approach:135.7,towers:120.6 --dwell 300 \
+.venv/bin/python voice_session.py --dwell 300 \
+    --windows lowband:hf:42.6:safety,vhfhigh:vhf:155.0:safety,approach:vhf:135.7,towers:vhf:120.6 \
+    --preload 42.5,42.28,44.94,41.1,152.8775,154.0025,158.4375,135.65,133.95,134.5,120.5,118.3,124.0,118.6
+```
+
+Window syntax `name:band:centre_MHz[:service]`; service `air` (AM, 25 kHz grid) or `safety` (FM, 2.5 kHz grid).
+While the low-band window is on, the FT8 and SSTV monitors (HF) run too. Output goes to
+`rxapp_data/airband/<stamp>/` and `rxapp_data/safety/<stamp>/`.
+
+## Public safety
+
+- **What's in reach.** Most Bay Area city police use trunked digital systems on UHF/700/800 MHz, many
+  encrypted, and the antenna is weak there anyway. In the clear and in reach: **CHP's low band** (39–46 MHz,
+  analog FM; 42.500 MHz is CHP San Jose dispatch "Ruby", 42.280 its mobiles) on the HF input, and
+  **VHF-high** conventional channels (150.8–162 MHz: sheriffs, fire, parks, college police) through the tuner.
+- **Finding transmissions on FM.** 12.5 kHz channels on a 2.5 kHz raster (~3,300 grid points per window), so:
+  a carrier must hold for 3 spectrum frames (single-frame noise peaks opened dozens of channels a minute
+  without this); neighbouring grid points that tie on one peak resolve to one; a carrier within 25 kHz of one
+  10 dB stronger is its sideband; and a carrier within 6 kHz of a known channel is that channel.
+- **Digital** (P25/DMR/NXDN) transmissions are recognised by a steady level and a flat spectrum, logged as
+  digital and not transcribed. Nothing is decoded.
+- **Transcription** as for airband, with a police/CHP vocabulary hint (10-codes, 11-codes, highways).
+- **The page** (`safety.html`): live transcript with radio codes explained on hover (common meanings; agencies
+  differ), filters by channel and text, Listen with Follow activity, a per-channel timeline (voice / digital /
+  no speech), and the codes heard. It says when the receiver is away on another window.
+- **Retention: 7 days.** The session deletes public-safety recordings and transcript lines older than 7 days
+  every hour. They stay in `rxapp_data/` (not in git).
+- Listening to unencrypted public-safety radio is generally legal in the US; publishing or acting on what you
+  hear is restricted. Keep it on this machine.
+
+API: `GET /api/safety?session=`, `GET /api/safety/transmissions?session=&after=`, `GET /api/safety/clip/{session}/{wav}`.
+
+## Airband
+
+The airband windows of a voice session watch radiod's spectrum of the whole tuner window (a private spectrum
+stream; the page's view is untouched):
+
+```bash
+.venv/bin/python voice_session.py --windows approach:vhf:135.7,towers:vhf:120.6 --dwell 300 \
     --preload 135.65,133.95,134.5,135.1,120.5,118.3,124.0,118.6,119.0,119.55,120.2,119.8,118.1,119.7
 ```
 

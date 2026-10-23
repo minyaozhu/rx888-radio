@@ -3,163 +3,83 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>rxapp · RX-888</title>
-<link rel="stylesheet" href="style.css?v=4">
+<title>rxapp</title>
+<style>
+:root{--bg:#F2F4EE;--bar:#FFFFFF;--ink:#1D2833;--muted:#5A6774;--line:#CBD3D8;--accent:#A3316F;--good:#2E7B57;--bad:#C0392B}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){color-scheme:dark;--bg:#0E151B;--bar:#151F27;--ink:#E4EAEE;--muted:#93A2AE;--line:#2B3843;--accent:#E07BB2;--good:#6CC99A;--bad:#FF6B6B}}
+:root[data-theme="dark"]{color-scheme:dark;--bg:#0E151B;--bar:#151F27;--ink:#E4EAEE;--muted:#93A2AE;--line:#2B3843;--accent:#E07BB2;--good:#6CC99A;--bad:#FF6B6B}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font:14px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif}
+.bar{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:6px 18px;flex-wrap:wrap;padding:0 16px;background:var(--bar);border-bottom:1px solid var(--line);min-height:46px}
+.brand{font-weight:700;letter-spacing:.02em}
+.brand span{color:var(--muted);font-weight:400}
+nav{display:flex;gap:2px;flex-wrap:wrap}
+nav a{display:block;padding:13px 14px 11px;color:var(--muted);text-decoration:none;border-bottom:3px solid transparent;font-weight:600}
+nav a:hover{color:var(--ink)}
+nav a[aria-current="page"]{color:var(--ink);border-bottom-color:var(--accent)}
+nav a:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+.spacer{flex:1}
+.health{font:12px ui-monospace,"SF Mono",Menlo,monospace;color:var(--muted);white-space:nowrap}
+.health i{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;background:var(--muted)}
+.health.ok i{background:var(--good)} .health.bad i{background:var(--bad)}
+main{position:relative;height:calc(100vh - 47px)}
+iframe{position:absolute;inset:0;width:100%;height:100%;border:0;display:none;background:var(--bg)}
+iframe.on{display:block}
+@media (max-width:640px){.health{display:none} nav a{padding:12px 9px 10px}}
+</style>
 </head>
 <body>
-<header>
-  <div class="brand">rxapp <span class="dim">RX-888 · radiod</span></div>
-  <div id="health" class="health">connecting…</div>
-</header>
+<div class="bar">
+  <div class="brand">rxapp <span>· RX-888</span></div>
+  <nav id="tabs" aria-label="Features"></nav>
+  <div class="spacer"></div>
+  <div class="health" id="health"><i></i>…</div>
+</div>
+<main id="frames"></main>
+<script>
+'use strict';
+// One page per feature, each in its own frame. Frames are created on first visit and then kept, so a
+// tab playing audio keeps playing while you look at another one.
+const TABS = [
+  {id: 'radio', label: 'Radio', src: 'radio.html'},
+  {id: 'ft8', label: 'FT8 map', src: 'ft8.html'},
+  {id: 'airband', label: 'Airband', src: 'airband.html'},
+  {id: 'safety', label: 'Public safety', src: 'safety.html'},
+];
+const nav = document.getElementById('tabs'), frames = document.getElementById('frames');
+const made = {};
+for (const t of TABS) {
+  const a = document.createElement('a');
+  a.href = '#' + t.id; a.textContent = t.label; a.dataset.id = t.id;
+  nav.appendChild(a);
+}
+function show(id) {
+  const t = TABS.find((x) => x.id === id) || TABS[0];
+  if (!made[t.id]) {
+    const f = document.createElement('iframe');
+    f.src = t.src; f.title = t.label; f.allow = 'autoplay';
+    frames.appendChild(f);
+    made[t.id] = f;
+  }
+  for (const [k, f] of Object.entries(made)) f.classList.toggle('on', k === t.id);
+  for (const a of nav.querySelectorAll('a')) {
+    if (a.dataset.id === t.id) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
+  }
+  document.title = `${t.label} · rxapp`;
+}
+window.addEventListener('hashchange', () => show(location.hash.slice(1)));
+show(location.hash.slice(1));
 
-<section class="tuner">
-  <div class="seg" role="group" aria-label="Input">
-    <button id="bandHF" class="seg-btn active" title="HF input: direct sampling">HF</button>
-    <button id="bandVHF" class="seg-btn" title="VHF/UHF tuner (24-1700 MHz)">VHF</button>
-  </div>
-  <div class="freq-wrap">
-    <button id="stepDown" class="stepbtn" title="Tune down one step (←; Shift: 10 steps)">◀</button>
-    <input id="freq" class="freq" value="" spellcheck="false" aria-label="Frequency">
-    <button id="stepUp" class="stepbtn" title="Tune up one step (→; Shift: 10 steps)">▶</button>
-    <span id="unit" class="unit">kHz</span>
-  </div>
-  <label>Mode <select id="mode"></select></label>
-  <label>Step <select id="step">
-    <option value="10">10 Hz</option><option value="100">100 Hz</option><option value="500">500 Hz</option>
-    <option value="1000">1 kHz</option><option value="5000">5 kHz</option><option value="10000" selected>10 kHz</option>
-    <option value="12500">12.5 kHz</option><option value="25000">25 kHz</option><option value="100000">100 kHz</option>
-    <option value="200000">200 kHz</option>
-  </select></label>
-  <button id="listen" class="primary">▶ Listen</button>
-  <label class="vol">Vol <input id="volume" type="range" min="0" max="1" step="0.01" value="0.7"></label>
-  <button id="record">● Rec</button>
-  <div class="meter">
-    <div class="bar"><div id="meterfill"></div></div>
-    <div id="meterText" class="dim">—</div>
-  </div>
-</section>
-
-<section class="scope">
-  <div class="scope-bar">
-    <span id="viewInfo" class="dim"></span>
-    <span class="spacer"></span>
-    <label id="coverageWrap" title="HF coverage: restarts radiod at 64.8 MS/s (0-32 MHz) or 129.6 MS/s (0-64 MHz)">Coverage
-      <select id="coverage"><option value="64800000">0–32 MHz</option><option value="129600000">0–64 MHz</option></select></label>
-    <label id="hfGainWrap" title="HF front-end gain. Auto holds the ADC near -20 dBFS; below -10 dB the attenuator is used">Gain
-      <input id="hfGain" type="range" min="-41.5" max="34" step="0.5"> <span id="hfGainVal" class="dim"></span>
-      <label class="dim"><input id="hfAuto" type="checkbox"> Auto</label></label>
-    <label id="vgaWrap" style="display:none" title="VHF tuner IF gain (0-15); the tuner's LNA and mixer run on their own AGC">Gain
-      <input id="vga" type="range" min="0" max="15" step="1"> <span id="vgaVal" class="dim"></span></label>
-    <label>Span <select id="zoom"></select></label>
-    <button id="center" title="Center the view on the tuned frequency">Center</button>
-    <label><input id="autoscale" type="checkbox" checked> auto levels</label>
-  </div>
-  <canvas id="spectrum" height="160"></canvas>
-  <canvas id="waterfall" height="300"></canvas>
-  <div class="hint dim">Click to tune · ← → or wheel to step (Shift ×10) · drag to pan</div>
-</section>
-
-<nav class="tabs">
-  <button data-tab="channels" class="active">Channels</button>
-  <button data-tab="scan">Scan</button>
-  <button data-tab="monitor">Monitor</button>
-  <button data-tab="ft8">FT8</button>
-  <button data-tab="sstv">SSTV</button>
-  <button data-tab="recordings">Recordings</button>
-  <button data-tab="dashboard">Dashboard</button>
-</nav>
-
-<section id="tab-channels" class="tab active">
-  <div class="row"><button id="addChannel">+ Add channel at tuned frequency</button>
-    <span class="dim">Every channel is demodulated at once by radiod; listen to any one.</span></div>
-  <table><thead><tr><th>Freq</th><th>Mode</th><th>Label</th><th>Power</th><th>SNR</th><th></th></tr></thead>
-    <tbody id="channelRows"></tbody></table>
-</section>
-
-<section id="tab-scan" class="tab">
-  <div class="row">
-    <label>Band <select id="band"></select></label>
-    <button id="scanBtn" class="primary">Scan</button>
-    <label><input id="autoScan" type="checkbox"> repeat every <input id="autoMin" type="number" value="10" min="1" max="240" class="num"> min</label>
-    <span id="scanStatus" class="dim"></span>
-  </div>
-  <table><thead><tr><th>Freq</th><th>SNR</th><th></th></tr></thead><tbody id="scanRows"></tbody></table>
-</section>
-
-<section id="tab-monitor" class="tab">
-  <p class="dim">These run on the server, so they keep going with this page closed.</p>
-  <h3>Scheduled scans</h3>
-  <div class="row">
-    <label>Band <select id="schedBand"></select></label>
-    <label>every <input id="schedMin" type="number" value="10" min="1" max="1440" class="num"> min</label>
-    <button id="schedAdd">+ Add schedule</button>
-  </div>
-  <table><thead><tr><th>Band</th><th>Every</th><th>Last run</th><th></th></tr></thead><tbody id="schedRows"></tbody></table>
-  <h3>Watches <span class="dim">(record a channel whenever a signal appears on it)</span></h3>
-  <div class="row">
-    <button id="watchAdd">+ Watch the tuned frequency</button>
-    <label>record when SNR ≥ <input id="watchSnr" type="number" value="10" class="num"> dB</label>
-    <label><input id="watchTx" type="checkbox"> transcribe</label>
-  </div>
-  <table><thead><tr><th>Freq</th><th>Mode</th><th>Label</th><th>Threshold</th><th>SNR now</th><th>State</th><th></th></tr></thead>
-    <tbody id="watchRows"></tbody></table>
-</section>
-
-<section id="tab-ft8" class="tab">
-  <div class="row">
-    <button id="ft8Toggle" class="primary">Start FT8 monitor</button>
-    <span id="ft8Bands" class="chips"></span>
-    <a href="ft8.html" target="_blank" style="color:var(--accent)">Map &amp; timeline ↗</a>
-  </div>
-  <p id="ft8Status" class="dim">Decodes FT8 on every chosen band at once, every 15 s slot. Runs on the server, so it keeps going with this page closed.</p>
-  <table class="compact"><thead><tr><th>Band</th><th>Dial</th><th>Last slot</th><th>Decodes since start</th><th>Stations (24 h)</th><th></th></tr></thead>
-    <tbody id="ft8BandRows"></tbody></table>
-  <div class="row" style="margin-top:14px">
-    <div class="seg"><button class="seg-btn active" data-ft8view="msgs">Messages</button><button class="seg-btn" data-ft8view="qso">Conversations</button></div>
-    <label>Band <select id="ft8Filter"><option value="">all</option></select></label>
-    <label>Find <input id="ft8Find" placeholder="callsign or grid" size="14"></label>
-    <span id="ft8Count" class="dim"></span>
-  </div>
-  <div id="ft8Msgs"><table class="compact"><thead><tr><th>UTC</th><th>Band</th><th>SNR*</th><th>dt</th><th>Hz</th><th>Message</th></tr></thead>
-    <tbody id="ft8Rows"></tbody></table>
-    <p class="dim">* ft8_lib's rough SNR estimate, not WSJT-X's.</p></div>
-  <div id="ft8Qso" style="display:none"></div>
-</section>
-
-<section id="tab-sstv" class="tab">
-  <div class="row">
-    <button id="sstvToggle" class="primary">Start SSTV monitor</button>
-    <span id="sstvStatus" class="dim">Watches the SSTV calling frequencies (3.845, 7.171, 14.230, 14.233, 21.340, 28.680 MHz) and decodes every picture. Runs on the server, so it keeps going with this page closed.</span>
-  </div>
-  <table class="compact"><thead><tr><th>Band</th><th>Freq</th><th>State</th><th>Detector now</th><th>Triggers</th><th>Pictures</th><th></th></tr></thead>
-    <tbody id="sstvRows"></tbody></table>
-  <h3>Pictures <span class="dim" id="sstvCount"></span></h3>
-  <div id="sstvGallery" class="gallery"></div>
-</section>
-
-<section id="tab-recordings" class="tab">
-  <table><thead><tr><th>Start</th><th>Freq</th><th>Mode</th><th>Length</th><th>Peak</th><th></th></tr></thead>
-    <tbody id="recRows"></tbody></table>
-</section>
-
-<section id="tab-dashboard" class="tab">
-  <div class="row">
-    <label>Band <select id="dashBand"></select></label>
-    <label>Last <select id="dashHours"><option value="1">1 h</option><option value="6">6 h</option>
-      <option value="24" selected>24 h</option><option value="168">7 days</option></select></label>
-    <button id="dashRefresh">Refresh</button>
-    <span id="dashInfo" class="dim"></span>
-  </div>
-  <h3>Occupancy <span class="dim">(share of scans each channel was heard, colored by mean SNR)</span></h3>
-  <canvas id="occ" height="220"></canvas>
-  <h3>Activity over time <span class="dim">(each dot is a detection; brighter = stronger)</span></h3>
-  <canvas id="timeline" height="220"></canvas>
-  <h3>Receiver health</h3>
-  <canvas id="healthChart" height="160"></canvas>
-  <h3>Events</h3>
-  <table><tbody id="eventRows"></tbody></table>
-</section>
-
-<script src="app.js?v=8"></script>
+async function health() {
+  const el = document.getElementById('health');
+  try {
+    const h = await (await fetch('/api/health')).json();
+    const ok = h.ok;
+    el.className = 'health ' + (ok ? 'ok' : 'bad');
+    el.lastChild.textContent = ok ? `radiod · ${h.band.toUpperCase()}${h.band === 'vhf' && h.vhf && h.vhf.center_hz ? ' ' + (h.vhf.center_hz / 1e6).toFixed(1) + ' MHz' : ''} · ${h.overloads_recent ? h.overloads_recent + ' overloads' : 'no overloads'}` : 'radiod not answering';
+  } catch (e) { el.className = 'health bad'; el.lastChild.textContent = 'rxapp not reachable'; }
+}
+health(); setInterval(health, 5000);
+</script>
 </body>
 </html>

@@ -553,11 +553,12 @@ async function poll(full) {
     S.status = info.status || {}; S.live = info.live;
     $('fLive').className = 'live' + (S.live ? '' : ' off');
     $('fLive').lastChild.textContent = S.live ? 'live' : 'recorded';
-    if (S.status.lo) {
-      const nx = S.status.next_switch, other = (S.status.windows || []).find((w) => w.name !== S.status.window);
-      const left = nx ? Math.max(0, nx - Date.now() / 1000) : null;
-      $('fWin').textContent = `${S.status.window || ''} ${mhz(S.status.lo)}–${mhz(S.status.hi)} MHz`
-        + (other && left != null ? ` · ${other.name} ${left > 0 ? 'in ' + Math.floor(left / 60) + ':' + String(Math.floor(left % 60)).padStart(2, '0') : 'at the next pause'}` : '');
+    {
+      const st = S.status, left = st.next_switch ? Math.max(0, st.next_switch - Date.now() / 1000) : null;
+      const clock = left != null ? `${Math.floor(left / 60)}:${String(Math.floor(left % 60)).padStart(2, '0')}` : '';
+      $('fWin').textContent = !S.live ? '–' : st.listening === false
+        ? `away on ${st.window} (${st.window_service})${clock ? ' · next switch in ' + clock : ''}`
+        : `${st.window || ''} ${st.lo ? mhz(st.lo) + '–' + mhz(st.hi) + ' MHz' : ''}${clock ? ' · next switch in ' + clock : ''}`;
     }
     const add = await api(`/api/airband/transmissions?session=${S.session}&after=${S.after}`);
     if (add.length || full) {

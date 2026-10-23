@@ -136,7 +136,7 @@ class NewChannel(BaseModel):
     mode: str = "am"
     label: str = ""
     band: Optional[str] = None
-    kind: str = "listen"                # listen (a page's own) | air (airband_session.py's recorders)
+    kind: str = "listen"                # listen (a page's own) | air | safety (voice_session.py's recorders)
 
 
 class ChannelUpdate(BaseModel):
@@ -347,19 +347,20 @@ async def sstv_delete(pid: int):
     return {"ok": True}
 
 
-# ---------------------------------------------------------------- airband sessions
+# ---------------------------------------------------------------- voice sessions (airband, public safety)
 AIRBAND_DIR = CONFIG.data_dir / "airband"
+SAFETY_DIR = CONFIG.data_dir / "safety"
 
 
-def _airband_session(name: Optional[str]) -> Path:
+def _session_dir(base: Path, name: Optional[str]) -> Path:
     if name:
-        d = AIRBAND_DIR / Path(name).name
+        d = base / Path(name).name
         if not d.is_dir():
-            raise HTTPException(404, f"no airband session {name}")
+            raise HTTPException(404, f"no session {name}")
         return d
-    dirs = sorted(p for p in AIRBAND_DIR.glob("*") if p.is_dir()) if AIRBAND_DIR.exists() else []
+    dirs = sorted(p for p in base.glob("*") if p.is_dir()) if base.exists() else []
     if not dirs:
-        raise HTTPException(404, "no airband session yet (run airband_session.py)")
+        raise HTTPException(404, "no session yet (run voice_session.py)")
     return dirs[-1]
 
 
@@ -375,10 +376,8 @@ def _jsonl(path: Path):
     return out
 
 
-@app.get("/api/airband")
-async def airband_info(session: Optional[str] = None):
-    """The latest (or a named) airband_session.py run: its live status and the other sessions."""
-    d = _airband_session(session)
+def _session_info(base: Path, session: Optional[str]):
+    d = _session_dir(base, session)
     status = {}
     try:
         status = json.loads((d / "status.json").read_text())
@@ -386,36 +385,62 @@ async def airband_info(session: Optional[str] = None):
         pass
     live = bool(status) and time.time() - status.get("t", 0) < 10
     return {"session": d.name, "live": live, "status": status,
-            "sessions": sorted((p.name for p in AIRBAND_DIR.glob("*") if p.is_dir()), reverse=True)}
+            "sessions": sorted((p.name for p in base.glob("*") if p.is_dir()), reverse=True)}
+
+
+def _session_transmissions(base: Path, session: Optional[str], after: int):
+    """Transmissions in order (index = position); later transcripts (transcripts.jsonl) win."""
+    d = _session_dir(base, session)
+    recs = _jsonl(d / "transmissions.jsonl")
+    better = {r["wav"]: r for r in _jsonl(d / "transcripts.jsonl")}
+    recs = sorted((better.get(r["wav"], r) for r in recs), key=lambda r: r["t0"])
+    return [{"i": i, **{k: r.get(k) for k in ("t0", "t1", "freq_hz", "peak_db", "text", "text_atc", "kind", "band")},
+             "clip": Path(r["wav"]).name} for i, r in enumerate(recs) if i > after]
+
+
+def _session_clip(base: Path, session: str, name: str):
+    path = _session_dir(base, session) / Path(name).name
+    if path.suffix != ".wav" or not path.exists():
+        raise HTTPException(404, "no such clip")
+    return FileResponse(path, media_type="audio/wav")
+
+
+@app.get("/api/airband")
+async def airband_info(session: Optional[str] = None):
+    """The latest (or a named) airband session: its live status and the other sessions."""
+    return _session_info(AIRBAND_DIR, session)
 
 
 @app.get("/api/airband/transmissions")
 async def airband_transmissions(session: Optional[str] = None, after: int = -1):
-    """Transmissions in order (index = position); later transcripts (transcripts.jsonl) win."""
-    d = _airband_session(session)
-    recs = _jsonl(d / "transmissions.jsonl")
-    better = {r["wav"]: r for r in _jsonl(d / "transcripts.jsonl")}
-    recs = sorted((better.get(r["wav"], r) for r in recs), key=lambda r: r["t0"])
-    out = []
-    for i, r in enumerate(recs):
-        if i > after:
-            out.append({"i": i, **{k: r.get(k) for k in ("t0", "t1", "freq_hz", "peak_db", "text", "text_atc")},
-                        "clip": Path(r["wav"]).name})
-    return out
+    return _session_transmissions(AIRBAND_DIR, session, after)
+
+
+@app.get("/api/airband/clip/{session}/{name}")
+async def airband_clip(session: str, name: str):
+    return _session_clip(AIRBAND_DIR, session, name)
+
+
+@app.get("/api/safety")
+async def safety_info(session: Optional[str] = None):
+    """The latest (or a named) public-safety session (recordings are kept 7 days)."""
+    return _session_info(SAFETY_DIR, session)
+
+
+@app.get("/api/safety/transmissions")
+async def safety_transmissions(session: Optional[str] = None, after: int = -1):
+    return _session_transmissions(SAFETY_DIR, session, after)
+
+
+@app.get("/api/safety/clip/{session}/{name}")
+async def safety_clip(session: str, name: str):
+    return _session_clip(SAFETY_DIR, session, name)
 
 
 @app.get("/api/adsb")
 async def adsb(since: float = 0.0):
     """Aircraft around the Bay from the adsb.fi open-data feed, with track points newer than `since`."""
     return S.adsb.snapshot(since)
-
-
-@app.get("/api/airband/clip/{session}/{name}")
-async def airband_clip(session: str, name: str):
-    path = _airband_session(session) / Path(name).name
-    if path.suffix != ".wav" or not path.exists():
-        raise HTTPException(404, "no such clip")
-    return FileResponse(path, media_type="audio/wav")
 
 
 @app.get("/api/health")
@@ -433,8 +458,8 @@ async def create_channel(body: NewChannel):
     if (body.band or S.radio.band) == "vhf" and S.radio.band == "vhf":
         await S.spectrum.ensure_live(body.freq_hz)
     try:
-        if body.kind not in ("listen", "air"):
-            raise ValueError("kind is listen or air")
+        if body.kind not in ("listen", "air", "safety"):
+            raise ValueError("kind is listen, air or safety")
         ch = await S.radio.create(body.freq_hz, body.mode, body.label, kind=body.kind, band=body.band)
     except ValueError as e:
         raise HTTPException(400, str(e))
