@@ -19,6 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .config import BAND_MODES, CONFIG, MODES, RADIOD_CONFS, RUNTIME, VHF_MAX_HZ, VHF_MIN_HZ
+from .adsb import AdsbFeed
 from .ft8 import Ft8, conversations
 from .hfgain import GAIN_MAX, SLIDER_MIN, HfGain
 from .jobs import BANDS, Recorder, Scanner
@@ -45,6 +46,7 @@ class State:
     hfgain: HfGain
     ft8: Ft8
     sstv: SstvMonitor
+    adsb: AdsbFeed
     recorders: Dict[int, Recorder] = {}
 
 
@@ -85,6 +87,8 @@ async def lifespan(app):
             await S.ft8.start(RUNTIME.ft8_bands)
         except Exception as e:
             log.warning("could not restart FT8: %s", e)
+    S.adsb = AdsbFeed()
+    S.adsb.start()                      # fetches only while a page is asking for aircraft
     S.sstv = SstvMonitor(S.radio, S.rtp, S.store)
     if RUNTIME.sstv_on:
         try:
@@ -105,6 +109,7 @@ async def lifespan(app):
     await S.monitor.stop()
     await S.ft8.stop(save=False)
     await S.sstv.stop(save=False)
+    await S.adsb.stop()
     await S.hfgain.stop()
     await S.supervisor.stop()
     await S.spectrum.stop()
@@ -397,6 +402,12 @@ async def airband_transmissions(session: Optional[str] = None, after: int = -1):
             out.append({"i": i, **{k: r.get(k) for k in ("t0", "t1", "freq_hz", "peak_db", "text", "text_atc")},
                         "clip": Path(r["wav"]).name})
     return out
+
+
+@app.get("/api/adsb")
+async def adsb(since: float = 0.0):
+    """Aircraft around the Bay from the adsb.fi open-data feed, with track points newer than `since`."""
+    return S.adsb.snapshot(since)
 
 
 @app.get("/api/airband/clip/{session}/{name}")

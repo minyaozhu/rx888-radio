@@ -5,9 +5,9 @@ Tools for driving an **RX-888 MkII** SDR from a Mac (Apple Silicon): **rxapp**, 
 ![Bay Airband, Live: a map of the San Francisco Bay Area with its airports; SFO, Palo Alto, Moffett and San José arrivals labelled by call sign; the Listen panel following whichever tower or approach channel is on the air](docs/images/airband-map.webp)
 
 *Bay Airband, Live (`/airband.html`): every airband channel in the RX-888's VHF window recorded and
-transcribed on the Mac at once. Airports light up when their tower is on the air; call signs picked out of
-the transcripts sit at the airport they're talking to or along the SFO arrival path (inferred from what's
-said, not radar). Listen follows whichever channel is talking.*
+transcribed on the Mac at once. Airports light up when their tower is on the air; aircraft are real positions
+and tracks from the [adsb.fi](https://adsb.fi) ADS-B feed, and call signs picked out of the transcripts are
+matched to them. Listen follows whichever channel is talking.*
 
 ![The timeline: one lane per flight (United 1387, American 2331, Delta 2038, United 1905, Alaska 1369…) with each transmission as a dot coloured by phase: check-in, speed/altitude, vector, traffic, cleared, handoff](docs/images/airband-timeline.webp)
 
@@ -92,9 +92,9 @@ SDR++ also has a built-in `sddc_source`, but it's an unfinished stub (hard-coded
 
 ## Roadmap
 
-- **ADS-B on the map.** The 1090 MHz demodulator (`rxapp/modes.py`) is ready and tested, but the current
-  antenna hears nothing at 1090 MHz (see [rxapp/README.md](rxapp/README.md#ads-b-not-yet)); needs a 1090 MHz
-  antenna, or a second dongle.
+- **ADS-B from the RX-888 itself.** The map shows aircraft from the adsb.fi feed today; the 1090 MHz
+  demodulator (`rxapp/modes.py`) is ready and tested, but the current antenna hears nothing at 1090 MHz (see
+  [rxapp/README.md](rxapp/README.md#ads-b-not-yet)); needs a 1090 MHz antenna, or a second dongle.
 - Infer aircraft positions from what controllers say (altitudes on known approach paths, "N miles south of",
   named fixes), with uncertainty circles.
 - Wider live VHF window (~10 MHz) by moving the tuner IF up and opening its widest filter.

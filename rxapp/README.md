@@ -142,13 +142,21 @@ the whole tuner window (a private spectrum stream; the page's view is untouched)
 - Flights are picked out of the transcripts (airline + number, joining split numbers like "United 15, 75";
   or the number ending a read-back) and phases from key words. A flight talking to a tower sits at that
   airport; one with NorCal Approach sits along the SFO Quiet Bridge arrival path at the furthest stage it has
-  been told. **These are inferred, not radar positions.**
+  been told. **These are inferred, not radar positions**, and are replaced by the real ADS-B position when the
+  flight can be matched.
+- **Aircraft (ADS-B).** Real positions from the [adsb.fi](https://adsb.fi) open-data feed (the RX-888's antenna
+  can't hear 1090 MHz; see below): every aircraft within 45 NM, pointing along its track, coloured by
+  altitude, with its last 20 minutes as a trail. rxapp polls the feed every 5 s, and only while a page is
+  open (`rxapp/adsb.py`; adsb.fi allows 1 request/s for personal, non-commercial use, with attribution).
+  Scrubbing the timeline moves the planes to where they were then. A flight named in a transcript is matched
+  to its ADS-B call sign ("American 2105" → AAL2105; a bare "…5616" only if exactly one airline flight ends in
+  it), ringed and labelled, and the transmission's detail shows where it really was when it talked.
 - **Listen**: *Follow activity* (default) stays on a channel while it is active and jumps to whoever is on
   the air once it has been quiet for 0.8 s; or *Loudest*, or one frequency.
 - Timeline with one lane per flight, scrub/Play, and the transcript log; click a call to read it (both
   readings) and play its clip. Earlier sessions are in the *Session* menu.
 
-API: `GET /api/airband?session=` (status, sessions), `GET /api/airband/transmissions?session=&after=`,
+API: `GET /api/adsb?since=` (aircraft and track points newer than `since`), `GET /api/airband?session=` (status, sessions), `GET /api/airband/transmissions?session=&after=`,
 `GET /api/airband/clip/{session}/{wav}`.
 
 ## ADS-B (not yet)

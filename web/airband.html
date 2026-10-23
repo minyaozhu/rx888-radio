@@ -131,6 +131,14 @@ button.on{background:var(--magenta)}
 .sectors span{font:500 12px "IBM Plex Mono",monospace;border:1px solid var(--line);border-radius:3px;padding:4px 7px;color:var(--muted)}
 .sectors span.on{border-color:var(--magenta);color:var(--magenta)}
 .log li{grid-template-columns:8ch 15ch 1fr}
+.ac-ic{background:none;border:none}
+.ac-ic svg{position:absolute;left:0;top:0;overflow:visible}
+.ac-lab{position:absolute;left:24px;top:-2px;font:600 11px "IBM Plex Mono",monospace;color:var(--ink);white-space:nowrap;text-shadow:0 0 3px var(--panel),0 0 3px var(--panel),0 0 3px var(--panel)}
+.ac-lab.m{color:var(--magenta)}
+.acbar{display:flex;flex-wrap:wrap;align-items:center;gap:6px 14px;margin-top:8px;font:500 12px "IBM Plex Mono",monospace;color:var(--muted)}
+.acbar label{display:inline-flex;gap:5px;align-items:center}
+.aclegend{display:inline-flex;flex-wrap:wrap;gap:4px 10px}
+.aclegend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:4px;vertical-align:-1px}
 </style>
 </head>
 <body>
@@ -138,7 +146,7 @@ button.on{background:var(--magenta)}
   <header>
     <div class="eyebrow"><a href="/" style="color:inherit">rxapp</a> · <span id="eyebrow">NorCal Approach · RX-888</span></div>
     <h1>Bay Airband, Live</h1>
-    <p class="sub">Every airband channel in the RX-888's window, recorded and transcribed on this Mac as it happens. Airports light up when their tower, ground or ATIS frequency is on the air; SFO arrivals move along the Quiet Bridge flow as NorCal's instructions are heard. Listen live, click any transmission to read it and hear the clip.</p>
+    <p class="sub">Every airband channel in the RX-888's window, recorded and transcribed on this Mac as it happens. Airports light up when their tower, ground or ATIS frequency is on the air; aircraft are real positions from the adsb.fi ADS-B feed, and a flight named in a transcript is matched to its track. Listen live, click any transmission to read it and hear the clip.</p>
     <div class="facts">
       <span><b>STATUS</b><em id="fLive" class="live off" style="font-style:normal"><i></i>–</em></span>
       <span><b>WINDOW</b><em id="fWin" style="font-style:normal">–</em></span>
@@ -152,6 +160,12 @@ button.on{background:var(--magenta)}
     <div class="panel map">
       <div id="map" role="img" aria-label="Map of Bay Area airports with live airband activity"></div>
       <div class="sectors" id="sectors"></div>
+      <div class="acbar">
+        <label><input type="checkbox" id="acShow" checked> Aircraft (ADS-B)</label>
+        <label><input type="checkbox" id="acTrails" checked> Tracks</label>
+        <span class="aclegend" id="acLegend"></span>
+        <span id="acStatus" class="lanesub"></span>
+      </div>
     </div>
 
     <div class="panel detail" aria-live="polite">
@@ -193,6 +207,6 @@ button.on{background:var(--magenta)}
 </div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="bayair.js?v=1"></script>
-<script src="airband.js?v=10"></script>
+<script src="airband.js?v=12"></script>
 </body>
 </html>

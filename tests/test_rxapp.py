@@ -318,3 +318,27 @@ def test_adsb_demodulator_recovers_frames():
     noise = np.random.default_rng(4).normal(0, 40, 200000) + 1j * np.random.default_rng(5).normal(0, 40, 200000)
     # noise yields some candidate frames; none survives the CRC check
     assert not any(pms.decode(h).get("crc_valid") for _, h in modes.demodulate(noise))
+
+
+# ---- ADS-B feed (adsb.fi) ---------------------------------------------------------
+from rxapp.adsb import AdsbFeed, FORGET_SEC
+
+
+def test_adsb_feed_tracks_and_forgets():
+    f = AdsbFeed()
+    t0 = 1_800_000_000.0
+    f.ingest({"ac": [{"hex": "a1b2c3", "flight": "AAL2105 ", "t": "A321", "lat": 37.5, "lon": -122.1,
+                      "alt_baro": 3200, "gs": 210, "track": 284, "seen_pos": 1.0},
+                     {"hex": "c0ffee", "flight": "UAL499", "lat": 37.62, "lon": -122.38, "alt_baro": "ground"},
+                     {"hex": "nopos"}]}, now=t0)
+    f.ingest({"ac": [{"hex": "a1b2c3", "flight": "AAL2105", "lat": 37.51, "lon": -122.14, "alt_baro": 3000,
+                      "seen_pos": 0.5}]}, now=t0 + 5)
+    a = f.aircraft["a1b2c3"]
+    assert a["flight"] == "AAL2105" and a["alt"] == 3000 and len(f.tracks["a1b2c3"]) == 2
+    assert f.tracks["a1b2c3"][0][0] == t0 - 1.0                 # positions are timed by when they were received
+    assert f.aircraft["c0ffee"]["ground"] and f.aircraft["c0ffee"]["alt"] == 0
+    assert "nopos" not in f.aircraft
+    snap = f.snapshot(since=t0)                                  # only newer track points
+    assert [len(x["trail"]) for x in snap["aircraft"] if x["hex"] == "a1b2c3"] == [1]
+    f.ingest({"ac": []}, now=t0 + FORGET_SEC + 10)
+    assert not f.aircraft and not f.tracks

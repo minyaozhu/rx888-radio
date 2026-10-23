@@ -238,6 +238,17 @@ function drawMap() {
     if (!past.length || t - past[past.length - 1].t0 > 20 * 60) { if (p) { p.remove(); delete pl[f.id]; } continue; }
     const lastAny = past[past.length - 1];
     const fi = freqInfo(lastAny.freq_hz);
+    const real = adsbFor(f.id);
+    if (real) {                                                // real position from ADS-B: no guessing
+      if (p) { p.remove(); delete pl[f.id]; }
+      const st = acAt(real, t);
+      const li = document.createElement('li');
+      li.innerHTML = `<span><b>${esc(f.name)}</b> <span style="color:var(--magenta)">ADS-B</span></span><span>${st ? esc(acLine(real, st)) : 'no position'} · ${hms(lastAny.t0)}</span>`;
+      li.style.cursor = 'pointer';
+      li.addEventListener('click', () => select(lastAny));
+      list.appendChild(li);
+      continue;
+    }
     let pos, where;
     if (fi && fi.airport) {                                   // talking to a tower / ground
       const key = 'apt' + fi.airport.id, n = (occupied[key] = (occupied[key] || 0) + 1) - 1;
@@ -267,6 +278,123 @@ function drawMap() {
   if (!list.children.length) list.innerHTML = '<li><span>No flights identified yet</span><span></span></li>';
 }
 
+// ------------------------------------------------------------------ aircraft (ADS-B, adsb.fi)
+// Real positions from the adsb.fi open-data feed (rxapp polls it while this page is open). Planes point
+// along their track, coloured by altitude, with their recent track as a trail. When the timeline is
+// scrubbed back, planes sit where they were then. A flight named in a transcript ("American 2105") is
+// matched to its ADS-B call sign (AAL2105) and highlighted; its inferred position is dropped.
+const AC = {planes: new Map(), since: 0, show: true, trails: true, fetched: null, error: null};
+const acLayer = L.layerGroup().addTo(map), trailLayer = L.layerGroup().addTo(map);
+map.attributionControl.addAttribution('Aircraft: <a href="https://adsb.fi" target="_blank">adsb.fi</a> open data');
+const ALT_BANDS = [[0, '#8A8F98', 'ground'], [1, '#2E9E5B', '< 2,000 ft'], [2000, '#9BBF2E', '2–5,000'], [5000, '#E0A030', '5–10,000'],
+                   [10000, '#E0662E', '10–20,000'], [20000, '#3D7FD6', '20–30,000'], [30000, '#7B5BD6', '30,000+']];
+// barometric altitude near sea level can read below zero (-200 ft): that's the lowest airborne band
+const altColor = (a) => a.ground ? ALT_BANDS[0][1] : ([...ALT_BANDS].reverse().find(([lo]) => (a.alt ?? 0) >= lo) || ALT_BANDS[1])[1];
+const PLANE_PATH = 'M0,-9 L1.6,-3 L9,1.2 L9,3 L1.6,1.2 L1,6.5 L3.5,8.6 L3.5,9.8 L0,9 L-3.5,9.8 L-3.5,8.6 L-1,6.5 L-1.6,1.2 L-9,3 L-9,1.2 L-1.6,-3 Z';
+
+async function pollAdsb() {
+  try {
+    const d = await api(`/api/adsb?since=${AC.since}`);
+    AC.fetched = d.fetched; AC.error = d.error;
+    const here = new Set();
+    for (const a of d.aircraft) {
+      here.add(a.hex);
+      const e = AC.planes.get(a.hex) || {trail: [], marker: null, line: null, key: ''};
+      const lastT = e.trail.length ? e.trail[e.trail.length - 1][0] : 0;
+      for (const p of a.trail) if (p[0] > lastT) e.trail.push(p);
+      const cut = Date.now() / 1000 - 20 * 60;
+      while (e.trail.length && e.trail[0][0] < cut) e.trail.shift();
+      e.a = a;
+      AC.planes.set(a.hex, e);
+    }
+    for (const [hx, e] of AC.planes) if (!here.has(hx)) { e.marker && e.marker.remove(); e.line && e.line.remove(); AC.planes.delete(hx); }
+    AC.since = d.now - 30;          // a little overlap: a position can arrive a few seconds late
+    drawAircraft();
+  } catch (e) { AC.error = e.message; }
+  $('acStatus').textContent = AC.error ? `ADS-B: ${AC.error}` : `${AC.planes.size} aircraft · adsb.fi`;
+}
+
+// position at time t: the latest state when live, else the last track point at or before t (within 60 s)
+function acAt(e, t) {
+  if (S.follow && S.live) return {lat: e.a.lat, lon: e.a.lon, alt: e.a.alt, ground: e.a.ground, track: e.a.track};
+  let i = e.trail.length - 1;
+  while (i >= 0 && e.trail[i][0] > t) i--;
+  if (i < 0 || t - e.trail[i][0] > 60) return null;
+  const [pt, lat, lon, alt] = e.trail[i], nx = e.trail[Math.max(0, i - 1)];
+  const track = i > 0 ? (Math.atan2((lon - nx[2]) * Math.cos(lat * Math.PI / 180), lat - nx[1]) * 180 / Math.PI + 360) % 360 : e.a.track;
+  return {lat, lon, alt, ground: alt === 0, track, t: pt};
+}
+
+function nearestAirport(lat, lon) {
+  let best = null, bd = 1e9;
+  for (const a of BAY_AIRPORTS) {
+    const dy = (a.lat - lat) * 111, dx = (a.lon - lon) * 111 * Math.cos(lat * Math.PI / 180), d = Math.hypot(dx, dy);
+    if (d < bd) { bd = d; best = {a, km: d, brg: (Math.atan2(-dx, -dy) * 180 / Math.PI + 360) % 360}; }
+  }
+  return best;
+}
+const compass = (b) => ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'][Math.round(b / 45) % 8];
+function acLine(e, st) {
+  const n = nearestAirport(st.lat, st.lon);
+  const alt = st.ground ? 'on the ground' : st.alt != null ? `${Math.round(st.alt).toLocaleString()} ft` : '';
+  const gs = e.a.gs != null && (S.follow && S.live) ? `, ${Math.round(e.a.gs)} kt` : '';
+  return `${e.a.flight || e.a.hex} ${e.a.type} ${alt}${gs}, ${n.km < 1.5 ? 'at ' + n.a.id : n.km.toFixed(0) + ' km ' + compass(n.brg) + ' of ' + n.a.id}`;
+}
+
+// transcript flight id (UAL2105, or a bare number "2105") -> the ADS-B aircraft with that call sign
+function adsbFor(fid) {
+  if (!fid || fid === '?') return null;
+  let hit = null, n = 0;
+  for (const e of AC.planes.values()) {
+    const cs = e.a.flight || '';
+    if (cs === fid) return e;
+    if (/^\d+$/.test(fid) && /^[A-Z]{3}\d/.test(cs) && cs.slice(3) === fid) { hit = e; n++; }
+  }
+  return n === 1 ? hit : null;          // a bare number counts only if exactly one airline flight has it
+}
+
+function drawAircraft() {
+  if (!AC.show) { acLayer.clearLayers(); trailLayer.clearLayers(); AC.planes.forEach((e) => { e.marker = e.line = null; }); return; }
+  const t = S.cursor, z = map.getZoom();
+  const matched = new Map();             // hex -> transcript flight
+  for (const f of S.flights) { const e = adsbFor(f.id); if (e) matched.set(e.a.hex, f); }
+  const selHex = S.sel && S.sel.f ? adsbFor(S.sel.f)?.a.hex : null;
+  for (const [hx, e] of AC.planes) {
+    const st = acAt(e, t);
+    if (!st) { if (e.marker) { e.marker.remove(); e.marker = null; } if (e.line) { e.line.remove(); e.line = null; } continue; }
+    const f = matched.get(hx), sel = hx === selHex, col = altColor(st);
+    const label = f ? f.name : (z >= 11 ? (e.a.flight || '') : '');
+    const key = [Math.round(st.track ?? 0), col, f ? 1 : 0, sel ? 1 : 0, label].join('|');
+    if (!e.marker) {
+      e.marker = L.marker([st.lat, st.lon], {zIndexOffset: f ? 900 : 600}).addTo(acLayer)
+        .bindTooltip('', {direction: 'top', offset: [0, -10]})
+        .on('click', () => { const f2 = matched.get(hx); if (f2) { const r = S.recs.filter((x) => x.f === f2.id && x.t0 <= S.cursor).pop(); if (r) select(r); } });
+    } else e.marker.setLatLng([st.lat, st.lon]);
+    if (e.key !== key) {
+      const ring = f ? `<circle r="12" fill="none" stroke="${cssv('--magenta')}" stroke-width="${sel ? 3 : 2}"/>` : '';
+      e.marker.setIcon(L.divIcon({className: 'ac-ic', iconSize: [26, 26], iconAnchor: [13, 13],
+        html: `<svg width="26" height="26" viewBox="-13 -13 26 26">${ring}<path d="${PLANE_PATH}" transform="rotate(${Math.round(st.track ?? 0)})" fill="${col}" stroke="${cssv('--panel')}" stroke-width="0.8"/></svg>`
+          + (label ? `<span class="ac-lab${f ? ' m' : ''}">${esc(label)}</span>` : '')}));
+      e.key = key;
+    }
+    e.marker.setTooltipContent(`${esc(acLine(e, st))}${e.a.reg ? ' · ' + esc(e.a.reg) : ''}${e.a.squawk ? ' · squawk ' + e.a.squawk : ''}${f ? '<br>heard as <b>' + esc(f.name) + '</b>' : ''}`);
+    // trail: the track up to time t
+    if (AC.trails) {
+      const pts = e.trail.filter((p) => p[0] <= t + 1).map((p) => [p[1], p[2]]);
+      if (pts.length >= 2) {
+        const style = {color: f ? cssv('--magenta') : col, weight: f || sel ? 3 : 1.5, opacity: f ? 0.85 : 0.45};
+        if (!e.line) e.line = L.polyline(pts, {...style, interactive: false}).addTo(trailLayer);
+        else { e.line.setLatLngs(pts); e.line.setStyle(style); }
+      } else if (e.line) { e.line.remove(); e.line = null; }
+    } else if (e.line) { e.line.remove(); e.line = null; }
+  }
+}
+$('acShow').addEventListener('change', () => { AC.show = $('acShow').checked; drawAircraft(); });
+$('acTrails').addEventListener('change', () => { AC.trails = $('acTrails').checked; drawAircraft(); });
+map.on('zoomend', () => { AC.planes.forEach((e) => { e.key = ''; }); drawAircraft(); });
+$('acLegend').innerHTML = ALT_BANDS.map(([, c, n]) => `<span><i style="background:${c}"></i>${n}</span>`).join('');
+pollAdsb(); setInterval(pollAdsb, 5000);
+
 // ------------------------------------------------------------------ detail, log
 function select(r, moveTime) {
   S.sel = r;
@@ -277,6 +405,9 @@ function select(r, moveTime) {
   $('dRaw').textContent = r.text ? `“${r.text}”` : '(no speech recognised)';
   $('dAtc').textContent = r.text_atc && r.text_atc !== r.text ? `with ATC hint: “${r.text_atc}”` : '';
   $('dMeta').textContent = `${mhz(r.freq_hz)} MHz${freqInfo(r.freq_hz) ? ' (' + freqInfo(r.freq_hz).label + ')' : ''} · ${(r.t1 - r.t0).toFixed(1)} s · carrier +${r.peak_db} dB over the floor`;
+  const real = r.f ? adsbFor(r.f) : null, st = real ? acAt(real, r.t0) : null;
+  if (st) $('dMeta').textContent += `\nADS-B (adsb.fi): ${acLine(real, st)}`;
+  $('dMeta').style.whiteSpace = 'pre-line';
   $('clip').disabled = false;
   document.querySelectorAll('#log li').forEach((li) => li.classList.toggle('sel', +li.dataset.i === r.i));
   render();
@@ -297,7 +428,7 @@ $('clip').addEventListener('click', () => {
 
 function render() {
   if (S.follow && S.live) S.cursor = Date.now() / 1000;
-  drawTimeline(); drawMap();
+  drawTimeline(); drawMap(); drawAircraft();
 }
 
 // ------------------------------------------------------------------ channels + live audio
