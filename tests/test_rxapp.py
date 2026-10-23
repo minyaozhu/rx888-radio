@@ -290,3 +290,31 @@ def test_vhf_tuner_gives_up_with_an_error_not_an_exit(monkeypatch):
     v = vhfmod.Vhf()
     with pytest.raises(RuntimeError):
         v._enable(135.7e6)
+
+
+# ---- ADS-B demodulator --------------------------------------------------------
+from rxapp import modes
+
+
+def _ppm(hexmsg, rng, amp=600.0, noise=40.0):
+    """A Mode S frame as 2 MS/s magnitude-like IQ: preamble pulses at 0, 1, 3.5, 4.5 us, then PPM bits."""
+    bits = np.unpackbits(np.frombuffer(bytes.fromhex(hexmsg), np.uint8))
+    m = np.zeros(modes.PRE + 2 * len(bits))
+    m[[0, 2, 7, 9]] = amp
+    for k, b in enumerate(bits):
+        m[modes.PRE + 2 * k + (0 if b else 1)] = amp
+    pad = np.zeros(400)
+    x = np.concatenate([pad, m, pad, m * 0.5, pad])                     # the same frame twice, weaker the 2nd time
+    return x + rng.normal(0, noise, len(x)) + 1j * rng.normal(0, noise, len(x))
+
+
+def test_adsb_demodulator_recovers_frames():
+    import pyModeS as pms
+    msg = "8D4840D6202CC371C32CE0576098"                                 # KLM1023 identification (DF17)
+    found = modes.demodulate(_ppm(msg, np.random.default_rng(3)))
+    assert [h for _, h in found] == [msg, msg]
+    d = pms.decode(found[0][1])
+    assert d["crc_valid"] and d["callsign"] == "KLM1023"
+    noise = np.random.default_rng(4).normal(0, 40, 200000) + 1j * np.random.default_rng(5).normal(0, 40, 200000)
+    # noise yields some candidate frames; none survives the CRC check
+    assert not any(pms.decode(h).get("crc_valid") for _, h in modes.demodulate(noise))

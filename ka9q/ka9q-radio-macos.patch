@@ -1,3 +1,18 @@
+diff --git a/rx888_vhf_demo/rx888_vhf.py b/rx888_vhf_demo/rx888_vhf.py
+index ec6f819..33d9db2 100644
+--- a/rx888_vhf_demo/rx888_vhf.py
++++ b/rx888_vhf_demo/rx888_vhf.py
+@@ -375,9 +375,9 @@ class RX888:
+         self._wr(0x16, sdm >> 8)                       # sdm hi
+         self._wr(0x15, sdm & 0xFF)                     # sdm lo
+ 
+-        time.sleep(0.002)
+         locked = False
+         for _ in range(2):
++            time.sleep(0.010)                         # librtlsdr waits 10 ms; 2 ms read "unlocked" too early
+             if self._rd(0x00, 3)[2] & 0x40:           # lock = reg 0x02 logical b6 (reads are logical-order)
+                 locked = True; break
+             self._wr_mask(0x12, 0x60, 0xE0)           # bump VCO current to max, retry
 diff --git a/src/avahi.c b/src/avahi.c
 index 775390b..4945267 100644
 --- a/src/avahi.c
