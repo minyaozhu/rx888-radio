@@ -140,14 +140,15 @@ function drawTimeline() {
 // zoomSnap 0.25: finer zoom steps, so a saved view can be just right
 const map = L.map('map', {zoomControl: true, attributionControl: true, zoomSnap: 0.25, zoomDelta: 0.5}).setView([37.62, -122.16], 9);
 // Leaflet measures its box when created; fonts and the panel layout settle later, so measure again
-const fitAirports = () => map.fitBounds(BAY_AIRPORTS.map((a) => [a.lat, a.lon]), {padding: [24, 24], animate: false});
-// Default view: whatever was saved with "Save view" (kept in this browser), else all airports
+// Default view: whatever was saved with ★ (kept in this browser), else DEFAULT_VIEW
 const VIEW_KEY = 'airband.mapView';
 function savedView() {
   try { const v = JSON.parse(localStorage.getItem(VIEW_KEY)); return v && isFinite(v.lat) && isFinite(v.zoom) ? v : null; }
   catch (e) { return null; }
 }
-const homeView = () => { const v = savedView(); if (v) map.setView([v.lat, v.lon], v.zoom, {animate: false}); else fitAirports(); };
+// The built-in default: the view chosen on 2026-10-23 (the bay, Foster City to Fremont, zoom 10)
+const DEFAULT_VIEW = {lat: 37.563, lon: -122.156, zoom: 10};
+const homeView = () => { const v = savedView() || DEFAULT_VIEW; map.setView([v.lat, v.lon], v.zoom, {animate: false}); };
 homeView();
 for (const ms of [200, 800, 2000]) setTimeout(() => { map.invalidateSize(); if (ms === 800) homeView(); }, ms);
 const ViewControl = L.Control.extend({
@@ -157,7 +158,7 @@ const ViewControl = L.Control.extend({
     const save = L.DomUtil.create('a', '', box), home = L.DomUtil.create('a', '', box);
     save.href = home.href = '#';
     save.textContent = '★'; save.title = 'Save this view as the default';
-    home.textContent = '⌂'; home.title = 'Back to the default view (double-click: forget it)';
+    home.textContent = '⌂'; home.title = 'Back to the default view (double-click: forget a saved one)';
     L.DomEvent.disableClickPropagation(box);
     L.DomEvent.on(save, 'click', (e) => {
       L.DomEvent.preventDefault(e);
@@ -169,7 +170,7 @@ const ViewControl = L.Control.extend({
     L.DomEvent.on(home, 'dblclick', (e) => {
       L.DomEvent.preventDefault(e);
       try { localStorage.removeItem(VIEW_KEY); } catch (err) { /* ignore */ }
-      fitAirports();
+      homeView();
     });
     return box;
   },
