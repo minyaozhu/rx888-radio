@@ -514,3 +514,30 @@ def test_sstv_live_picture_builds_up_then_clears(tmp_path):
     assert len(rows) >= 5 and rows == sorted(rows) and rows[0] < rows[-1]     # it grows line by line
     assert w.live is None and not (tmp_path / "live_20m.png").exists()          # cleared when the picture is saved
     assert len(saved) == 1
+
+
+# ---- FT4 ----------------------------------------------------------------------------
+GEN = ft8.ROOT / "tools" / "ft8_lib" / "gen_ft8"
+
+
+@pytest.mark.skipif(not (ft8.DECODER.exists() and GEN.exists()), reason="needs ft8_lib's decode_ft8 and gen_ft8")
+def test_ft4_slot_decodes_once_with_on_time_dt(tmp_path):
+    import subprocess, wave as _wave
+    subprocess.run([str(GEN), "CQ K6ABC CM87", str(tmp_path / "g.wav"), "1500", "-ft4"], capture_output=True, check=True)
+    with _wave.open(str(tmp_path / "g.wav")) as w:
+        x = np.frombuffer(w.readframes(w.getnframes()), "<i2").astype(float)
+    nz = np.flatnonzero(np.abs(x) > 50)
+    sig = x[nz[0]:nz[-1] + 1]
+    a = np.zeros(int(7.5 * ft8.RATE))
+    a[int(0.5 * ft8.RATE):int(0.5 * ft8.RATE) + len(sig)] = sig * 0.5          # on time: 0.5 s into the slot
+    a = np.clip(a + np.random.default_rng(1).normal(0, 300, len(a)), -32767, 32767).astype("<i2")
+    saved = []
+    mon = ft8.Ft8.__new__(ft8.Ft8)
+    mon.proto, mon.tmp, mon._sem = ft8.FT4, tmp_path, asyncio.Semaphore(2)
+    mon.store = SimpleNamespace(add_ft8=lambda t, band, dial, rows, table: saved.append((table, rows)))
+    feed = ft8.Feed("20m", 14.080e6)
+    feed.cut = lambda t0, seconds: a
+    asyncio.run(mon._decode(feed, 1_800_000_000.0))
+    (table, rows), = saved
+    assert table == "ft4" and [r["msg"] for r in rows] == ["CQ K6ABC CM87"]   # both passes found it: kept once
+    assert abs(rows[0]["dt"]) < 0.2 and rows[0]["from_call"] == "K6ABC"

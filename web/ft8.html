@@ -96,6 +96,7 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid 
     <h1>FT8 Skywatch</h1>
     <p class="sub">Every FT8 message the RX-888 decoded, on a world map and one timeline lane per station. Scrub the timeline or press Play to replay; click any message to read it. With the slider at the end it follows live.</p>
     <div class="facts">
+      <span><button id="monBtn" type="button" style="min-width:0;padding:7px 11px;font-size:12px">…</button> <em id="monNote" style="font-style:normal"></em></span>
       <span id="focusBox"></span>
       <span><b>WINDOW</b><em id="fWin" style="font-style:normal">–</em></span>
       <span><b>MESSAGES</b><em id="fMsgs" style="font-style:normal">–</em></span>
@@ -146,7 +147,7 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid 
 <script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/topojson-client@3.1.0/dist/topojson-client.min.js"></script>
 <script src="prefixes.js?v=1"></script>
-<script src="ft8viz.js?v=4"></script>
+<script src="ft8viz.js?v=5" data-proto="ft8"></script>
 <script src="focus.js?v=1" data-focus="hf" data-what="the HF input, so FT8 runs all the time"></script>
 </body>
 </html>

@@ -88,6 +88,15 @@ English, with distance from your locator ("Home", default CM87; `POST /api/ft8/q
 API: `GET/POST /api/ft8` (status / `{on, bands}`), `GET /api/ft8/decodes?after_id=`,
 `GET /api/ft8/conversations?hours=`, `GET /api/ft8/stats?hours=`.
 
+## FT4
+
+The FT8 monitor also runs as an FT4 monitor (`Ft8(..., proto=FT4)`): 7.5 s slots on the FT4 dial frequencies
+(3.575, 7.0475, 10.140, 14.080, 18.104, 21.140, 24.919, 28.180, 50.318 MHz), `decode_ft8 -ft4`, table `ft4`, API
+`/api/ft4/...` (the same endpoints as FT8). Each slot is decoded twice, the second time with its first 0.4 s cut
+(the Malahit toolkit found ft8_lib's FT4 decoder missing signals that start later than ~0.5 s into the file);
+the results are merged. Tested end to end with a signal from ft8_lib's `gen_ft8 -ft4`. The FT4 map
+(`ft4.html`) is the FT8 Skywatch page with `data-proto="ft4"`; both pages have a Start/Stop for their monitor.
+
 ## SSTV
 
 Each SSTV channel's last 20 s of audio is checked every 5 s with the Malahit toolkit's detector
@@ -106,7 +115,8 @@ API: `GET/POST /api/sstv` (status / `{on}`), `GET /api/sstv/pictures`, `GET /api
 ## The web app
 
 http://127.0.0.1:8090 is a tab bar with one page per feature: **Radio** (`radio.html`: tuning, waterfall,
-channels, scans, monitors, FT8/SSTV controls, recordings, dashboard), **FT8 map** (`ft8.html`), **Airband**
+channels, scans, monitors, FT8/SSTV controls, recordings, dashboard), **FT8 map** (`ft8.html`), **FT4 map**
+(`ft4.html`), **Airband**
 (`airband.html`), **Public safety** (`safety.html`) and **SSTV** (`sstv.html`: the monitor's frequencies with a
 live detector meter and Listen, a *Receiving now* window where a picture builds up line by line while it's
 being received (the capture is decoded every 5 s), and the picture gallery with a full-size viewer). A page is loaded the first time its tab is opened and then

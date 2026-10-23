@@ -1,5 +1,9 @@
-// FT8 Skywatch: world map + per-station timeline of rxapp's FT8 decodes, live or replayed.
+// FT8 / FT4 Skywatch: world map + per-station timeline of rxapp's FT8 or FT4 decodes, live or replayed.
+// The page says which: <script src="ft8viz.js" data-proto="ft4">.
 'use strict';
+const PROTO = (document.currentScript && document.currentScript.dataset.proto) || 'ft8';
+const API = '/api/' + PROTO;
+let SLOT = PROTO === 'ft4' ? 7.5 : 15;          // replaced by the monitor's own slot length once loaded
 
 const $ = (id) => document.getElementById(id);
 const api = async (path, opts) => {
@@ -285,14 +289,14 @@ function renderTimeline() {
   for (const r of S.rows) {
     const i = S.laneOf.get(r.from_call);
     if (i == null || r.t < t0) continue;
-    const cx = x(r.t + 7.5), cy = TL.top + i * TL.lane + TL.lane / 2;
+    const cx = x(r.t + SLOT / 2), cy = TL.top + i * TL.lane + TL.lane / 2;
     g.globalAlpha = r.t > S.cursor ? 0.18 : 1;
     g.fillStyle = colors[r.ph];
     g.beginPath(); g.arc(cx, cy, 3.6, 0, 2 * Math.PI); g.fill();
   }
   g.globalAlpha = 1;
   if (S.sel && S.laneOf.has(S.sel.from_call)) {
-    const cx = x(S.sel.t + 7.5), cy = TL.top + S.laneOf.get(S.sel.from_call) * TL.lane + TL.lane / 2;
+    const cx = x(S.sel.t + SLOT / 2), cy = TL.top + S.laneOf.get(S.sel.from_call) * TL.lane + TL.lane / 2;
     g.strokeStyle = ink; g.lineWidth = 2; g.beginPath(); g.arc(cx, cy, 6, 0, 2 * Math.PI); g.stroke();
   }
   // cursor
@@ -313,7 +317,7 @@ function timelineHit(e) {
   const s = S.lanes[i];
   if (!s) return;
   let best = null, bd = 9;
-  for (const r of s.rows) { const d = Math.abs(TL.x(r.t + 7.5) - px); if (d < bd) { bd = d; best = r; } }
+  for (const r of s.rows) { const d = Math.abs(TL.x(r.t + SLOT / 2) - px); if (d < bd) { bd = d; best = r; } }
   if (best) select(best, true);
   else setCursor(TL.t0 + (px - TL.left) / (TL.w - TL.left - TL.right) * (TL.t1 - TL.t0));
 }
@@ -344,7 +348,7 @@ function meaning(r) {
 
 function select(r, moveCursor) {
   S.sel = r;
-  if (moveCursor && r.t + 15 < Date.now() / 1000 - 1) { S.follow = false; S.cursor = r.t + 14.9; }
+  if (moveCursor && r.t + SLOT < Date.now() / 1000 - 1) { S.follow = false; S.cursor = r.t + SLOT - 0.1; }
   const p = PHASES[r.ph];
   $('dTime').textContent = utc(r.t) + ' UTC';
   $('dCall').textContent = r.ph === 'cq' ? `${r.from_call} · CQ` : r.from_call ? `${r.from_call} → ${r.to_call}` : r.band;
@@ -400,12 +404,14 @@ function playStep(ts) {
 
 // ------------------------------------------------------------------ data
 async function load() {
-  const info = await api('/api/ft8');
+  const info = await api(API);
+  SLOT = info.slot_sec || SLOT;
+  drawMonitor(info);
   S.qth = info.qth || 'CM87';
   S.home = gridLL(S.qth);
   $('qth').value = S.qth;
   const since = Date.now() / 1000 - S.win;
-  const rows = await api(`/api/ft8/decodes?since=${since}&limit=50000`);
+  const rows = await api(`${API}/decodes?since=${since}&limit=50000`);
   S.all = rows.reverse();
   S.lastId = S.all.reduce((m, r) => Math.max(m, r.id), 0);
   const bands = BAND_ORDER.filter((b) => info.available.includes(b));
@@ -416,7 +422,7 @@ async function load() {
 
 async function poll() {
   try {
-    const add = await api(`/api/ft8/decodes?after_id=${S.lastId}&limit=50000`);
+    const add = await api(`${API}/decodes?after_id=${S.lastId}&limit=50000`);
     if (add.length) {
       add.reverse();
       S.all.push(...add);
@@ -458,7 +464,7 @@ async function main() {
   $('band').addEventListener('change', () => { S.band = $('band').value; derive(); draw(); });
   $('find').addEventListener('input', () => { S.find = $('find').value.trim().toUpperCase(); derive(); draw(); });
   $('qth').addEventListener('change', async () => {
-    try { await api('/api/ft8/qth', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({grid: $('qth').value})}); }
+    try { await api(`${API}/qth`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({grid: $('qth').value})}); }
     catch (e) { alert(e.message); }
     load();
   });
@@ -472,7 +478,7 @@ async function main() {
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
     if (e.key === ' ') { e.preventDefault(); $('play').click(); }
     if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
-      e.preventDefault(); S.playing = false; setCursor(S.cursor + (e.key === 'ArrowRight' ? 15 : -15) * (e.shiftKey ? 20 : 1));
+      e.preventDefault(); S.playing = false; setCursor(S.cursor + (e.key === 'ArrowRight' ? SLOT : -SLOT) * (e.shiftKey ? 20 : 1));
     }
   });
   new ResizeObserver(() => draw()).observe($('tlwrap'));
@@ -481,3 +487,20 @@ async function main() {
   setInterval(poll, 5000);
 }
 main();
+
+// ------------------------------------------------------------------ monitor on/off (also on the Radio tab for FT8)
+function drawMonitor(info) {
+  const b = $('monBtn'); if (!b || !info) return;
+  b.textContent = info.running ? `${PROTO.toUpperCase()} monitor on · Stop` : `Start ${PROTO.toUpperCase()} monitor`;
+  b.dataset.running = info.running ? '1' : '';
+  $('monNote').textContent = info.running ? `${info.bands.length} bands, ${info.slot_sec} s slots` : 'not decoding';
+}
+if ($('monBtn')) {
+  $('monBtn').addEventListener('click', async () => {
+    $('monBtn').disabled = true;
+    try { drawMonitor(await api(API, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({on: !$('monBtn').dataset.running})})); }
+    catch (e) { alert(e.message); }
+    $('monBtn').disabled = false;
+  });
+  setInterval(async () => { try { drawMonitor(await api(API)); } catch (e) { /* restarting */ } }, 10000);
+}

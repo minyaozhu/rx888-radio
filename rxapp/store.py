@@ -1,4 +1,4 @@
-"""SQLite log: scans and their detections, recordings, health samples, events, FT8 decodes, SSTV pictures."""
+"""SQLite log: scans and their detections, recordings, health samples, events, FT8 and FT4 decodes, SSTV pictures."""
 
 import json
 import sqlite3
@@ -23,11 +23,11 @@ CREATE TABLE IF NOT EXISTS events (t REAL NOT NULL, kind TEXT, detail TEXT);
 """
 
 FT8_SCHEMA = """
-CREATE TABLE IF NOT EXISTS ft8 (
+CREATE TABLE IF NOT EXISTS {t} (
   id INTEGER PRIMARY KEY, t REAL NOT NULL, band TEXT NOT NULL, dial_hz REAL, hz REAL,
   score REAL, dt REAL, msg TEXT, to_call TEXT, from_call TEXT, extra TEXT);
-CREATE INDEX IF NOT EXISTS ft8_t ON ft8(t);
-CREATE INDEX IF NOT EXISTS ft8_from ON ft8(from_call);
+CREATE INDEX IF NOT EXISTS {t}_t ON {t}(t);
+CREATE INDEX IF NOT EXISTS {t}_from ON {t}(from_call);
 """
 
 SSTV_SCHEMA = """
@@ -76,14 +76,16 @@ class Store:
     def finish_recording(self, rid, stop, seconds, peak):
         self._exec("UPDATE recordings SET stop=?, seconds=?, peak_dbfs=? WHERE id=?", (stop, seconds, peak, rid))
 
-    def ensure_ft8(self):
+    def ensure_ft8(self, table="ft8"):
+        assert table in ("ft8", "ft4")
         with self.lock:
-            self.db.executescript(FT8_SCHEMA)
+            self.db.executescript(FT8_SCHEMA.format(t=table))
 
-    def add_ft8(self, t, band, dial_hz, rows):
+    def add_ft8(self, t, band, dial_hz, rows, table="ft8"):
+        assert table in ("ft8", "ft4")
         with self.lock:
             self.db.executemany(
-                "INSERT INTO ft8 (t,band,dial_hz,hz,score,dt,msg,to_call,from_call,extra) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                f"INSERT INTO {table} (t,band,dial_hz,hz,score,dt,msg,to_call,from_call,extra) VALUES (?,?,?,?,?,?,?,?,?,?)",
                 [(t, band, dial_hz, r["hz"], r["score"], r["dt"], r["msg"], r["to_call"], r["from_call"], r["extra"])
                  for r in rows])
             self.db.commit()

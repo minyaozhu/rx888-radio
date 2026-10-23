@@ -1,8 +1,8 @@
-"""FT8 on every HF band at once.
+"""FT8 and FT4 on every HF band at once.
 
-One USB channel per FT8 dial frequency (radiod demodulates them all from the same ADC stream).
-Each channel's audio is cut into 15 s UTC slots, decoded with ft8_lib's decode_ft8, and the
-messages go into the database, grouped later into conversations (who called whom).
+One USB channel per dial frequency (radiod demodulates them all from the same ADC stream). Each
+channel's audio is cut into UTC slots (FT8 15 s, FT4 7.5 s), decoded with ft8_lib's decode_ft8, and
+the messages go into the database (tables ft8 / ft4), grouped later into conversations.
 
 Slot timing uses RTP timestamps, not packet arrival: each channel keeps the smallest
 (arrival - timestamp/rate) seen recently as its clock offset, which is the arrival time of a
@@ -44,6 +44,25 @@ TX_START_SEC = 0.5           # FT8 transmissions start 0.5 s into the slot; dt i
 DIALS = [("160m", 1.840e6), ("80m", 3.573e6), ("60m", 5.357e6), ("40m", 7.074e6), ("30m", 10.136e6),
          ("20m", 14.074e6), ("17m", 18.100e6), ("15m", 21.074e6), ("12m", 24.915e6), ("10m", 28.074e6),
          ("6m", 50.313e6)]
+# FT4 dial frequencies (USB)
+FT4_DIALS = [("80m", 3.575e6), ("40m", 7.0475e6), ("30m", 10.140e6), ("20m", 14.080e6), ("17m", 18.104e6),
+             ("15m", 21.140e6), ("12m", 24.919e6), ("10m", 28.180e6), ("6m", 50.318e6)]
+
+
+@dataclass(frozen=True)
+class Proto:
+    name: str                    # ft8 | ft4: table, channel kind, API prefix
+    slot: float                  # seconds
+    dials: tuple
+    args: tuple                  # extra decode_ft8 arguments
+    trims: tuple                 # decode the slot again with its first N s cut off (merged)
+
+
+FT8 = Proto("ft8", 15.0, tuple(DIALS), (), (0.0,))
+# ft8_lib's FT4 decoder only finds signals starting within ~0.5 s of the file start (found with the Malahit
+# toolkit); FT4 starts 0.5 s into the slot, so each slot is also decoded with its first 0.4 s cut.
+FT4 = Proto("ft4", 7.5, tuple(FT4_DIALS), ("-ft4",), (0.0, 0.4))
+PROTOS = {"ft8": FT8, "ft4": FT4}
 
 # decode_ft8 prints e.g. "000000 +13.5 +0.08 1497 ~  N2SAB W5WCA DN70":
 # slot, score (ft8_lib's rough SNR), dt s, audio Hz, '~', message
@@ -149,44 +168,50 @@ class Feed:
 
 
 class Ft8:
-    def __init__(self, radio, rtp, store):
-        self.radio, self.rtp, self.store = radio, rtp, store
+    """The FT8 (or, with proto=FT4, the FT4) monitor."""
+
+    def __init__(self, radio, rtp, store, proto: Proto = FT8):
+        self.radio, self.rtp, self.store, self.proto = radio, rtp, store, proto
         self.feeds: Dict[str, Feed] = {}
         self._task: Optional[asyncio.Task] = None
         self._sem = asyncio.Semaphore(DECODE_JOBS)
-        self.tmp = CONFIG.data_dir / "ft8_tmp"
-        store.ensure_ft8()
+        self.tmp = CONFIG.data_dir / f"{proto.name}_tmp"
+        store.ensure_ft8(proto.name)
 
     @property
     def running(self):
         return self._task is not None
 
-    @staticmethod
-    def available():
-        return [(b, f) for b, f in DIALS if f + 5e3 < CONFIG.max_freq_hz]
+    @property
+    def saved_bands(self):
+        return getattr(RUNTIME, f"{self.proto.name}_bands")
+
+    def available(self):
+        return [(b, f) for b, f in self.proto.dials if f + 5e3 < CONFIG.max_freq_hz]
 
     async def start(self, bands: Optional[List[str]] = None):
         if not DECODER.exists():
             raise RuntimeError(f"decode_ft8 not found at {DECODER}; see README (ft8_lib)")
-        wanted = bands or [b for b, _ in DIALS]
+        name = self.proto.name.upper()
+        wanted = bands or [b for b, _ in self.proto.dials]
         avail = dict(self.available())
         bands = [b for b in wanted if b in avail]          # 6 m needs the 0-64 MHz coverage
         if not bands:
-            raise ValueError("no FT8 band fits the current coverage")
+            raise ValueError(f"no {name} band fits the current coverage")
         await self.stop(save=False)
         self.tmp.mkdir(parents=True, exist_ok=True)
         for b in bands:
             feed = Feed(b, avail[b])
-            ch = await self.radio.create(feed.dial_hz, "usb", label=f"FT8 {b}", kind="ft8", band="hf",
+            ch = await self.radio.create(feed.dial_hz, "usb", label=f"{name} {b}", kind=self.proto.name, band="hf",
                                          filter_hz=FILTER_HZ)
             feed.ssrc = ch.ssrc
             self.rtp.subscribe(ch.ssrc, self._sub(feed))
             self.feeds[b] = feed
         self._task = asyncio.create_task(self._loop())
-        RUNTIME.ft8_bands = wanted                         # kept for when the coverage allows more
+        setattr(RUNTIME, f"{self.proto.name}_bands", wanted)     # kept for when the coverage allows more
         RUNTIME.save()
-        self.store.event("ft8_start", bands=bands)
-        log.info("FT8 on %s", ", ".join(bands))
+        self.store.event(f"{self.proto.name}_start", bands=bands)
+        log.info("%s on %s", name, ", ".join(bands))
 
     async def stop(self, save: bool = True):
         if self._task:
@@ -197,9 +222,9 @@ class Ft8:
             await self.radio.remove(feed.ssrc)
         self.feeds.clear()
         if save:
-            RUNTIME.ft8_bands = None
+            setattr(RUNTIME, f"{self.proto.name}_bands", None)
             RUNTIME.save()
-            self.store.event("ft8_stop")
+            self.store.event(f"{self.proto.name}_stop")
 
     @staticmethod
     def _sub(feed):
@@ -208,44 +233,52 @@ class Ft8:
     async def _loop(self):
         while True:
             now = time.time()
-            t0 = math.floor(now / SLOT_SEC) * SLOT_SEC        # the slot in progress
-            await asyncio.sleep(t0 + SLOT_SEC + DECODE_DELAY - now)
+            slot = self.proto.slot
+            t0 = math.floor(now / slot) * slot                 # the slot in progress
+            await asyncio.sleep(t0 + slot + DECODE_DELAY - now)
             try:
                 await asyncio.gather(*(self._decode(feed, t0) for feed in list(self.feeds.values())))
             except asyncio.CancelledError:
                 raise
             except Exception:
-                log.exception("FT8 slot %s", time.strftime("%H:%M:%S", time.gmtime(t0)))
+                log.exception("%s slot %s", self.proto.name, time.strftime("%H:%M:%S", time.gmtime(t0)))
 
     async def _decode(self, feed: Feed, t0: float):
-        audio = feed.cut(t0, SLOT_SEC)
+        audio = feed.cut(t0, self.proto.slot)
         if audio is None:
             feed.last_count = None
             return
-        path = self.tmp / f"{feed.band}_{int(t0)}.wav"
-        with wave.open(str(path), "wb") as w:
-            w.setnchannels(1)
-            w.setsampwidth(2)
-            w.setframerate(RATE)
-            w.writeframes(audio.tobytes())
-        try:
-            async with self._sem:
-                out = await asyncio.to_thread(
-                    subprocess.run, [str(DECODER), str(path)], capture_output=True, text=True, timeout=30)
-            rows = parse(out.stdout)
-            for r in rows:
-                r["dt"] = round(r["dt"] - TX_START_SEC, 2)       # like WSJT-X: 0 = on time
-        finally:
-            path.unlink(missing_ok=True)
+        rows, seen = [], set()
+        for trim in self.proto.trims:
+            cut = int(trim * RATE)
+            a = np.concatenate([audio[cut:], np.zeros(cut, audio.dtype)]) if cut else audio
+            path = self.tmp / f"{feed.band}_{int(t0 * 10)}_{cut}.wav"
+            with wave.open(str(path), "wb") as w:
+                w.setnchannels(1)
+                w.setsampwidth(2)
+                w.setframerate(RATE)
+                w.writeframes(a.tobytes())
+            try:
+                async with self._sem:
+                    out = await asyncio.to_thread(subprocess.run, [str(DECODER), *self.proto.args, str(path)],
+                                                  capture_output=True, text=True, timeout=30)
+            finally:
+                path.unlink(missing_ok=True)
+            for r in parse(out.stdout):
+                if r["msg"] in seen:
+                    continue
+                seen.add(r["msg"])
+                r["dt"] = round(r["dt"] + trim - TX_START_SEC, 2)     # like WSJT-X: 0 = on time
+                rows.append(r)
         feed.slots += 1
         feed.decodes += len(rows)
         feed.last_count, feed.last_slot = len(rows), t0
         if rows:
-            self.store.add_ft8(t0, feed.band, feed.dial_hz, rows)
+            self.store.add_ft8(t0, feed.band, feed.dial_hz, rows, table=self.proto.name)
 
     def info(self):
         return {"running": self.running, "decoder": DECODER.exists(), "qth": RUNTIME.qth,
-                "available": [b for b, _ in self.available()], "slot_sec": SLOT_SEC,
+                "available": [b for b, _ in self.available()], "slot_sec": self.proto.slot, "proto": self.proto.name,
                 "bands": [{"band": f.band, "dial_hz": f.dial_hz, "ssrc": f.ssrc,
                            "parked": getattr(self.radio.channels.get(f.ssrc), "parked", True),
                            "slots": f.slots, "decodes": f.decodes, "last_count": f.last_count,
