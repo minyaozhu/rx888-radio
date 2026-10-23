@@ -137,10 +137,44 @@ function drawTimeline() {
 // Real Bay Area map: airports at their reference points (lit while one of their frequencies is on
 // the air, with the latest words), flights at the airport whose tower/ground they're talking to, or
 // along the SFO Quiet Bridge arrival flow when they're with NorCal Approach.
-const map = L.map('map', {zoomControl: true, attributionControl: true}).setView([37.62, -122.16], 9);
+// zoomSnap 0.25: finer zoom steps, so a saved view can be just right
+const map = L.map('map', {zoomControl: true, attributionControl: true, zoomSnap: 0.25, zoomDelta: 0.5}).setView([37.62, -122.16], 9);
 // Leaflet measures its box when created; fonts and the panel layout settle later, so measure again
-const fitAirports = () => map.fitBounds(BAY_AIRPORTS.map((a) => [a.lat, a.lon]), {padding: [24, 24]});
-for (const ms of [200, 800, 2000]) setTimeout(() => { map.invalidateSize(); if (ms === 800) fitAirports(); }, ms);
+const fitAirports = () => map.fitBounds(BAY_AIRPORTS.map((a) => [a.lat, a.lon]), {padding: [24, 24], animate: false});
+// Default view: whatever was saved with "Save view" (kept in this browser), else all airports
+const VIEW_KEY = 'airband.mapView';
+function savedView() {
+  try { const v = JSON.parse(localStorage.getItem(VIEW_KEY)); return v && isFinite(v.lat) && isFinite(v.zoom) ? v : null; }
+  catch (e) { return null; }
+}
+const homeView = () => { const v = savedView(); if (v) map.setView([v.lat, v.lon], v.zoom, {animate: false}); else fitAirports(); };
+homeView();
+for (const ms of [200, 800, 2000]) setTimeout(() => { map.invalidateSize(); if (ms === 800) homeView(); }, ms);
+const ViewControl = L.Control.extend({
+  options: {position: 'topleft'},
+  onAdd() {
+    const box = L.DomUtil.create('div', 'leaflet-bar viewctl');
+    const save = L.DomUtil.create('a', '', box), home = L.DomUtil.create('a', '', box);
+    save.href = home.href = '#';
+    save.textContent = '★'; save.title = 'Save this view as the default';
+    home.textContent = '⌂'; home.title = 'Back to the default view (double-click: forget it)';
+    L.DomEvent.disableClickPropagation(box);
+    L.DomEvent.on(save, 'click', (e) => {
+      L.DomEvent.preventDefault(e);
+      const c = map.getCenter();
+      try { localStorage.setItem(VIEW_KEY, JSON.stringify({lat: +c.lat.toFixed(5), lon: +c.lng.toFixed(5), zoom: map.getZoom()})); } catch (err) { /* private mode */ }
+      save.textContent = '✓'; setTimeout(() => { save.textContent = '★'; }, 1200);
+    });
+    L.DomEvent.on(home, 'click', (e) => { L.DomEvent.preventDefault(e); homeView(); });
+    L.DomEvent.on(home, 'dblclick', (e) => {
+      L.DomEvent.preventDefault(e);
+      try { localStorage.removeItem(VIEW_KEY); } catch (err) { /* ignore */ }
+      fitAirports();
+    });
+    return box;
+  },
+});
+new ViewControl().addTo(map);
 new ResizeObserver(() => map.invalidateSize()).observe($('map'));
 L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {      // darkened by CSS in dark mode
   maxZoom: 15, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
