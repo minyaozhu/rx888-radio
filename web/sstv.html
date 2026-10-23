@@ -163,6 +163,12 @@ button.on{background:var(--magenta)}
 .lb img{max-width:100%;max-height:72vh;display:block;margin:0 auto;image-rendering:auto}
 .lb .row{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;justify-content:space-between;font:500 13px "IBM Plex Mono",monospace}
 .away{color:var(--c-alt)}
+.livewrap{display:flex;flex-wrap:wrap;gap:16px}
+.livepic{display:grid;gap:6px;width:min(100%,520px)}
+.livepic img{width:100%;aspect-ratio:320/256;object-fit:contain;background:#000;border-radius:4px;border:2px solid var(--magenta)}
+.livepic .cap{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;font:500 13px "IBM Plex Mono",monospace}
+.prog{height:6px;border-radius:3px;background:var(--line);overflow:hidden}
+.prog b{display:block;height:100%;background:var(--magenta);transition:width .5s}
 </style>
 </head>
 <body>
@@ -195,6 +201,14 @@ button.on{background:var(--magenta)}
 
   <div class="panel" style="padding:14px 18px">
     <div class="bar2">
+      <h2 style="font:700 13px/1 'Barlow Condensed',sans-serif;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin:0">Receiving now</h2>
+      <span class="lanesub">the picture builds up line by line, updated every 5 s</span>
+    </div>
+    <div id="live" class="livewrap"></div>
+  </div>
+
+  <div class="panel" style="padding:14px 18px">
+    <div class="bar2">
       <h2 style="font:700 13px/1 'Barlow Condensed',sans-serif;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin:0">Gallery</h2>
       <select id="fBand" aria-label="Band"><option value="">all bands</option></select>
       <span id="count" class="lanesub"></span>
@@ -211,7 +225,7 @@ button.on{background:var(--magenta)}
       <button id="lbDel" class="smallbtn" type="button">Delete</button> <button id="lbClose" class="smallbtn" type="button">Close</button></span></div>
   </div>
 </div>
-<script src="sstv.js?v=1"></script>
+<script src="sstv.js?v=2"></script>
 <script src="focus.js?v=1" data-focus="hf" data-what="the HF input, so SSTV (and FT8) run all the time"></script>
 </body>
 </html>

@@ -329,6 +329,15 @@ def _sstv_row(pid):
     return r[0]
 
 
+@app.get("/api/sstv/live/{band}.png")
+async def sstv_live(band: str):
+    """The picture being received on a band right now, as decoded so far."""
+    path = S.sstv.dir / f"live_{Path(band).name}.png"
+    if not path.exists():
+        raise HTTPException(404, "nothing being received on that band")
+    return FileResponse(path, media_type="image/png", headers={"Cache-Control": "no-store"})
+
+
 @app.get("/api/sstv/pictures/{pid}.png")
 async def sstv_png(pid: int):
     return FileResponse(_sstv_row(pid)["png"], media_type="image/png")

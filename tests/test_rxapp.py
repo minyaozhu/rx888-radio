@@ -489,3 +489,28 @@ def test_focus_holds_the_rotation_on_one_kind_of_window(monkeypatch):
     assert len(moves) == n                            # the only HF window is the current one: stay
     s.focus = "pause"
     assert s.idle
+
+
+def test_sstv_live_picture_builds_up_then_clears(tmp_path):
+    saved = []
+    store = SimpleNamespace(add_sstv=lambda **r: saved.append(r), event=lambda *a, **k: None)
+    mon = sstvmon.SstvMonitor.__new__(sstvmon.SstvMonitor)
+    mon.store, mon.dir = store, tmp_path
+    w = sstvmon.Watch("20m", 14.230e6, "usb")
+    audio = _sstv_audio()
+    step = int(sstvmon.CHECK_EVERY * sstvmon.RATE)
+    rows = []
+
+    async def run():
+        t = 1_800_000_000.0
+        for i in range(0, len(audio), step):
+            w.add(audio[i:i + step].tobytes())
+            t += sstvmon.CHECK_EVERY
+            await mon.check(w, t)
+            if w.live:
+                rows.append(w.live["rows"])
+                assert (tmp_path / "live_20m.png").exists() and w.live["mode"] == "MARTIN_1"
+    asyncio.run(run())
+    assert len(rows) >= 5 and rows == sorted(rows) and rows[0] < rows[-1]     # it grows line by line
+    assert w.live is None and not (tmp_path / "live_20m.png").exists()          # cleared when the picture is saved
+    assert len(saved) == 1

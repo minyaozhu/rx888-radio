@@ -167,6 +167,16 @@ abbr.code{text-decoration:underline dotted var(--magenta);text-underline-offset:
 .acbar{display:flex;flex-wrap:wrap;align-items:center;gap:6px 14px;margin-top:8px;font:500 12px "IBM Plex Mono",monospace;color:var(--muted)}
 .acbar i{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:4px;vertical-align:-1px}
 .pin-tip{font:500 12px "Barlow",sans-serif;max-width:280px;white-space:normal}
+.pin-lab{background:var(--panel);color:var(--ink);border:1px solid var(--line);box-shadow:none;font:600 11px/1.25 "IBM Plex Mono",monospace;padding:2px 5px;white-space:nowrap}
+.pin-lab:before{display:none}
+.pin-lab b{color:#D64545;font-weight:600}
+.pin-lab.old b{color:var(--muted)}
+.acts{max-height:260px;overflow:auto;margin:0;padding:0;list-style:none;font:400 13px/1.35 "Barlow",sans-serif}
+.acts li{display:grid;grid-template-columns:6ch 1fr;gap:2px 8px;border-top:1px solid var(--line);padding:4px 2px;cursor:pointer}
+.acts li:hover{background:var(--bg)}
+.acts .t{font:500 12px "IBM Plex Mono",monospace;color:var(--muted)}
+.acts .a{font-weight:600}
+.acts .w{grid-column:2;color:var(--muted);font:12px "IBM Plex Mono",monospace}
 </style>
 </head>
 <body>
@@ -206,6 +216,8 @@ abbr.code{text-decoration:underline dotted var(--magenta);text-underline-offset:
       <p class="atc" id="dAtc"></p>
       <p class="meta" id="dMeta"></p>
       <div><button id="clip" class="clipbtn" type="button" disabled>Play clip</button></div>
+      <h2 style="margin-top:6px">Activity <span id="actCount" style="font-weight:500;letter-spacing:0;text-transform:none"></span></h2>
+      <ul class="acts" id="acts"></ul>
       <h2 style="margin-top:6px">Codes heard</h2>
       <ul class="codes" id="codes"></ul>
     </div>
@@ -233,8 +245,8 @@ abbr.code{text-decoration:underline dotted var(--magenta);text-underline-offset:
   <p class="caveat">Transcripts are raw Whisper output from noisy FM audio, shown twice: plain, and with a police vocabulary hint. Code meanings are the common ones and vary by agency. Digital detection is a heuristic (steady level and a flat spectrum), so some noisy voice may be flagged digital and the other way round. The receiver rotates through airband and public-safety windows, so each channel is heard part of the time; the header says what's being listened to now. Listening to unencrypted public-safety radio is generally legal in the US; publishing or acting on what you hear is restricted, so this stays on this Mac. Map positions are approximate: towns from a built-in list, highway + cross street looked up on OpenStreetMap (only road and place names are sent, never house numbers).</p>
 </div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
-<script src="bayps.js?v=1"></script>
-<script src="safety.js?v=2"></script>
+<script src="bayps.js?v=3"></script>
+<script src="safety.js?v=3"></script>
 <script src="focus.js?v=1" data-focus="safety" data-what="public safety (low band and VHF-high)"></script>
 </body>
 </html>

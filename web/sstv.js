@@ -71,6 +71,33 @@ $('rows').addEventListener('click', (e) => {
 $('listen').addEventListener('click', () => { stopListen(); drawRows(); });
 $('vol').addEventListener('input', () => { if (audio.gain) audio.gain.gain.value = +$('vol').value; });
 
+// ------------------------------------------------------------------ receiving now
+function drawLive() {
+  const live = (S.info.channels || []).filter((c) => c.live);
+  const capturing = (S.info.channels || []).filter((c) => c.state.startsWith('capturing') && !c.live);
+  if (!live.length) {
+    $('live').innerHTML = `<p class="empty">${capturing.length
+      ? `Capturing on ${capturing.map((c) => esc(c.band)).join(', ')}: waiting for the opening tone burst that names the mode before the picture can be drawn.`
+      : 'Nothing being received right now. When a frequency’s detector passes the mark, its picture appears here and builds up line by line.'}</p>`;
+    return;
+  }
+  // keep the <img> elements, so the picture doesn't flash on every update
+  const have = new Set([...$('live').querySelectorAll('.livepic')].map((d) => d.dataset.band));
+  if (live.some((c) => !have.has(c.band)) || have.size !== live.length) {
+    $('live').innerHTML = live.map((c) => `<div class="livepic" data-band="${esc(c.band)}">
+        <img alt="SSTV picture being received on ${esc(c.band)}"><div class="prog"><b></b></div><div class="cap"></div></div>`).join('');
+  }
+  for (const c of live) {
+    const d = $('live').querySelector(`.livepic[data-band="${CSS.escape(c.band)}"]`);
+    const L = c.live, pct = Math.round(100 * L.rows / L.height);
+    const img = d.querySelector('img'), url = `/api/sstv/live/${encodeURIComponent(c.band)}.png?t=${L.updated}`;
+    if (img.dataset.src !== url) { img.dataset.src = url; img.src = url; }
+    d.querySelector('.prog b').style.width = pct + '%';
+    d.querySelector('.cap').innerHTML = `<span>● ${esc(c.band)} ${mhz(c.freq_hz)} MHz · ${esc(L.mode.replace(/_/g, ' '))}</span>
+      <span>${L.rows}/${L.height} lines (${pct}%) · ${L.seconds} s</span>`;
+  }
+}
+
 // ------------------------------------------------------------------ gallery + viewer
 function drawGallery() {
   const band = $('fBand').value;
@@ -113,7 +140,7 @@ $('lbDel').addEventListener('click', async () => {
 async function refresh() {
   try {
     [S.info, S.health] = await Promise.all([api('/api/sstv'), api('/api/health')]);
-    drawRows();
+    drawRows(); drawLive();
     const pics = await api('/api/sstv/pictures?limit=500');
     const ids = pics.map((p) => p.id).join();
     if (ids !== S.ids) { S.ids = ids; S.pics = pics; drawGallery(); }

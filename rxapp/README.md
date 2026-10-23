@@ -108,7 +108,8 @@ API: `GET/POST /api/sstv` (status / `{on}`), `GET /api/sstv/pictures`, `GET /api
 http://127.0.0.1:8090 is a tab bar with one page per feature: **Radio** (`radio.html`: tuning, waterfall,
 channels, scans, monitors, FT8/SSTV controls, recordings, dashboard), **FT8 map** (`ft8.html`), **Airband**
 (`airband.html`), **Public safety** (`safety.html`) and **SSTV** (`sstv.html`: the monitor's frequencies with a
-live detector meter and Listen, and the picture gallery with a full-size viewer). A page is loaded the first time its tab is opened and then
+live detector meter and Listen, a *Receiving now* window where a picture builds up line by line while it's
+being received (the capture is decoded every 5 s), and the picture gallery with a full-size viewer). A page is loaded the first time its tab is opened and then
 kept, so audio playing in one tab keeps playing in another; the address names the tab (`/#airband`). The bar
 shows radiod's health.
 
@@ -154,6 +155,10 @@ While the low-band window is on, the FT8 and SSTV monitors (HF) run too. Output 
   (`rxapp_data/geocache.json`) and run at most once a second, as Nominatim's policy asks; only road and place
   names are sent, never house numbers. Approximate: a cross street can be miles long. A small table fixes
   Whisper's usual misspellings ("capital expressway").
+- **Annotations.** Each call's activity is read from its codes and words (collision and injuries from the
+  11-79…11-83 codes, fatality, pursuit, DUI, fire, BOLO / broadcast, traffic hazard, disabled vehicle, tow, medical,
+  record check, traffic control) and shown as a label on its pin for 2 hours, and in an Activity list that also
+  has the calls without a location (`web/bayps.js`).
 - **The page** (`safety.html`): live transcript with radio codes explained on hover (common meanings; agencies
   differ), filters by channel and text, Listen with Follow activity, a per-channel timeline (voice / digital /
   no speech), and the codes heard. It says when the receiver is away on another window.

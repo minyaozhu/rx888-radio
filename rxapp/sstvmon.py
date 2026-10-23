@@ -31,6 +31,7 @@ PRE_ROLL = 40.0            # s kept before a trigger (the VIS header comes befor
 QUIET_END = 20.0           # s without SSTV that ends a capture
 MAX_CAPTURE = 360.0        # s; the longest common modes (PD290) take ~290 s
 FILTER_HZ = (100.0, 3000.0)
+LIVE_EVERY = 5.0           # s between decodes of a capture in progress (the "receiving now" window)
 SETTLE = 30.0              # s ignored after a channel starts: its AGC settling looks like sync pulses
 
 # Sync period per line (ms). PD modes send one sync per two lines.
@@ -95,6 +96,8 @@ class Watch:
     last: dict = field(default_factory=dict)            # latest detector result
     pictures: int = 0
     triggers: int = 0
+    live: Optional[dict] = None                         # the picture so far, while capturing
+    live_t: float = 0.0
 
     def add(self, pcm: bytes):
         a = np.frombuffer(pcm, "<i2")
@@ -204,7 +207,28 @@ class SstvMonitor:
         if now - w.last_sstv >= QUIET_END or w.capture_n / RATE >= MAX_CAPTURE:
             t0 = w.capture_t
             audio = w.take_capture()
+            w.live = None
+            (self.dir / f"live_{w.band}.png").unlink(missing_ok=True)
             await self._decode(w, t0, audio)
+        elif now - w.live_t >= LIVE_EVERY:
+            w.live_t = now
+            await self._live(w, now)
+
+    async def _live(self, w: Watch, now: float):
+        """Decode the capture so far: the picture builds up line by line in the page's live window."""
+        audio = np.concatenate(w.capture) if w.capture else np.zeros(0, np.int16)
+        pics = await asyncio.to_thread(decode_pictures, audio)
+        if not pics:
+            return                                          # no VIS header (yet): nothing to show
+        im = pics[-1]
+        rows = int((np.asarray(im.convert("L")) > 0).any(axis=1).sum())
+        path = self.dir / f"live_{w.band}.png"
+        tmp = path.with_suffix(".tmp.png")
+        im.save(tmp)
+        tmp.replace(path)
+        w.live = {"band": w.band, "freq_hz": w.freq_hz, "mode": str(im.info.get("sstv_mode", "")).replace("Mode.", ""),
+                  "rows": rows, "height": im.height, "width": im.width, "updated": now,
+                  "started": w.capture_t, "seconds": round(len(audio) / RATE)}
 
     async def _decode(self, w: Watch, t0: float, audio: np.ndarray):
         pics = await asyncio.to_thread(decode_pictures, audio)
@@ -234,4 +258,4 @@ class SstvMonitor:
                 "channels": [{"band": w.band, "freq_hz": w.freq_hz, "mode": w.mode, "ssrc": w.ssrc,
                               "parked": getattr(self.radio.channels.get(w.ssrc), "parked", True),
                               "state": w.state(), "last": w.last, "triggers": w.triggers,
-                              "pictures": w.pictures} for w in self.watches.values()]}
+                              "pictures": w.pictures, "live": w.live} for w in self.watches.values()]}

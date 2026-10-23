@@ -50,7 +50,8 @@ $('fFind').addEventListener('input', drawLog);
 function select(r, pan) {
   S.sel = r;
   $('dTime').textContent = hms(r.t0);
-  $('dCh').textContent = chName(r.freq_hz);
+  const act = psActivity(r.text, r.text_atc);
+  $('dCh').textContent = (act ? act + ' · ' : '') + chName(r.freq_hz);
   $('dRaw').innerHTML = r.kind === 'digital' ? 'Digital transmission (P25/DMR/NXDN): logged, not decoded.'
     : r.text ? `“${marked(r.text)}”` : '(no speech recognised)';
   $('dAtc').innerHTML = r.text_atc && r.text_atc !== r.text ? `with police vocabulary hint: “${marked(r.text_atc)}”` : '';
@@ -211,7 +212,7 @@ async function pollPlaces() {
   try {
     P.items = await api(`/api/safety/places?session=${S.session}`);
     P.byI = new Map(P.items.map((x) => [x.i, x]));
-    drawPins();
+    drawPins(); drawActs();
     const n = P.items.reduce((a, x) => a + x.places.filter((p) => p.lat != null).length, 0);
     const pend = P.items.reduce((a, x) => a + x.places.filter((p) => p.pending).length, 0);
     $('mapStatus').textContent = `${n} places${pend ? ` · ${pend} being looked up` : ''}`;
@@ -234,9 +235,36 @@ function drawPins() {
       m.bindTooltip(tip, {className: 'pin-tip', direction: 'top', sticky: p.kind === 'city'})
         .on('click', () => { const r = S.recs.find((y) => y.i === x.i); if (r) select(r, true); })
         .addTo(pinLayer);
+      // annotation: what happened there, kept on screen for the last 2 hours
+      if (Date.now() / 1000 - x.t0 < 2 * 3600 || sel) {
+        const act = psActivity(x.text, (S.recs.find((y) => y.i === x.i) || {}).text_atc);
+        const lab = L.tooltip({permanent: true, direction: 'right', offset: p.kind === 'city' ? [0, 0] : [8, 0],
+                               className: 'pin-lab' + (Date.now() / 1000 - x.t0 > 3600 ? ' old' : '')})
+          .setLatLng([p.lat, p.lon])
+          .setContent(`<b>${hms(x.t0).slice(0, 5)}</b> ${esc(act || 'Call')}${p.kind === 'road' ? '<br>' + esc(placeText(p)) : ''}`);
+        pinLayer.addLayer(lab);
+      }
     }
   }
 }
+
+// ------------------------------------------------------------------ activity list (with or without a location)
+function drawActs() {
+  const cut = Date.now() / 1000 - 2 * 3600;
+  const items = [];
+  for (const r of S.recs) {
+    if (r.t0 < cut || r.kind === 'digital' || !r.text) continue;
+    const act = psActivity(r.text, r.text_atc);
+    const pl = (P.byI.get(r.i) || {places: []}).places;
+    if (!act && !pl.length) continue;
+    items.push({r, act, where: pl.length ? pl.map(placeText).join('; ') : 'no location given'});
+  }
+  $('actCount').textContent = items.length ? `· ${items.length} in the last 2 h` : '';
+  $('acts').innerHTML = items.reverse().slice(0, 60).map((x) => `<li data-i="${x.r.i}"><span class="t">${hms(x.r.t0).slice(0, 5)}</span>
+      <span class="a">${esc(x.act || 'Call')}</span><span class="w">${esc(x.where)} · ${esc(chName(x.r.freq_hz))}</span></li>`).join('')
+    || '<li><span class="t">—</span><span class="w">Nothing recognisable in the last 2 hours.</span></li>';
+}
+$('acts').addEventListener('click', (e) => { const li = e.target.closest('li[data-i]'); if (li) select(S.recs.find((r) => r.i === +li.dataset.i), true); });
 
 // ------------------------------------------------------------------ data
 async function loadSession(name) {
@@ -266,7 +294,7 @@ async function poll(full) {
       const prev = $('fCh').value;
       $('fCh').innerHTML = '<option value="">all channels</option>' + freqs.map((f) => `<option value="${f}">${esc(chName(f))}</option>`).join('');
       $('fCh').value = prev;
-      drawLog(); drawCodes();
+      drawLog(); drawCodes(); drawActs();
     }
     followTick(); drawChans(); drawTimeline();
   } catch (e) {

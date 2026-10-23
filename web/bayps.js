@@ -41,10 +41,36 @@ const PS_CODES = {
 function psCodes(text) {
   const out = [];
   const t = (text || '').toLowerCase();
-  for (const m of t.matchAll(/\b(1[01])[- ]?(\d{1,2})\b/g)) {
+  for (const m of t.matchAll(/\b(1[01])[- ]?(\d{1,2})[a-z]?\b/g)) {      // "1029A": a letter suffix
     const k = `${m[1]}-${+m[2]}`;
     if (PS_CODES[k]) out.push([m[0], k, PS_CODES[k]]);
   }
   for (const m of t.matchAll(/\bcode ([2-7])\b/g)) out.push([m[0], `code ${m[1]}`, PS_CODES[`code ${m[1]}`]]);
   return out;
+}
+
+// What a call is about, from its codes and words (first match wins; most specific first).
+const PS_ACTIVITIES = [
+  ['Officer needs help', /\b11[- ]?99\b|officer needs (?:help|assistance)/],
+  ['Fatality', /\b11[- ]?44\b|fatal/],
+  ['Collision, major injuries', /\b11[- ]?80\b|major injur/],
+  ['Collision, ambulance responding', /\b11[- ]?79\b/],
+  ['Collision, minor injuries', /\b11[- ]?81\b|minor injur/],
+  ['Collision', /\b11[- ]?8[23]\b|collision|crash|roll ?over|t[- ]bone|rear[- ]end|spun out|into the (?:wall|divider|center divide)/],
+  ['Pursuit', /pursuit|fleeing|failed to yield|evading/],
+  ['DUI', /\bdui\b|drunk|impaired|23152|weaving/],
+  ['Fire', /\bfire\b|smoke|flames|brush fire|vehicle fire/],
+  ['BOLO / broadcast', /broadcast for|\bbolo\b|be on the lookout|attempt to locate/],
+  ['Traffic hazard', /\b11[- ]?25\b|\b1125\b|debris|in (?:the )?(?:lanes?|roadway)|hazard|pedestrian on|ladder|mattress/],
+  ['Disabled vehicle', /\b11[- ]?26\b|disabled|stalled|flat tire|out of gas|broken down/],
+  ['Abandoned vehicle', /\b11[- ]?24\b|abandoned/],
+  ['Tow', /\b11[- ]?85\b|tow truck|\btow\b/],
+  ['Medical', /medical|ambulance|\b11[- ]?41\b|unresponsive|injur/],
+  ['Record check', /\b10[- ]?2[789][a-z]?\b|\bwants\b|warrant|registration check|run a plate/],
+  ['Traffic control', /\b11[- ]?84\b|traffic control|traffic break|sig alert/],
+];
+function psActivity(...texts) {
+  const t = texts.filter(Boolean).join(' | ').toLowerCase();
+  const hit = PS_ACTIVITIES.find(([, re]) => re.test(t));
+  return hit ? hit[0] : null;
 }
