@@ -180,6 +180,21 @@ While the low-band window is on, the FT8 and SSTV monitors (HF) run too. Output 
 API: `GET /api/safety?session=`, `GET /api/safety/transmissions?session=&after=`, `GET /api/safety/places?session=`,
 `GET /api/safety/clip/{session}/{wav}`.
 
+## Maritime
+
+An on-demand marine window (`marine:vhf:159.9:marine:hold`, visited only while the receiver is held on it from
+the Maritime tab): marine voice on 25 kHz channels (ch 16, VTS 12/14, Coast Guard 22A, ...; not DSC ch 70)
+recorded and transcribed; NOAA weather radio (162.400-162.550) as listen-only channels; and AIS: a 96 kHz
+float IQ channel at 162.000 MHz (created as float: switching later mixes formats; conjugated, since the tuner
+inverts) piped into AIS-catcher (`tools/AIS-catcher`, `-r CF32 . -o 5`), with vessels and 2-hour tracks in
+`rxapp_data/marine/<stamp>/vessels.json` (`rxapp/ais.py`). Page `marine.html`: ships on the Bay map by type,
+vessel list, weather radio, marine transcript. API `/api/marine`, `/api/marine/transmissions`,
+`/api/marine/vessels`, `/api/marine/clip/...`. With the current antenna no AIS or marine voice was heard (NOAA
+weather +4 to +11 dB); ships need line of sight to the Bay.
+
+Build AIS-catcher: `git clone --depth 1 https://github.com/jvde-github/AIS-catcher.git tools/AIS-catcher &&
+cmake -S tools/AIS-catcher -B tools/AIS-catcher/build -DCMAKE_BUILD_TYPE=Release && cmake --build tools/AIS-catcher/build -j`
+
 ## Airband
 
 The airband windows of a voice session watch radiod's spectrum of the whole tuner window (a private spectrum

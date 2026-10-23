@@ -541,3 +541,45 @@ def test_ft4_slot_decodes_once_with_on_time_dt(tmp_path):
     (table, rows), = saved
     assert table == "ft4" and [r["msg"] for r in rows] == ["CQ K6ABC CM87"]   # both passes found it: kept once
     assert abs(rows[0]["dt"]) < 0.2 and rows[0]["from_call"] == "K6ABC"
+
+
+# ---- marine: AIS vessels, marine profile, on-demand windows --------------------------------
+from rxapp.ais import Vessels, category
+
+
+def test_ais_vessels_from_aiscatcher_json():
+    v = Vessels()
+    t0 = 1_800_000_000.0
+    # AIS-catcher -o 5 output for real sample messages (position report, then static data)
+    v.ingest({"class": "AIS", "type": 1, "mmsi": 366053209, "status_text": "Restricted maneuverability", "speed": 0,
+              "lon": -122.341614, "lat": 37.80212, "course": 219.3, "heading": 1, "channel": "B"}, t0)
+    v.ingest({"class": "AIS", "type": 5, "mmsi": 351759000, "callsign": "3FOF8", "shipname": "EVER DIADEM ",
+              "shiptype": 70, "shiptype_text": "Cargo ships - all ships of this type", "destination": "NEW YORK"}, t0 + 1)
+    v.ingest({"class": "AIS", "type": 1, "mmsi": 351759000, "lat": 37.81, "lon": -122.40, "speed": 12.1, "course": 95}, t0 + 2)
+    v.ingest({"class": "AIS", "type": 1, "mmsi": 351759000, "lat": 91.0, "lon": 181.0, "speed": 12.1}, t0 + 3)   # "not available"
+    snap = {x["mmsi"]: x for x in v.snapshot()["vessels"]}
+    ship = snap[351759000]
+    assert ship["shipname"] == "EVER DIADEM" and ship["category"] == "cargo" and ship["destination"] == "NEW YORK"
+    assert (ship["lat"], ship["lon"]) == (37.81, -122.40) and len(ship["track"]) == 1
+    assert snap[366053209]["status_text"] == "Restricted maneuverability"
+    assert category(80) == "tanker" and category(52) == "tug" and category(None) == "other"
+    v.prune(t0 + 7 * 3600)
+    assert not v.v
+
+
+def test_marine_profile_skips_ais_dsc_and_weather():
+    inside = lambda f: any(a <= f <= b for a, b in vs.MARINE.ranges)
+    assert inside(156.8e6) and inside(156.7e6) and inside(157.1e6)          # ch16, VTS ch14, USCG 22A
+    assert not inside(156.525e6)                                             # ch70: digital DSC
+    assert not inside(161.975e6) and not inside(162.025e6)                   # AIS
+    assert not inside(162.4e6)                                               # NOAA weather (listen only)
+
+
+def test_on_demand_window_only_while_held():
+    s = vs.Session.__new__(vs.Session)
+    s.windows = vs.parse_windows("approach:vhf:135.7,marine:vhf:159.9:marine:hold")
+    assert s.windows[1].on_demand and s.windows[1].profile.service == "marine"
+    s.focus = None
+    assert s.allowed(s.windows[0]) and not s.allowed(s.windows[1])
+    s.focus = "marine"
+    assert s.allowed(s.windows[1]) and not s.allowed(s.windows[0])

@@ -370,6 +370,7 @@ async def sstv_delete(pid: int):
 # ---------------------------------------------------------------- voice sessions (airband, public safety)
 AIRBAND_DIR = CONFIG.data_dir / "airband"
 SAFETY_DIR = CONFIG.data_dir / "safety"
+MARINE_DIR = CONFIG.data_dir / "marine"
 
 
 def _session_dir(base: Path, name: Optional[str]) -> Path:
@@ -457,6 +458,32 @@ async def safety_clip(session: str, name: str):
     return _session_clip(SAFETY_DIR, session, name)
 
 
+@app.get("/api/marine")
+async def marine_info(session: Optional[str] = None):
+    """The latest (or a named) marine session: marine voice, NOAA weather channels, AIS state."""
+    return _session_info(MARINE_DIR, session)
+
+
+@app.get("/api/marine/transmissions")
+async def marine_transmissions(session: Optional[str] = None, after: int = -1):
+    return _session_transmissions(MARINE_DIR, session, after)
+
+
+@app.get("/api/marine/clip/{session}/{name}")
+async def marine_clip(session: str, name: str):
+    return _session_clip(MARINE_DIR, session, name)
+
+
+@app.get("/api/marine/vessels")
+async def marine_vessels(session: Optional[str] = None):
+    """Vessels decoded from AIS in this session (AIS-catcher via voice_session.py), with tracks."""
+    d = _session_dir(MARINE_DIR, session)
+    try:
+        return json.loads((d / "vessels.json").read_text())
+    except (OSError, ValueError):
+        return {"t": None, "messages": 0, "vessels": [], "running": False, "error": None}
+
+
 @app.get("/api/safety/places")
 async def safety_places(session: Optional[str] = None, after: int = -1):
     """Places mentioned in public-safety transmissions (towns; highway + cross street via OpenStreetMap),
@@ -471,12 +498,13 @@ async def safety_places(session: Optional[str] = None, after: int = -1):
 
 # ---------------------------------------------------------------- receiver focus (voice_session.py reads this)
 FOCUS_FILE = CONFIG.data_dir / "voice_control.json"
-FOCUS_VALUES = {"air": "airband windows", "safety": "public-safety windows", "hf": "the HF input (FT8, SSTV, low band)",
+FOCUS_VALUES = {"air": "airband windows", "safety": "public-safety windows", "marine": "the marine window (AIS, marine radio, weather)",
+                "hf": "the HF input (FT8, SSTV, low band)",
                 "pause": "paused for manual tuning"}
 
 
 class Focus(BaseModel):
-    focus: Optional[str] = None         # air | safety | hf | pause | null (rotate through everything)
+    focus: Optional[str] = None         # air | safety | marine | hf | pause | null (rotate through everything)
 
 
 @app.get("/api/voice/focus")
@@ -520,8 +548,8 @@ async def create_channel(body: NewChannel):
     if (body.band or S.radio.band) == "vhf" and S.radio.band == "vhf":
         await S.spectrum.ensure_live(body.freq_hz)
     try:
-        if body.kind not in ("listen", "air", "safety"):
-            raise ValueError("kind is listen, air or safety")
+        if body.kind not in ("listen", "air", "safety", "marine"):
+            raise ValueError("kind is listen, air, safety or marine")
         ch = await S.radio.create(body.freq_hz, body.mode, body.label, kind=body.kind, band=body.band)
     except ValueError as e:
         raise HTTPException(400, str(e))

@@ -21,7 +21,8 @@ after SAFETY_KEEP_DAYS. At the end the session removes its channels and puts rxa
     .venv/bin/python voice_session.py --windows approach:135.7 --minutes 60        # one airband window
     .venv/bin/python voice_session.py --retranscribe rxapp_data/airband/<stamp>
 
-Window syntax: name:band:centre_MHz[:service], band = vhf | hf, service = air (default) | safety.
+Window syntax: name:band:centre_MHz[:service[:hold]], band = vhf | hf, service = air (default) | safety | marine;
+"hold" = visit this window only while the receiver is held on its service (the page's button).
 (The older name:centre_MHz means a VHF airband window.) Live pages: /airband.html, /safety.html.
 """
 
@@ -103,7 +104,20 @@ AIR = Profile("air", "am", 25e3, 3, 3, 10.0, 0.0, ((118.0e6, 136.975e6),), ATC_P
 SAFETY = Profile("safety", "nfm", 2.5e3, 5, 10, 10.0, 6e3,
                  ((30.0e6, 50.0e6), (150.8e6, 162.0e6), (450.0e6, 470.0e6)), SAFETY_PROMPT, "PS", True,
                  min_frames=3, sideband_hz=25e3)
-PROFILES = {"air": AIR, "safety": SAFETY}
+MARINE_PROMPT = ("Marine VHF radio, San Francisco Bay. Coast Guard Sector San Francisco, San Francisco Traffic, "
+                 "Vessel Traffic Service, channel one six, channel two two alpha, securite, pan pan, mayday, "
+                 "tug, ferry, container ship, pilot boat, Golden Gate, Bay Bridge, Alcatraz, Oakland harbor, "
+                 "Richmond, Carquinez, inbound, outbound, over, out, roger.")
+# Marine voice on 25 kHz channels: 156.0-157.45 (ship and coast, minus channel 70, 156.525, which is digital
+# DSC) and the coast side of the duplex channels; AIS (161.975 / 162.025) and NOAA weather are handled apart.
+MARINE = Profile("marine", "nfm", 25e3, 1, 3, 10.0, 0.0,
+                 ((156.0e6, 156.5e6), (156.55e6, 157.45e6), (160.6e6, 161.95e6)), MARINE_PROMPT, "MAR", False,
+                 min_frames=2)
+PROFILES = {"air": AIR, "safety": SAFETY, "marine": MARINE}
+NOAA_HZ = [162.400e6, 162.425e6, 162.450e6, 162.475e6, 162.500e6, 162.525e6, 162.550e6]
+AIS_CENTRE = 162.000e6        # AIS channel A 161.975, B 162.025: both in a 96 kHz IQ channel here
+AIS_RATE = 96000
+AIS_CATCHER = Path(__file__).resolve().parent / "tools" / "AIS-catcher" / "build" / "AIS-catcher"
 
 
 @dataclass(frozen=True)
@@ -112,6 +126,7 @@ class Window:
     band: str                    # vhf | hf
     centre: float                # Hz
     profile: Profile
+    on_demand: bool = False      # visited only while the receiver is held on this window's service
 
 
 def parse_windows(spec: str) -> List[Window]:
@@ -126,7 +141,7 @@ def parse_windows(spec: str) -> List[Window]:
         prof = PROFILES[p[3].lower()] if len(p) > 3 else AIR
         if band not in ("vhf", "hf"):
             raise ValueError(f"window {w!r}: band is vhf or hf")
-        out.append(Window(name, band, centre, prof))
+        out.append(Window(name, band, centre, prof, on_demand=len(p) > 4 and p[4].lower() == "hold"))
     return out
 
 
@@ -298,6 +313,132 @@ def prune(base: Path, days: float, now: float = None):
     return gone
 
 
+# ---- AIS ----------------------------------------------------------------------------------
+class AisReceiver:
+    """While the marine window is on: a 96 kHz float IQ channel around 162.000 MHz from radiod, piped into
+    AIS-catcher (-r CF32 . -o 5); its JSON messages update the vessel list."""
+
+    def __init__(self, out_dir: Path):
+        from rxapp.ais import Vessels
+        self.out = out_dir
+        self.vessels = Vessels()
+        self.proc = None
+        self.ssrc = None
+        self.running = False
+        self.error = None
+        self.last_write = 0.0
+        self.lock = threading.Lock()
+
+    def start(self, ctl, f_if: float):
+        if self.running:
+            return
+        if not AIS_CATCHER.exists():
+            self.error = f"AIS-catcher not built ({AIS_CATCHER}); see README"
+            log.warning(self.error)
+            return
+        import subprocess
+        self.ctl = ctl
+        group = maddr("voice-ais.local")
+        self.ssrc = int(time.time()) % 1_000_000_000 + 7_000_000
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 16 << 20)
+        s.bind((group, CONFIG.rtp_port))
+        s.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, socket.inet_aton(group) + socket.inet_aton(CONFIG.iface_addr))
+        s.settimeout(1.0)
+        self.sock = s
+        # float output must be chosen when the channel is created (switching it later mixes formats)
+        ctl.create_channel(frequency_hz=f_if, preset="iq", sample_rate=AIS_RATE, destination=group, ssrc=self.ssrc,
+                           lifetime=1500, encoding=4, low_edge=-46000, high_edge=46000)
+        self.proc = subprocess.Popen([str(AIS_CATCHER), "-r", "CF32", ".", "-s", str(AIS_RATE), "-o", "5"],
+                                     stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        self.running = True
+        self.error = None
+        threading.Thread(target=self._pump, daemon=True).start()
+        threading.Thread(target=self._read, args=(self.proc,), daemon=True).start()
+        log.info("AIS: receiving around %.3f MHz", AIS_CENTRE / 1e6)
+
+    def _pump(self):
+        rms, last_keep = None, time.time()
+        proc = self.proc
+        while self.running:
+            try:
+                d, _ = self.sock.recvfrom(65536)
+            except socket.timeout:
+                continue
+            except OSError:
+                break
+            if len(d) < 12 or struct.unpack("!I", d[8:12])[0] != self.ssrc:
+                continue
+            h = 12 + 4 * (d[0] & 15)
+            if d[0] & 0x10:
+                h += 4 + 4 * struct.unpack("!H", d[h + 2:h + 4])[0]
+            a = np.frombuffer(d[h:], "<f4").reshape(-1, 2).copy()
+            a[:, 1] = -a[:, 1]                       # the tuner inverts the spectrum: conjugate it back
+            r = float(np.sqrt((a ** 2).mean())) + 1e-12
+            rms = r if rms is None else 0.999 * rms + 0.001 * r     # slow level control: AIS-catcher likes ~0.1
+            try:
+                proc.stdin.write((a * (0.1 / rms)).astype("<f4").tobytes())
+            except (BrokenPipeError, ValueError, OSError):
+                break
+            if time.time() - last_keep > 10:
+                try:
+                    self.ctl.set_channel_lifetime(self.ssrc, 1500)
+                except Exception:
+                    pass
+                last_keep = time.time()
+
+    def _read(self, proc):
+        out = self.out / "ais.jsonl"
+        for line in proc.stdout:
+            try:
+                m = json.loads(line)
+            except ValueError:
+                continue
+            if m.get("class") != "AIS" or not m.get("mmsi"):
+                continue
+            now = time.time()
+            with self.lock:
+                self.vessels.ingest(m, now)
+            keep = {k: m[k] for k in ("type", "mmsi", "lat", "lon", "speed", "course", "heading", "shipname", "shiptype",
+                                      "destination", "status_text", "channel", "signalpower") if k in m}
+            with open(out, "a") as f:
+                f.write(json.dumps({"t": round(now, 2), **keep}) + "\n")
+
+    def write(self, now):
+        if now - self.last_write < 2:
+            return
+        self.last_write = now
+        with self.lock:
+            self.vessels.prune(now)
+            snap = self.vessels.snapshot()
+        snap.update(running=self.running, error=self.error)
+        tmp = self.out / "vessels.json.tmp"
+        tmp.write_text(json.dumps(snap))
+        tmp.replace(self.out / "vessels.json")
+
+    def stop(self):
+        if not self.running:
+            return
+        self.running = False
+        try:
+            self.ctl.remove_channel(self.ssrc)
+        except Exception:
+            pass
+        try:
+            self.proc.stdin.close()
+            self.proc.terminate()
+        except Exception:
+            pass
+        try:
+            self.sock.close()
+        except Exception:
+            pass
+        log.info("AIS: stopped")
+        self.write(time.time() + 3)
+
+
 # ---- the session -------------------------------------------------------------------------
 class Session:
     def __init__(self, windows: List[Window], minutes, stamp, dwell_sec=300.0, preload=()):
@@ -325,8 +466,10 @@ class Session:
         self.stream = None
         self.spec_freq = None
         self.last_prune = 0.0
-        self.focus = None             # air | safety | hf | pause | None (all windows), from rxapp
+        self.focus = None             # air | safety | marine | hf | pause | None (all windows), from rxapp
         self.focus_checked = 0.0
+        self.ais = AisReceiver(self.outs["marine"]) if "marine" in self.outs else None
+        self.weather = {}             # NOAA weather radio frequency -> rxapp channel (listen only)
 
     @property
     def win(self) -> Window:
@@ -340,7 +483,8 @@ class Session:
         self.audio = Audio(maddr(CONFIG.pcm_name))
         self.tx = Transcriber()
         self.tx.start()
-        self.set_window(0)
+        first = next((i for i, w in enumerate(self.windows) if self.allowed(w)), 0)
+        self.set_window(first)
 
     def set_window(self, w):
         """Move to window w: switch rxapp's input (and tuner), re-aim the spectrum. Transmissions in
@@ -370,6 +514,19 @@ class Session:
         self.bin_of = {f: int(np.argmin(np.abs(rf_of_bin - f))) for f in self.grid}
         if spec_f != self.spec_freq:
             self._open_spectrum(spec_f)
+        if self.ais is not None:
+            if prof.service == "marine" and win.band == "vhf" and lo <= AIS_CENTRE <= hi:
+                self.ais.start(self.ctl, info["vhf"]["if_hz"] - (AIS_CENTRE - self.tuner_hz))
+                for f in NOAA_HZ:                         # weather radio: listen only, never transcribed
+                    if lo <= f <= hi and f not in self.weather:
+                        try:
+                            ch = call("POST", "/channels", {"freq_hz": f, "mode": "nfm", "band": "vhf",
+                                                            "label": f"NOAA {f / 1e6:.3f}", "kind": "marine"})
+                            self.weather[f] = ch["ssrc"]
+                        except Exception as e:
+                            log.warning("weather channel %.3f: %s", f / 1e6, e)
+            else:
+                self.ais.stop()
         self.settle_until = time.time() + 1.0       # spectrum frames from before the move, PLL settling
         log.info("window %s (%s, %s): watching %.4f-%.4f MHz, %d channels on the %.1f kHz grid",
                  win.name, win.band, prof.service, self.lo / 1e6, self.hi / 1e6, len(self.grid), prof.grid / 1e3)
@@ -380,6 +537,8 @@ class Session:
 
     # -- focus: the pages' "switch the receiver here" buttons ---------------------------
     def allowed(self, w: Window) -> bool:
+        if w.on_demand and self.focus != w.profile.service:
+            return False                                  # e.g. marine: only while held there
         if self.focus in (None, ""):
             return True
         if self.focus == "hf":
@@ -450,6 +609,13 @@ class Session:
             self.stream.stop()
         except Exception:
             pass
+        if self.ais is not None:
+            self.ais.stop()
+        for f, ssrc in list(self.weather.items()):
+            try:
+                call("DELETE", f"/channels/{ssrc}")
+            except Exception:
+                pass
         for f, ch in list(self.channels.items()):
             try:
                 call("DELETE", f"/channels/{ch['ssrc']}")
@@ -509,13 +675,18 @@ class Session:
                   "transmissions": self.n_tx, "window": self.win.name, "window_service": self.win.profile.service,
                   "window_since": self.window_since, "next_switch": None if self.idle else nxt,
                   "listening": here and not self.idle, "focus": self.focus,
-                  "windows": [{"name": w.name, "band": w.band, "service": w.profile.service,
+                  "windows": [{"name": w.name, "band": w.band, "service": w.profile.service, "on_demand": w.on_demand,
                                "lo": max(w.profile.ranges[0][0], w.centre - half), "hi": min(w.profile.ranges[-1][1], w.centre + half)}
                               for w in self.windows],
                   "channels": {f"{f:.0f}": c["ssrc"] for f, c in mine.items() if here and self.lo <= f <= self.hi},
                   "known": sorted(f"{f:.0f}" for f in mine),
                   "keyed": {f"{f:.0f}": round(self.peak.get(f, 0), 1) for f in self.keyed_since if f in mine},
                   "spurs": [f"{f:.0f}" for f in sorted(self.spurs)], "end": self.end}
+            if service == "marine":
+                st["weather"] = {f"{f:.0f}": ssrc for f, ssrc in self.weather.items()} if here else {}
+                st["ais"] = {"running": bool(self.ais and self.ais.running), "error": self.ais and self.ais.error,
+                             "messages": self.ais.vessels.messages if self.ais else 0,
+                             "vessels": len(self.ais.vessels.v) if self.ais else 0}
             d.mkdir(parents=True, exist_ok=True)
             tmp = d / "status.json.tmp"
             tmp.write_text(json.dumps(st))
@@ -529,6 +700,8 @@ class Session:
             if time.time() - last_status >= 0.25:     # the pages follow who's on the air from this
                 self.write_status(time.time())
                 last_status = time.time()
+                if self.ais is not None and self.ais.running:
+                    self.ais.write(time.time())
             if "safety" in self.outs and time.time() - self.last_prune > 3600:
                 n = prune(CONFIG.data_dir / "safety", SAFETY_KEEP_DAYS)
                 if n:
