@@ -2,6 +2,18 @@
 
 Tools for driving an **RX-888 MkII** SDR from a Mac (Apple Silicon): **rxapp**, a browser SDR and monitoring app built on ka9q-radio's `radiod`; macOS ports of ka9q-radio and ka9q-web; SoapySDDC/SDR++ setup; and Python scripts that talk to the hardware directly. A companion to the [Malahit DSP2 toolkit](https://github.com/minyaozhu/malahit-dsp2-toolkit).
 
+![Bay Airband, Live: a map of the San Francisco Bay Area with its airports; SFO, Palo Alto, Moffett and San José arrivals labelled by call sign; the Listen panel following whichever tower or approach channel is on the air](docs/images/airband-map.webp)
+
+*Bay Airband, Live (`/airband.html`): every airband channel in the RX-888's VHF window recorded and
+transcribed on the Mac at once. Airports light up when their tower is on the air; call signs picked out of
+the transcripts sit at the airport they're talking to or along the SFO arrival path (inferred from what's
+said, not radar). Listen follows whichever channel is talking.*
+
+![The timeline: one lane per flight (United 1387, American 2331, Delta 2038, United 1905, Alaska 1369…) with each transmission as a dot coloured by phase: check-in, speed/altitude, vector, traffic, cleared, handoff](docs/images/airband-timeline.webp)
+
+*The same session as a timeline: one lane per flight, each call coloured by phase, from check-in to the
+handoff to the tower. Scrub or Play to replay; click a dot to read the transcript and hear the clip.*
+
 ## The hardware
 
 - **HF direct sampling:** LTC2208 16-bit ADC, up to ~130 MSPS, covering roughly 0–64 MHz in one stream.

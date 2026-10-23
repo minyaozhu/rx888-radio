@@ -128,6 +128,10 @@ the whole tuner window (a private spectrum stream; the page's view is untouched)
 - **Files.** `rxapp_data/airband/<stamp>/`: one WAV per transmission, `transmissions.jsonl`
   (`transcripts.jsonl` after a re-transcription), `status.json` (live: channels, who is on the air, window).
 
+![Bay Airband, Live: the map](../docs/images/airband-map.webp)
+
+![Bay Airband, Live: the per-flight timeline](../docs/images/airband-timeline.webp)
+
 **The page** (`/airband.html`, after the Malahit toolkit's
 [Quiet Bridge Arrivals](https://minyaozhu.github.io/malahit-airband-monitor/)):
 
