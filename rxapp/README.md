@@ -29,6 +29,7 @@ or the SoapySDDC scripts.
 | **Scan** | HF: AM broadcast, shortwave broadcast bands, ham bands (peak finding for SSB), CB, WWV propagation check. VHF: FM broadcast, airband, 2 m, NOAA weather; bands wider than the tuner window are scanned in steps (FM: 4 steps, ~25 s), which briefly moves the tuner. HF scans use their own spectrum channel, so the display doesn't move. |
 | **Monitor** (server-side) | Scheduled scans (default: AM every 10 min, WWV every 30 min) and *watches*: a channel recorded automatically whenever its SNR rises above a threshold, optionally transcribed on-device. |
 | **FT8** (server-side) | Every FT8 band at once (160 m–10 m, plus 6 m with 0–64 MHz coverage): one USB channel per dial frequency, cut into 15 s UTC slots and decoded with ft8_lib. Live message list, conversations grouped by station pair (✓ when they reach RR73/73), CQ callers with grids, search by callsign or grid. Keeps running across restarts; pauses while VHF is selected. |
+| **Airband** (with `airband_session.py`) | Every airband channel in the tuner's 8.4 MHz window recorded and transcribed at once, alternating between the NorCal approach and Bay Area tower windows; a live map page with all Bay Area airports. See [Airband](#airband). |
 | **SSTV** (server-side) | Watches the SSTV calling frequencies (3.845 and 7.171 MHz LSB; 14.230, 14.233, 21.340, 28.680 MHz USB) and decodes every picture into a gallery, with the audio kept. |
 | **Dashboard** | Occupancy per channel, detections over time, receiver health (IF power, RF gain, spectrum rate, ADC overloads), event log. |
 | **Recovery** | A supervisor restarts radiod when it stops answering (USB unplug, crash) and re-creates every channel with the same SSRC; open pages reconnect and re-create their channel. |
@@ -101,6 +102,61 @@ header, so a picture already under way when the monitor starts is missed.
 API: `GET/POST /api/sstv` (status / `{on}`), `GET /api/sstv/pictures`, `GET /api/sstv/pictures/{id}.png|.wav`,
 `DELETE /api/sstv/pictures/{id}`.
 
+## Airband
+
+`airband_session.py` runs next to rxapp. It switches rxapp to the VHF input and watches radiod's spectrum of
+the whole tuner window (a private spectrum stream; the page's view is untouched):
+
+```bash
+.venv/bin/python airband_session.py --windows approach:135.7,towers:120.6 --dwell 300 \
+    --preload 135.65,133.95,134.5,135.1,120.5,118.3,124.0,118.6,119.0,119.55,120.2,119.8,118.1,119.7
+```
+
+- **Windows.** The tuner shows 8.4 MHz at a time, so the session alternates: *approach* (131.6–137 MHz,
+  NorCal Approach and some ATIS) and *towers* (118–124.7 MHz: the towers of SFO, OAK, SJC, PAO, SQL, NUQ, HWD,
+  RHV, LVK, CCR and APC, most of their grounds, NorCal departure). It switches after `--dwell` seconds, in a
+  quiet moment (or a minute later regardless). `--center` alone watches one window.
+- **Capture.** A transmission is an AM carrier on the 25 kHz grid rising 12 dB over the window's median
+  floor; it ends 0.7 s after the carrier goes. Only the strongest channel in a cluster counts (a strong carrier
+  spills into its neighbours), a cluster lit across 3+ channels with no clear peak is a wide non-voice signal
+  and is ignored, and a carrier that never goes away is a spur. Each channel that keys up gets an rxapp channel
+  of kind `air` (the page can listen to it but not retune it); its audio is cut by the carrier timing.
+- **Transcription.** On-device Whisper (mlx-whisper, large-v3-turbo) on DC-removed, 250–3200 Hz band-passed,
+  normalised audio (fed the raw AM, Whisper called almost everything "no speech"). Two readings per
+  transmission: plain, and with an ATC vocabulary prompt. Sound captions ("BELL RINGS") are dropped.
+  `--retranscribe <session dir>` redoes a session.
+- **Files.** `rxapp_data/airband/<stamp>/`: one WAV per transmission, `transmissions.jsonl`
+  (`transcripts.jsonl` after a re-transcription), `status.json` (live: channels, who is on the air, window).
+
+**The page** (`/airband.html`, after the Malahit toolkit's
+[Quiet Bridge Arrivals](https://minyaozhu.github.io/malahit-airband-monitor/)):
+
+- A Bay Area map (Leaflet + OpenStreetMap) with 12 airports and their tower/ground/ATIS frequencies
+  (`web/bayair.js`, from AirNav / the FAA Chart Supplement). An airport lights up with the latest words while one
+  of its frequencies is on the air; NorCal sectors show as chips under the map. ★ saves the current view as
+  the default for that browser, ⌂ returns to it.
+- Flights are picked out of the transcripts (airline + number, joining split numbers like "United 15, 75";
+  or the number ending a read-back) and phases from key words. A flight talking to a tower sits at that
+  airport; one with NorCal Approach sits along the SFO Quiet Bridge arrival path at the furthest stage it has
+  been told. **These are inferred, not radar positions.**
+- **Listen**: *Follow activity* (default) stays on a channel while it is active and jumps to whoever is on
+  the air once it has been quiet for 0.8 s; or *Loudest*, or one frequency.
+- Timeline with one lane per flight, scrub/Play, and the transcript log; click a call to read it (both
+  readings) and play its clip. Earlier sessions are in the *Session* menu.
+
+API: `GET /api/airband?session=` (status, sessions), `GET /api/airband/transmissions?session=&after=`,
+`GET /api/airband/clip/{session}/{wav}`.
+
+## ADS-B (not yet)
+
+`rxapp/modes.py` demodulates Mode S at 2 MS/s (dump1090's preamble test and PPM slicing; pyModeS checks
+the CRC and decodes); it recovers synthetic frames in noise (tests). On the air it found nothing: with the
+tuner locked at 1090 MHz and a radiod IQ channel at 2 MS/s, 21 s of capture were pure noise. Measured through
+the VHF input with the current antenna, FM broadcast is 29 dB over the noise, airband 19 dB, cell towers at
+751–880 MHz only 3–8 dB, 1090 MHz nothing: the antenna doesn't work at UHF. The R828D's PLL does lock at
+1090 MHz (the demo driver read the lock bit after 2 ms and reported false "not locked"; it now waits 10 ms like
+librtlsdr). With a 1090 MHz antenna, ADS-B would be a third window in the airband rotation.
+
 ## Design notes
 
 - **No mDNS.** radiod derives each multicast address from its name (`make_maddr`, an FNV-1 hash);
@@ -142,9 +198,17 @@ API: `GET/POST /api/sstv` (status / `{on}`), `GET /api/sstv/pictures`, `GET /api
   `open -W -n ../Malahit/tools/Transcribe.app --args <some.wav> /tmp/out.txt`.
 - **Power is relative.** The S-meter shows radiod's baseband power (dB), not calibrated dBm.
 - Several browser tabs share the server's channels; each page uses the first listen channel.
+- **USB drops.** This RX-888 has dropped off USB several times (it re-enumerates, sometimes on another bus).
+  radiod's supervisor restarts it; the VHF tuner code then reopens its USB handle and re-programs the tuner
+  (it used to call `sys.exit` and take rxapp down). A cable or port change is still worth trying.
+- **One tuner.** Airband, FM and ADS-B all share the VHF tuner's 8.4 MHz window, and while the input is on VHF
+  the FT8/SSTV monitors (HF) pause.
 
 ## Tests
 
 ```bash
 .venv/bin/python -m pytest tests/test_rxapp.py
 ```
+
+They need the ka9q-radio clone (`tools/ka9q-radio`, see [ka9q/README.md](../ka9q/README.md)): the VHF code
+imports its `rx888_vhf_demo` driver. No radio is needed.

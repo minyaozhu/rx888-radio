@@ -5,3 +5,6 @@ fastapi
 uvicorn[standard]
 pytest
 sstv
+scipy
+mlx-whisper   # airband transcription (Apple Silicon)
+pyModeS       # ADS-B / Mode S decoding
