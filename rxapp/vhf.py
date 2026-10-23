@@ -14,12 +14,15 @@ import asyncio
 import logging
 import sys
 import threading
+import time
 from typing import Optional
 
 from .config import CONFIG, RUNTIME, VHF_MAX_HZ, VHF_MIN_HZ
 
 sys.path.insert(0, str(CONFIG.radiod_script.parent.parent / "tools" / "ka9q-radio" / "rx888_vhf_demo"))
 import rx888_vhf  # noqa: E402
+import usb.core  # noqa: E402
+import usb.util  # noqa: E402
 
 log = logging.getLogger(__name__)
 
@@ -54,7 +57,37 @@ class Vhf:
         return self.center_hz is not None and abs(rf_hz - self.center_hz) <= WINDOW_HZ
 
     # -- hardware (blocking; run in a thread) ------------------------------------
+    def _drop_handle(self):
+        """Forget our USB handle: after the RX-888 drops off USB and comes back, the old one is dead."""
+        if self._rx is not None:
+            try:
+                usb.util.dispose_resources(self._rx.dev)
+            except Exception:
+                pass
+        self._rx = None
+
+    def _robust(self, fn, *args):
+        """Run a tuner operation; if the USB handle has gone stale (the radio re-enumerated), reopen
+        the device, re-program the tuner from scratch and try once more. The demo driver calls
+        sys.exit() on USB failures, which would take the whole server down: turn that into an error
+        the supervisor can retry."""
+        for attempt in (1, 2):
+            try:
+                return fn(*args)
+            except (usb.core.USBError, SystemExit, OSError) as e:
+                log.warning("VHF tuner USB error (%s)%s", e, "; reopening the device" if attempt == 1 else "")
+                with self._lock:
+                    self._drop_handle()
+                if attempt == 2:
+                    raise RuntimeError(f"VHF tuner not reachable over USB: {e}") from None
+                if fn != self._enable_raw:              # the tuner lost its programming: start over,
+                    fn = self._enable_raw                # at the frequency that was asked for
+                time.sleep(1.0)
+
     def _enable(self, center_hz):
+        return self._robust(self._enable_raw, center_hz)
+
+    def _enable_raw(self, center_hz):
         with self._lock:
             if self._rx is None:
                 self._rx = rx888_vhf.RX888()
@@ -74,6 +107,9 @@ class Vhf:
                  "locked" if self.locked else "NOT locked")
 
     def _retune(self, center_hz):
+        return self._robust(self._retune_raw, center_hz)
+
+    def _retune_raw(self, center_hz):
         with self._lock:
             self.locked = self._rx.r828d_set_freq(int(center_hz))
             self.center_hz = float(center_hz)
@@ -82,14 +118,22 @@ class Vhf:
     def _disable(self):
         with self._lock:
             if self._rx is not None:
-                self._rx.standby(HF_GPIO)
+                try:
+                    self._rx.standby(HF_GPIO)
+                except (usb.core.USBError, SystemExit, OSError) as e:   # radio re-enumerated: it's on HF anyway
+                    log.warning("VHF standby: %s", e)
+                    self._drop_handle()
             self.active = False
         log.info("VHF off, back to HF")
 
     def _set_vga(self, vga):
         with self._lock:
             if self._rx is not None and self.active:
-                self._rx.set_vga_gain(vga)
+                try:
+                    self._rx.set_vga_gain(vga)
+                except (usb.core.USBError, SystemExit, OSError) as e:
+                    log.warning("VHF gain: %s", e)
+                    self._drop_handle()
 
     async def enable(self, center_hz):
         if not VHF_MIN_HZ <= center_hz <= VHF_MAX_HZ:

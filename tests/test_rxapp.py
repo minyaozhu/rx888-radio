@@ -234,3 +234,59 @@ def test_sstv_monitor_captures_and_decodes_a_picture(tmp_path):
     assert w.triggers == 1 and w.capture is None          # one capture, finished when the signal ended
     assert len(saved) == 1 and saved[0]["mode"] == "MARTIN_1" and saved[0]["complete"]
     assert (tmp_path / saved[0]["png"]).exists() and (tmp_path / saved[0]["wav"]).exists()
+
+
+# ---- VHF tuner survives the RX-888 re-enumerating ---------------------------
+from rxapp import vhf as vhfmod
+
+
+class _FakeRx:
+    """The demo driver's RX888: the first handle is dead (the radio re-enumerated), later ones work."""
+    made = 0
+
+    def __init__(self):
+        type(self).made += 1
+        self.dead = type(self).made == 1
+        self.dev = None
+        self.if_hz = 4.57e6
+        self.freq = None
+
+    def _io(self):
+        if self.dead:
+            raise SystemExit("RX888 on USB but firmware not answering TESTFX3 ([Errno 19] No such device)")
+
+    def check_alive(self): self._io()
+    def enter_vhf(self, *a): self._io()
+    def clkb_on(self, *a): self._io()
+    def r828d_init(self): self._io()
+    def set_lna_agc(self, *a): self._io()
+    def set_mixer_agc(self, *a): self._io()
+    def set_vga_gain(self, *a): self._io()
+    def standby(self, *a): self._io()
+
+    def r828d_set_freq(self, f):
+        self._io()
+        self.freq = f
+        return True
+
+
+def test_vhf_tuner_reopens_a_dead_usb_handle(monkeypatch):
+    monkeypatch.setattr(vhfmod.rx888_vhf, "RX888", _FakeRx)
+    _FakeRx.made = 0
+    v = vhfmod.Vhf()
+    v._enable(135.7e6)                                   # first handle dead -> reopened, no SystemExit
+    assert v.active and v.center_hz == 135.7e6 and _FakeRx.made == 2
+    v._rx.dead = True                                    # radio drops again while tuned...
+    v._retune(120.6e6)                                   # ...a retune reopens and re-programs at the NEW frequency
+    assert v.center_hz == 120.6e6 and v._rx.freq == int(120.6e6) and _FakeRx.made == 3
+
+
+def test_vhf_tuner_gives_up_with_an_error_not_an_exit(monkeypatch):
+    class _Gone(_FakeRx):
+        def __init__(self):
+            super().__init__()
+            self.dead = True
+    monkeypatch.setattr(vhfmod.rx888_vhf, "RX888", _Gone)
+    v = vhfmod.Vhf()
+    with pytest.raises(RuntimeError):
+        v._enable(135.7e6)
