@@ -689,7 +689,7 @@ def test_wspr_feed_keeps_a_whole_two_minute_slot(monkeypatch):
 from rxapp import broadcast
 
 
-def test_eibi_season_days_and_on_air(tmp_path):
+def test_eibi_season_days_and_on_air(tmp_path, monkeypatch):
     import datetime as _dt
     assert broadcast.season(_dt.date(2026, 10, 23)) == "a26" and broadcast.season(_dt.date(2026, 10, 26)) == "b26"
     assert broadcast.season(_dt.date(2027, 1, 5)) == "b26" and broadcast.season(_dt.date(2027, 4, 1)) == "a27"
@@ -700,7 +700,7 @@ def test_eibi_season_days_and_on_air(tmp_path):
         "9455;2300-0100;Sa,Su;USA;WRMI Radio Miami Int.;E;CNA;;1;;\n", encoding="latin-1")
     e = broadcast.Eibi.__new__(broadcast.Eibi)
     e.folder, e.entries, e.file = tmp_path, [], None
-    broadcast.Eibi.fetch = lambda self, s: False             # no network in tests
+    monkeypatch.setattr(broadcast.Eibi, "fetch", lambda self, s: False)   # no network in tests
     e.load()
     sat_0030 = _dt.datetime(2026, 10, 24, 0, 30, tzinfo=_dt.timezone.utc).timestamp()
     mon_0030 = _dt.datetime(2026, 10, 26, 0, 30, tzinfo=_dt.timezone.utc).timestamp()
@@ -711,5 +711,5 @@ def test_eibi_season_days_and_on_air(tmp_path):
 
 def test_broadcast_station_tables():
     s = broadcast.stations()
-    assert {x["call"] for x in s["am"]} >= {"KCBS", "KNBR", "KQED-FM"} - {"KQED-FM"}
+    assert {x["call"] for x in s["am"]} >= {"KCBS", "KNBR"}
     assert any(x["call"] == "KQED-FM" and x["freq_hz"] == 88_500_000 for x in s["fm"])
