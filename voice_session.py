@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Record and transcribe every voice channel in the receiver's window, across a rotation of windows.
 
 Runs next to rxapp (which must be running). Each *window* is a piece of spectrum the RX-888 can see at

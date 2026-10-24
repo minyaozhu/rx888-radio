@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """SQLite log: scans and their detections, recordings, health samples, events, FT8 and FT4 decodes, SSTV pictures."""
 
 import json

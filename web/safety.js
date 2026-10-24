@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // Bay Public Safety, Live: voice_session.py's public-safety transmissions as a live transcript, a
 // per-channel timeline and live audio (follow whoever is talking).
 'use strict';

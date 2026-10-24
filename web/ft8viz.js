@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // FT8 / FT4 Skywatch: world map + per-station timeline of rxapp's FT8 or FT4 decodes, live or replayed.
 // The page says which: <script src="ft8viz.js" data-proto="ft4">.
 'use strict';

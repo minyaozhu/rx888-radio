@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """FT8 and FT4 on every HF band at once.
 
 One USB channel per dial frequency (radiod demodulates them all from the same ADC stream). Each

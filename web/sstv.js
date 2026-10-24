@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // SSTV Pictures: the SSTV monitor's frequencies (live state, detector, listen) and its picture gallery.
 'use strict';
 

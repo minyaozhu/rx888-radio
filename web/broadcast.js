@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // Broadcast Radio: Bay Area AM/FM stations and scheduled shortwave broadcasters; scan, then click to listen.
 'use strict';
 

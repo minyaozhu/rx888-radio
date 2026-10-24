@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """The RX-888's VHF/UHF path (R828D tuner) driven alongside radiod.
 
 radiod keeps sampling the ADC as on HF; this module flips the antenna switch to the

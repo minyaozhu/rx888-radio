@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Make APRS test audio: an AX.25 UI frame as Bell 202 AFSK (1200 baud, 1200/2200 Hz), the way a radio sends it."""
 import numpy as np
 

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """AM / FM / shortwave broadcast: Bay Area station names, and the EiBi shortwave schedule.
 
 AM and FM stations from Wikipedia's "List of radio stations in the San Francisco Bay Area" (October 2026).

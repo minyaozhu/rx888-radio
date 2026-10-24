@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // Bay Maritime, Live: AIS ships on the Bay map, marine radio transcript and listen, NOAA weather radio.
 'use strict';
 

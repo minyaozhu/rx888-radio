@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // APRS, Live: stations heard on 144.390 MHz on the Bay map, with tracks, details and the raw packets.
 'use strict';
 

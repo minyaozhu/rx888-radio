@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Mode S / ADS-B (1090 MHz) demodulator for 2 MS/s magnitude samples.
 
 The classic dump1090 approach at 2 samples per microsecond: an 8 us preamble with pulses at 0, 1,

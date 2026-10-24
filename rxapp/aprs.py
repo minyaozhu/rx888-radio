@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """APRS stations from decoded packets (multimon-ng -A prints TNC2 lines; aprslib parses them).
 
 voice_session.py feeds every packet heard on 144.390 MHz to Stations.ingest() and writes snapshot() to

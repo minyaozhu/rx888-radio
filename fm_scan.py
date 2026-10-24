@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Scan the FM broadcast band (88.1-107.9 MHz) on the RX-888 VHF input.
 
 Goes through the official SoapySDDC driver (run with .venv-soapy, see README).

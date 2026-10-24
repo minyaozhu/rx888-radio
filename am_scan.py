@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Scan the AM broadcast band (530-1700 kHz) on the RX-888 HF input.
 
 Goes through the official SoapySDDC driver (run with .venv-soapy, see README).

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """rxapp: a browser SDR and monitoring app for the RX-888, built on ka9q-radio's radiod.
 
 radiod owns the radio and does the channelizing; rxapp is its only client. It creates and

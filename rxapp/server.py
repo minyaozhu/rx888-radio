@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """FastAPI server: REST for channels/scans/recordings, WebSockets for audio, spectrum, status.
 
 Run:  .venv/bin/python -m rxapp          (then open http://127.0.0.1:8090)

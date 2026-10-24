@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // rxapp browser client: tuning, audio, spectrum/waterfall, channels, scans, recordings, dashboard.
 'use strict';
 

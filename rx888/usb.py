@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Find the RX-888 on USB.
 
 The RX-888 is built on a Cypress FX3. Fresh from power-up it enumerates as

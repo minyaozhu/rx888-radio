@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // Callsign prefix -> country and an approximate position, for stations that never sent a grid.
 // Longest prefix wins. Positions are country (or call-area) centroids: good to a few hundred km at best.
 'use strict';

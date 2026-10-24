@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Unattended monitoring, run by the server (no browser needed).
 
 - Scan schedules: scan a band every N minutes; results land in SQLite for the dashboard.

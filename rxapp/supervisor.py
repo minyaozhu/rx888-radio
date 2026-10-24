@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Keeps radiod running and rxapp attached to it.
 
 radiod quits when the RX-888 stops sending (unplugged, power-cycled, USB reset). The

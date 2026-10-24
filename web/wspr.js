@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // WSPR Propagation: beacons heard (great-circle lines from home), band conditions from WSPR + FT8 + FT4.
 'use strict';
 

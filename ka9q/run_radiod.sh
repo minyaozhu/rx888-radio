@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Run ka9q-radio's radiod on macOS with the RX-888 (HF). Ctrl-C to stop.
 # Listen:  tools/ka9q-radio/src/monitor am.local
 # Tune:    tools/ka9q-radio/src/control rx888-status.local

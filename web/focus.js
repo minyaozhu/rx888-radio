@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // "Switch the receiver here": hold the voice session (voice_session.py) on this page's windows, or release.
 // Include with <script src="focus.js" data-focus="air|safety|hf|pause" data-what="..."></script> and an
 // element with id="focusBox" where the button goes.

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Places mentioned in public-safety transcripts, with coordinates, for the public-safety map.
 
 Two kinds:

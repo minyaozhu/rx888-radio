@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Vessels from AIS messages (as AIS-catcher prints them with -o 5), with recent tracks.
 
 voice_session.py runs AIS-catcher on radiod's IQ around 162.000 MHz while the marine window is on, feeds

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Channel control on top of ka9q-python's RadiodControl.
 
 rxapp owns the channels it creates. Each one is created with a finite lifetime and

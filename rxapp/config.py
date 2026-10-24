@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Settings, read from the environment (RXAPP_*) with defaults for this Mac."""
 
 import json

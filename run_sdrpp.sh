@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Launch the locally built SDR++. Use its "SoapySDR" source for the RX-888: that goes
 # through the official SoapySDDC driver built in tools/ExtIO_sddc (HF + VHF, gains).
 HERE="$(cd "$(dirname "$0")" && pwd)"

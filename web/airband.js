@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // Bay Approach Live: airband_session.py's transmissions on the Quiet Bridge map and a per-flight
 // timeline, updated as they arrive, plus live audio of the loudest (or the talking) channel.
 'use strict';

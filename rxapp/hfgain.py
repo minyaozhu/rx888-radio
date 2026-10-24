@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """HF front-end gain: manual (AD8370 VGA + PE4312 attenuator) or automatic.
 
 radiod's own RF AGC switches off for good once a manual gain or attenuation command

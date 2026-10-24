@@ -102,4 +102,60 @@ SDR++ also has a built-in `sddc_source`, but it's an unfinished stub (hard-coded
 
 ## License
 
-GPL-3.0 (see [LICENSE](LICENSE)), matching ka9q-radio, whose patched sources and configs this repo ships.
+GPL-3.0-or-later (see [LICENSE](LICENSE)), matching ka9q-radio, whose patched sources and configs this repo ships.
+Every source file carries an `SPDX-License-Identifier` line.
+
+## Credits and third-party licenses
+
+This repo contains only its own code, configuration and the patches below. The programs and libraries it uses
+are fetched or installed separately (`tools/` is git-ignored) and stay under their own licenses. If you
+redistribute a bundle that includes any of them, include each one's license file, and for the GPL ones the
+corresponding source.
+
+**Patched here** (each patch is under the license of the project it modifies)
+
+| Project | License | Patch |
+|---|---|---|
+| [ka9q-radio](https://github.com/ka9q/ka9q-radio) (Phil Karn, KA9Q) | GPL-3.0 | `ka9q/ka9q-radio-macos.patch` |
+| [ka9q-web](https://github.com/wa2n-code/ka9q-web) | GPL-3.0 | `ka9q/ka9q-web-macos.patch` |
+| [onion](https://github.com/davidmoreno/onion) | GPL-2.0-or-later or Apache-2.0 | `ka9q/onion-macos.patch` |
+| [SDR++](https://github.com/AlexandreRouma/SDRPlusPlus) | GPL-3.0 | `tools/sdrpp_sddc_macos.patch` |
+| [ExtIO_sddc / SoapySDDC](https://github.com/ik1xpv/ExtIO_sddc) | MIT | `tools/soapysddc_macos.patch` |
+
+**Run as separate programs** (built into `tools/`, see the READMEs)
+
+| Program | License | Used for |
+|---|---|---|
+| [ft8_lib](https://github.com/kgoba/ft8_lib) | MIT | FT8 / FT4 decoding |
+| [WSJT-X](https://wsjt.sourceforge.io/) `lib/wsprd` | GPL-3.0 | WSPR decoding (its Fortran OSD routine replaced by a C stub) |
+| [AIS-catcher](https://github.com/jvde-github/AIS-catcher) | GPL-3.0 | AIS ship positions |
+| [multimon-ng](https://github.com/EliasOenal/multimon-ng) | GPL-2.0 | APRS (AFSK1200) |
+
+**Python packages** (`requirements.txt`)
+
+| Package | License |
+|---|---|
+| numpy, scipy, pyusb, uvicorn | BSD |
+| FastAPI, ka9q-python, mlx-whisper (OpenAI Whisper weights: MIT), sstv | MIT |
+| pyModeS | GPL-3.0 |
+| aprslib | GPL-2.0-or-later |
+
+**In the browser** (loaded from CDNs): [Leaflet](https://leafletjs.com) (BSD-2-Clause),
+[D3](https://d3js.org) and [topojson-client](https://github.com/topojson/topojson-client) (ISC),
+[world-atlas](https://github.com/topojson/world-atlas) (ISC, from public-domain Natural Earth data).
+
+**Data and services** (fetched at run time; not stored in this repo)
+
+| Source | Terms | How rxapp complies |
+|---|---|---|
+| [OpenStreetMap](https://www.openstreetmap.org/copyright) map tiles | ODbL data; [tile usage policy](https://operations.osmfoundation.org/policies/tiles/) | Attribution on every map; light, interactive use only |
+| [Nominatim](https://nominatim.org) geocoding | [Usage policy](https://operations.osmfoundation.org/policies/nominatim/) | ≤ 1 request/s, identifying User-Agent, results cached, no house numbers |
+| [adsb.fi](https://adsb.fi) open data | Personal, non-commercial use; attribution | Credited on the airband map; ≤ 1 request/s |
+| [EiBi](http://www.eibispace.de) shortwave schedule | Free to use | Downloaded per season into `rxapp_data/eibi/` |
+| Wikipedia, *List of radio stations in the San Francisco Bay Area* | CC BY-SA 4.0 | Only call signs, frequencies, cities and formats (facts) in `rxapp/broadcast.py`, with the source named |
+| [AirNav](https://www.airnav.com) / FAA airport frequencies | Public facts | Frequencies only |
+
+**Radio content.** The audio clip and screenshots in `docs/` are the author's own receptions. Recordings and
+transcripts (`rxapp_data/`, `recordings/*.wav`) are git-ignored and stay local; in the US, 47 U.S.C. § 605
+limits divulging the contents of radio communications other than broadcast, amateur, CB and distress traffic, so
+check the rules before publishing recordings or transcripts, especially of public-safety channels.

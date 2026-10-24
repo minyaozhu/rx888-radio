@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Talk to an RX-888 running the SDDC firmware: GPIOs, ADC, VHF tuner, sample stream.
 
 Command codes and GPIO bits follow libsddc (SDR++ source_modules/sddc_source).

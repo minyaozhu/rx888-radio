@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """WSPR on every HF band at once.
 
 WSPR beacons send their call sign, grid and power once in a 110.6 s transmission that starts 1 s after an

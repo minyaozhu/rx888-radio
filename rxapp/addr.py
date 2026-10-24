@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """radiod's name -> multicast address mapping.
 
 radiod picks every group address by hashing its name (make_maddr in multicast.c), so a

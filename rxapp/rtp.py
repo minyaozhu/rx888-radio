@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Receive radiod's RTP audio and hand it out by SSRC.
 
 One socket per multicast group, joined on the loopback interface (radiod runs with

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // Bay Area public-safety channels and radio codes, for the public-safety page.
 // Channel names: CHP San Jose from RadioReference forum reports; the rest are channels the receivers
 // have heard but not identified (the page labels them by frequency and service band).

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """SSTV monitor: watch the SSTV calling frequencies and decode every picture sent.
 
 One SSB channel per frequency (LSB below 10 MHz, USB above). Every few seconds the last

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Unit tests for rxapp's pure logic (no radio needed)."""
 
 import struct

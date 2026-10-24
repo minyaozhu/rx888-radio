@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // Bay Area airports and their VHF frequencies (AirNav / FAA Chart Supplement, October 2026).
 // Positions are the airport reference points.
 'use strict';

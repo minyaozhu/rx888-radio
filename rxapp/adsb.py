@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Aircraft positions from the adsb.fi open-data ADS-B feed, with recent tracks.
 
 The RX-888's antenna can't hear 1090 MHz (see README, "ADS-B (not yet)"), so the airband page shows

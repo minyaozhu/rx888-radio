@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Band scans (from the spectrum) and channel recordings (from RTP)."""
 
 import asyncio

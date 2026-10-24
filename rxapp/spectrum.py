@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Live spectrum from radiod's spectrum channel, fanned out to asyncio subscribers.
 
 ka9q-python's SpectrumStream receives the FFT bins (inside status packets) on its own
