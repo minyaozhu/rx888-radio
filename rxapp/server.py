@@ -167,6 +167,7 @@ class ChannelUpdate(BaseModel):
     mode: Optional[str] = None
     label: Optional[str] = None
     filter_hz: Optional[List[float]] = None     # [low, high] Hz around the carrier; [] = the mode's preset
+    stereo: Optional[bool] = None               # WFM: FM stereo on / off
 
 
 class SpectrumView(BaseModel):
@@ -743,7 +744,7 @@ async def update_channel(ssrc: int, body: ChannelUpdate):
         flt = ... if body.filter_hz is None else body.filter_hz
         if flt is not ... and flt and not (len(flt) == 2 and -150e3 <= flt[0] < flt[1] <= 150e3):
             raise ValueError("filter_hz is [low, high] in Hz, low < high, within ±150 kHz")
-        ch = await S.radio.tune(ssrc, body.freq_hz, body.mode, body.label, flt)
+        ch = await S.radio.tune(ssrc, body.freq_hz, body.mode, body.label, flt, body.stereo)
     except ValueError as e:
         raise HTTPException(400, str(e))
     return ch.to_dict()
@@ -927,7 +928,8 @@ async def delete_watch(wid: int):
 # ---------------------------------------------------------------- WebSockets
 @app.websocket("/ws/audio/{ssrc}")
 async def ws_audio(ws: WebSocket, ssrc: int):
-    """Binary frames: u32 sample rate (LE) + int16 LE PCM."""
+    """Binary frames: u32 header (LE) + int16 LE PCM. Header: sample rate, with the top bit set when the
+    PCM is stereo (L, R interleaved)."""
     await ws.accept()
     if ssrc not in S.radio.channels:
         await ws.close(code=4404)
@@ -937,6 +939,8 @@ async def ws_audio(ws: WebSocket, ssrc: int):
     def on_pcm(pcm, ts, seq):
         ch = S.radio.channels.get(ssrc)
         rate = ch.sample_rate if ch else 12000
+        if ch and ch.mode == "wfm" and ch.stereo:
+            rate |= 0x80000000
         try:
             q.put_nowait(np.array([rate], "<u4").tobytes() + pcm)
         except asyncio.QueueFull:

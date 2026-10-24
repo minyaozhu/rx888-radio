@@ -214,7 +214,7 @@ class Recorder:
         stamp = time.strftime("%Y%m%d-%H%M%S")
         self.path = CONFIG.recordings_dir / f"{stamp}_{ch.freq_hz / 1e3:.0f}kHz_{ch.mode}.wav"
         self.w = wave.open(str(self.path), "wb")
-        self.w.setnchannels(1)
+        self.w.setnchannels(2 if ch.mode == "wfm" and getattr(ch, "stereo", False) else 1)
         self.w.setsampwidth(2)
         self.w.setframerate(ch.sample_rate)
         self.samples = 0

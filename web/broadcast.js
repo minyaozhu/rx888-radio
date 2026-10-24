@@ -51,6 +51,7 @@ async function play(item) {
       catch (e) { ssrc = null; }
     }
     if (!ssrc) { ssrc = (await post('/api/channels', {freq_hz: freq, mode, band, label: 'broadcast'})).ssrc; S.chans[band] = ssrc; }
+    if (sec === 'fm') await setStereo(stereoPref());
     if (!audio.ctx) { audio.ctx = new AudioContext(); audio.gain = audio.ctx.createGain(); audio.gain.connect(audio.ctx.destination); }
     audio.ctx.resume(); audio.gain.gain.value = +$('vol').value;
     connect(ssrc);
@@ -58,6 +59,7 @@ async function play(item) {
     $('nowName').textContent = item.title;
     $('nowMeta').textContent = `${sec === 'fm' ? mhzs(freq) + ' MHz' : khz(freq) + ' kHz'} · ${item.sub || ''}`;
     $('stop').disabled = false;
+    $('stereoWrap').style.display = sec === 'fm' ? '' : 'none';
   } catch (e) { $('nowName').textContent = 'Could not tune'; $('nowMeta').textContent = e.message; }
   draw();
 }
@@ -68,10 +70,11 @@ function connect(ssrc) {
   const ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + `/ws/audio/${ssrc}`);
   ws.binaryType = 'arraybuffer';
   ws.onmessage = (e) => {
-    const rate = new DataView(e.data).getUint32(0, true), pcm = new Int16Array(e.data, 4);
-    if (!pcm.length) return;
-    const buf = audio.ctx.createBuffer(1, pcm.length, rate), out = buf.getChannelData(0);
-    for (let k = 0; k < pcm.length; k++) out[k] = pcm[k] / 32768;
+    const hdr = new DataView(e.data).getUint32(0, true), rate = hdr & 0x7fffffff, nch = hdr >>> 31 ? 2 : 1;
+    const pcm = new Int16Array(e.data, 4), frames = Math.floor(pcm.length / nch);
+    if (!frames) return;
+    const buf = audio.ctx.createBuffer(nch, frames, rate);
+    for (let c = 0; c < nch; c++) { const out = buf.getChannelData(c); for (let k = 0; k < frames; k++) out[k] = pcm[k * nch + c] / 32768; }
     const src = audio.ctx.createBufferSource(); src.buffer = buf; src.connect(audio.gain);
     const now = audio.ctx.currentTime;
     if (audio.next < now + 0.05 || audio.next > now + 1.0) audio.next = now + 0.25;
@@ -80,8 +83,20 @@ function connect(ssrc) {
   ws.onclose = () => { if (audio.ws === ws && S.playing) setTimeout(() => S.playing && connect(ssrc), 1000); };
   audio.ws = ws;
 }
+// FM stereo: kept per browser; stereo needs a strong signal, mono is quieter on weak stations
+const stereoPref = () => { try { return localStorage.getItem('rx.stereo') !== '0'; } catch (e) { return true; } };
+async function setStereo(on) {
+  $('stereo').checked = on;
+  const ssrc = S.chans.vhf; if (!ssrc) return;
+  try { await api(`/api/channels/${ssrc}`, {method: 'PATCH', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({stereo: on})}); }
+  catch (e) { $('nowMeta').textContent = e.message; }
+}
+$('stereo').addEventListener('change', () => {
+  try { localStorage.setItem('rx.stereo', $('stereo').checked ? '1' : '0'); } catch (e) { /* private window */ }
+  setStereo($('stereo').checked);
+});
 function stop() {
-  connect(null); S.playing = null;
+  connect(null); S.playing = null; $('stereoWrap').style.display = 'none';
   $('nowName').textContent = 'Nothing playing'; $('nowMeta').textContent = 'pick a station below'; $('stop').disabled = true;
   draw();
 }

@@ -101,6 +101,21 @@ function renderBw(ch) {
   if (i < 0) { sel.add(new Option(fmtBw(cur) + ' (custom)', 'custom')); i = sel.options.length - 1; }
   sel.selectedIndex = i;
 }
+// ------------------------------------------------------------------ FM stereo
+const stereoPref = () => { try { return localStorage.getItem('rx.stereo') !== '0'; } catch (e) { return true; } };
+function renderStereo(ch) {
+  $('stereoWrap').style.display = ch && ch.mode === 'wfm' ? '' : 'none';
+  if (!ch || ch.mode !== 'wfm') return;
+  const want = stereoPref();
+  $('stereo').checked = want;
+  if (!!ch.stereo !== want) setStereo(want);
+}
+async function setStereo(on) {
+  const ch = current(); if (!ch) return;
+  ch.stereo = on;
+  try { await api('PATCH', `/api/channels/${ch.ssrc}`, {stereo: on}); } catch (e) { flash(e.message); }
+}
+
 async function setBw() {
   const ch = current(); if (!ch || $('bw').value === 'custom') return;
   const edges = bwEdges(ch.mode, (BW[ch.mode] || [null])[+$('bw').value]);
@@ -117,6 +132,7 @@ function select(ssrc, ch) {
   $('mode').value = ch.mode;
   $('step').value = defaultStep(ch.mode, ch.freq_hz);
   renderBw(ch);
+  renderStereo(ch);
   if (state.listening) startAudio();
 }
 
@@ -148,7 +164,7 @@ async function tune(freq_hz, mode) {
     ch.freq_hz = freq_hz;
     $('freq').value = fmtTune(freq_hz);
   }
-  if (mode && mode !== ch.mode) { ch.mode = mode; ch.filter_hz = null; renderBw(ch); }   // a new mode: its preset width
+  if (mode && mode !== ch.mode) { ch.mode = mode; ch.filter_hz = null; renderBw(ch); renderStereo(ch); }   // a new mode: its preset width
   panelsRedraw();
   // coalesce wheel/drag bursts into one request every 80 ms
   pendingTune = {freq_hz: ch.freq_hz, mode: ch.mode};
@@ -186,12 +202,12 @@ function startAudio() {
   const ws = new WebSocket(wsUrl(`/ws/audio/${state.selected}`));
   ws.binaryType = 'arraybuffer';
   ws.onmessage = (e) => {
-    const rate = new DataView(e.data).getUint32(0, true);
-    const pcm = new Int16Array(e.data, 4);
-    if (!pcm.length) return;
-    const buf = audio.ctx.createBuffer(1, pcm.length, rate);
-    const out = buf.getChannelData(0);
-    for (let i = 0; i < pcm.length; i++) out[i] = pcm[i] / 32768;
+    const hdr = new DataView(e.data).getUint32(0, true);
+    const rate = hdr & 0x7fffffff, nch = hdr >>> 31 ? 2 : 1;      // top bit: stereo, L R interleaved
+    const pcm = new Int16Array(e.data, 4), frames = Math.floor(pcm.length / nch);
+    if (!frames) return;
+    const buf = audio.ctx.createBuffer(nch, frames, rate);
+    for (let c = 0; c < nch; c++) { const out = buf.getChannelData(c); for (let i = 0; i < frames; i++) out[i] = pcm[i * nch + c] / 32768; }
     const src = audio.ctx.createBufferSource();
     src.buffer = buf;
     src.connect(audio.gain);
@@ -295,6 +311,10 @@ function wire() {
     if (e.key === 'Enter') { const f = parseFreq($('freq').value); f ? tune(f) : flash('frequency? e.g. 860, 7.2M, 14074k'); $('freq').blur(); }
   });
   $('bw').addEventListener('change', setBw);
+  $('stereo').addEventListener('change', () => {
+    try { localStorage.setItem('rx.stereo', $('stereo').checked ? '1' : '0'); } catch (e) { /* private window */ }
+    setStereo($('stereo').checked);
+  });
   $('mode').addEventListener('change', () => { tune(null, $('mode').value); $('step').value = defaultStep($('mode').value, current().freq_hz); });
   $('listen').addEventListener('click', () => {
     state.listening ? stopAudio() : startAudio();

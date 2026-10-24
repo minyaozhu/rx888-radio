@@ -38,6 +38,7 @@ class Channel:
     sample_rate: int = 12000
     parked: bool = False            # True: not in radiod (other band selected)
     filter_hz: Optional[tuple] = None  # (low, high) audio passband instead of the preset's
+    stereo: bool = False            # WFM: decode FM stereo (two interleaved channels at 48 kHz)
     packets: Optional[int] = None   # radiod's output packet count, for stall detection
     packets_t: Optional[float] = None
     reopens: int = 0
@@ -124,6 +125,8 @@ class Radio:
         await asyncio.to_thread(self.ctl.set_agc, ch.ssrc, True)
         if ch.filter_hz:
             await asyncio.to_thread(self.ctl.set_filter, ch.ssrc, *ch.filter_hz)
+        if ch.mode == "wfm" and ch.stereo:
+            await asyncio.to_thread(self.ctl.set_output_channels, ch.ssrc, 2)
         ch.parked = False
 
     async def _close(self, ch):
@@ -153,7 +156,7 @@ class Radio:
         return ch
 
     async def tune(self, ssrc: int, freq_hz: Optional[float] = None, mode: Optional[str] = None,
-                   label: Optional[str] = None, filter_hz=...) -> Channel:
+                   label: Optional[str] = None, filter_hz=..., stereo: Optional[bool] = None) -> Channel:
         """filter_hz: (low, high) passband in Hz around the carrier, None for the mode's preset, ... to keep."""
         ch = self.channels[ssrc]
         freq_hz = ch.freq_hz if freq_hz is None else freq_hz
@@ -165,6 +168,9 @@ class Radio:
             ch.filter_hz = None                  # a new mode starts from its preset's passband
         if filter_hz is not ...:
             ch.filter_hz = tuple(filter_hz) if filter_hz else None
+        stereo_changed = stereo is not None and stereo != ch.stereo
+        if stereo is not None:
+            ch.stereo = stereo
         if label is not None:
             ch.label = label
         if ch.parked:
@@ -182,9 +188,11 @@ class Radio:
             if rate:
                 await asyncio.to_thread(self.ctl.set_sample_rate, ssrc, rate)
             await asyncio.to_thread(self.ctl.set_agc, ssrc, True)
-            ch.sample_rate = rate or ch.sample_rate
+            ch.sample_rate = rate or 48000          # WFM: radiod's output is always 48 kHz
         if ch.filter_hz and (filter_hz is not ... or mode != old_mode):
             await asyncio.to_thread(self.ctl.set_filter, ssrc, *ch.filter_hz)
+        if ch.mode == "wfm" and (stereo_changed or mode != old_mode):
+            await asyncio.to_thread(self.ctl.set_output_channels, ssrc, 2 if ch.stereo else 1)
         return ch
 
     async def pause_vhf(self):

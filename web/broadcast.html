@@ -178,6 +178,7 @@ button.on{background:var(--magenta)}
   <div class="nowbar" id="nowbar">
     <b id="nowName">Nothing playing</b><span class="m" id="nowMeta">pick a station below</span>
     <span style="flex:1"></span>
+    <label class="m" id="stereoWrap" style="display:none" title="FM stereo: needs a strong signal; mono is quieter on weak stations"><input type="checkbox" id="stereo"> stereo</label>
     <label class="m">vol <input id="vol" type="range" min="0" max="3" step="0.05" value="1"></label>
     <button id="stop" type="button" class="smallbtn" disabled>Stop</button>
   </div>
@@ -196,8 +197,8 @@ button.on{background:var(--magenta)}
   <div class="panel" style="padding:8px 12px">
     <div class="wrapt"><table class="tbl"><thead id="thead"></thead><tbody id="rows"></tbody></table></div>
   </div>
-  <p class="caveat">AM / FM station list from Wikipedia's list of Bay Area stations; shortwave from the EiBi schedule (eibispace.de), which lists what is scheduled, not what is audible: the signal column is from your last scan. AM and shortwave use the HF input, FM the VHF tuner; listening or scanning switches the receiver and holds it (the airband / public-safety rotation pauses) until “Resume rotation”. FM is mono.</p>
+  <p class="caveat">AM / FM station list from Wikipedia's list of Bay Area stations; shortwave from the EiBi schedule (eibispace.de), which lists what is scheduled, not what is audible: the signal column is from your last scan. AM and shortwave use the HF input, FM the VHF tuner; listening or scanning switches the receiver and holds it (the airband / public-safety rotation pauses) until “Resume rotation”. FM plays in stereo when the station sends it (untick “stereo” for mono, quieter on weak stations).</p>
 </div>
-<script src="broadcast.js?v=1"></script>
+<script src="broadcast.js?v=2"></script>
 </body>
 </html>
