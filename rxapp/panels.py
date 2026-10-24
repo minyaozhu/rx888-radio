@@ -145,6 +145,11 @@ class PanelHub:
             for key, f in self.hf.items():
                 if f.stream and key not in wanted:
                     await self._close(f)
+            # zooming makes a feed per zoom level: forget the oldest idle ones
+            idle = sorted((k for k, f in self.hf.items() if not f.stream and k not in self.wanted()),
+                          key=lambda k: self.hf[k].latest[3] if self.hf[k].latest else 0)
+            for k in idle[:max(0, len(self.hf) - 24)]:
+                del self.hf[k]
             for key in wanted:
                 f = self.feed_for(*key)
                 if not f.stream:

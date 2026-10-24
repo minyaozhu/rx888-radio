@@ -48,6 +48,7 @@ const pInput = (r) => (r.hi <= (PG.info ? PG.info.coverage_hz : state.info.max_f
 // in this panel's range, else the last window this panel saw.
 function viewOf(p) {
   const r = p.range;
+  if (r.zoom) return {lo: r.zoom[0], hi: r.zoom[1], zoomed: true};
   if (!r.fit || pInput(r) !== 'vhf' || !PG.info) return r;
   const span = PG.info.vhf.span_hz, c0 = PG.info.vhf.center_hz;
   let c = null;
@@ -63,9 +64,18 @@ function viewOf(p) {
 function ensureView(p) {
   const v = viewOf(p), key = `${v.lo}:${v.hi}`;
   if (key === p.viewKey) return;
+  const old = p.viewKey && p.v;
   p.viewKey = key; p.v = v;
   p.cols.fill(NaN); p.colT.fill(0);
-  p.wctx.fillStyle = '#05070a'; p.wctx.fillRect(0, 0, p.wf.width, p.wf.height);
+  const W = p.wf.width, H = p.wf.height;
+  if (old && old.hi > old.lo) {
+    const tmp = document.createElement('canvas'); tmp.width = W; tmp.height = H;
+    tmp.getContext('2d').drawImage(p.wf, 0, 0);
+    const span = v.hi - v.lo, dx = (old.lo - v.lo) / span * W, dw = (old.hi - old.lo) / span * W;
+    p.wctx.fillStyle = '#05070a'; p.wctx.fillRect(0, 0, W, H);
+    p.wctx.imageSmoothingEnabled = false;
+    p.wctx.drawImage(tmp, 0, 0, W, H, dx, 0, dw, H);
+  } else { p.wctx.fillStyle = '#05070a'; p.wctx.fillRect(0, 0, W, H); }
   [...p.frames.values()].sort((a, b) => a.t - b.t).forEach((fr) => overlay(p, fr));
 }
 
@@ -91,6 +101,7 @@ function makePanel(grid, range, idx) {
   el.innerHTML = `<div class="pnl-bar"><select aria-label="Panel ${idx + 1} range">${opts}</select>
       <span class="custom"><input class="lo" inputmode="decimal" aria-label="From (MHz)"> – <input class="hi" inputmode="decimal" aria-label="To (MHz)"> MHz <button type="button" class="go">Set</button></span>
       <button type="button" class="fit" title="Zoom this panel to the VHF tuner's 8.4 MHz live window (it follows the tuner)">Fit 8.4 MHz</button>
+      <button type="button" class="unzoom" title="Back to the panel's whole range" style="display:none"></button>
       <span class="pnl-st"></span></div>
     <canvas class="spec"></canvas><canvas class="wf"></canvas>`;
   grid.appendChild(el);
@@ -116,7 +127,8 @@ function makePanel(grid, range, idx) {
     setRange(p, {lo, hi, label: `${pfmt(lo)} – ${pfmt(hi)}`});
   });
   const fit = el.querySelector('.fit');
-  fit.addEventListener('click', () => { p.range = {...p.range, fit: !p.range.fit}; saveRanges(); drawPanel(p); });
+  fit.addEventListener('click', () => { p.range = {...p.range, fit: !p.range.fit, zoom: null}; saveRanges(); drawPanel(p); subscribeSoon(); });
+  el.querySelector('.unzoom').addEventListener('click', () => unzoom(p));
   wirePanelMouse(p);
   sizePanel(p);
   return p;
@@ -133,7 +145,7 @@ function sizePanel(p) {
   p.wctx.fillStyle = '#05070a'; p.wctx.fillRect(0, 0, p.wf.width, p.wf.height);
 }
 function setRange(p, range) {
-  p.range = {...range, fit: !!p.range.fit}; p.frames.clear(); sizePanel(p); saveRanges(); subscribe(); drawPanel(p);
+  p.range = {...range, fit: !!p.range.fit, zoom: null}; p.frames.clear(); sizePanel(p); saveRanges(); subscribe(); drawPanel(p);
 }
 
 // ------------------------------------------------------------------ data
@@ -152,7 +164,7 @@ function connectPanels() {
     const id = dv.getUint32(0, true), first = dv.getFloat64(4, true), bin = dv.getFloat32(12, true), n = dv.getUint32(16, true), t = dv.getFloat64(20, true);
     const fr = {id, first, bin, n, t, db: new Float32Array(e.data, 28, n)};
     for (const p of PG.panels) {
-      const mine = id === 0 ? pInput(p.range) === 'vhf' : PG.feedOf[`${p.range.lo}:${p.range.hi}`] === id;
+      const mine = id === 0 ? pInput(p.range) === 'vhf' : PG.feedOf[subRange(p).join(':')] === id;   // its own HF feed only
       if (!mine || first + n * bin < p.range.lo || first > p.range.hi) continue;
       p.frames.set(id === 0 ? 'v' + Math.round(first / 1e3) : 'h' + id, fr);
       if (p.frames.size > 80) { const old = [...p.frames.entries()].sort((a, b) => a[1].t - b[1].t)[0][0]; p.frames.delete(old); }
@@ -164,10 +176,16 @@ function connectPanels() {
   ws.onclose = () => { PG.ws = null; setTimeout(connectPanels, 1500); };
   PG.ws = ws;
 }
+function subRange(p) {
+  const v = p.range.zoom && pInput(p.range) === 'hf' ? p.range.zoom : [p.range.lo, p.range.hi];
+  return [Math.round(v[0]), Math.round(v[1])];
+}
 function subscribe() {
   if (!PG.ws || PG.ws.readyState !== 1) return;
-  PG.ws.send(JSON.stringify({ranges: PG.panels.map((p) => [p.range.lo, p.range.hi])}));
+  PG.ws.send(JSON.stringify({ranges: PG.panels.map(subRange)}));
 }
+let subTimer = null;
+function subscribeSoon() { clearTimeout(subTimer); subTimer = setTimeout(subscribe, 300); }   // zoom bursts: one request
 // put a frame's bins onto the panel's pixel columns (max per column, so narrow carriers show)
 function overlay(p, fr) {
   const W = p.cols.length, lo = p.v.lo, span = p.v.hi - p.v.lo;
@@ -283,7 +301,10 @@ function drawStatus(p) {
   fit.style.display = want === 'vhf' ? '' : 'none';
   fit.classList.toggle('on', !!p.range.fit);
   fit.setAttribute('aria-pressed', !!p.range.fit);
-  if (p.range.fit && want === 'vhf') txt += p.v && p.v.window ? ` · window ${pfmt(p.v.lo)}–${pfmt(p.v.hi)}` : ' · Fit: no window seen in this range yet';
+  const z = p.el.querySelector('.unzoom');
+  z.style.display = p.range.zoom ? '' : 'none';
+  if (p.range.zoom) z.textContent = `zoom ${pfmt(p.range.zoom[0])}–${pfmt(p.range.zoom[1])} ✕`;
+  if (p.range.fit && want === 'vhf' && !p.range.zoom) txt += p.v && p.v.window ? ` · window ${pfmt(p.v.lo)}–${pfmt(p.v.hi)}` : ' · Fit: no window seen in this range yet';
   st.textContent = txt; st.className = 'pnl-st ' + cls;
   st.title = want === 'vhf' ? 'VHF tuner panel: live only inside the tuner\'s 8.4 MHz window' : 'HF input panel';
 }
@@ -333,6 +354,22 @@ async function tuneFromPanel(p, x) {
     tune(f, mode);
   } catch (e) { flash(e.message); }
 }
+// factor > 1 zooms out; the frequency under the pointer (at fraction frac of the width) stays put
+function zoomPanel(p, frac, factor) {
+  ensureView(p);
+  const v = p.v, f = v.lo + frac * (v.hi - v.lo), hf = pInput(p.range) === 'hf';
+  const cov = PG.info ? PG.info.coverage_hz : state.info.max_freq_hz;
+  const [minLo, maxHi] = hf ? [0, cov] : [p.range.lo, p.range.hi];    // HF can zoom out to the whole input
+  const minSpan = hf ? 5e3 : 100e3;                                   // VHF bins are 4 kHz: no finer than that
+  let span = Math.max(minSpan, Math.min(maxHi - minLo, (v.hi - v.lo) * factor));
+  let lo = f - frac * span, hi = lo + span;
+  if (lo < minLo) { lo = minLo; hi = lo + span; }
+  if (hi > maxHi) { hi = maxHi; lo = hi - span; }
+  const full = !hf && lo <= p.range.lo + 1 && hi >= p.range.hi - 1 || hf && Math.abs(lo - p.range.lo) < 1 && Math.abs(hi - p.range.hi) < 1;
+  p.range = {...p.range, zoom: full ? null : [lo, hi]};
+  saveRanges(); drawPanel(p); subscribeSoon();
+}
+function unzoom(p) { p.range = {...p.range, zoom: null}; saveRanges(); drawPanel(p); subscribeSoon(); }
 function wirePanelMouse(p) {
   for (const c of [p.spec, p.wf]) {
     c.addEventListener('click', (e) => {
@@ -341,8 +378,14 @@ function wirePanelMouse(p) {
     });
     c.addEventListener('wheel', (e) => {
       e.preventDefault();
+      const dy = e.deltaY || e.deltaX;          // macOS turns Shift + wheel into a sideways scroll
+      if (e.shiftKey || e.ctrlKey) {            // ctrlKey: a trackpad pinch
+        const r = c.getBoundingClientRect();
+        zoomPanel(p, (e.clientX - r.left) / r.width, Math.exp(Math.max(-0.5, Math.min(0.5, dy * (e.deltaMode ? 0.05 : 0.002)))));
+        return;
+      }
       const ch = current(); if (!ch || ch.band !== pInput(p.range)) return;
-      stepTune(e.deltaY < 0 ? 1 : -1, e.shiftKey ? 10 : 1);
+      stepTune(dy < 0 ? 1 : -1);
     }, {passive: false});
   }
 }
