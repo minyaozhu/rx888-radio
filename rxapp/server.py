@@ -11,7 +11,7 @@ import re
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 import numpy as np
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
@@ -166,6 +166,7 @@ class ChannelUpdate(BaseModel):
     freq_hz: Optional[float] = None
     mode: Optional[str] = None
     label: Optional[str] = None
+    filter_hz: Optional[List[float]] = None     # [low, high] Hz around the carrier; [] = the mode's preset
 
 
 class SpectrumView(BaseModel):
@@ -739,7 +740,10 @@ async def update_channel(ssrc: int, body: ChannelUpdate):
     if ch.band == "vhf" and S.spectrum.sweeping and body.freq_hz is not None:
         await S.spectrum.ensure_live(body.freq_hz)     # tuning means listening: tuner back to live
     try:
-        ch = await S.radio.tune(ssrc, body.freq_hz, body.mode, body.label)
+        flt = ... if body.filter_hz is None else body.filter_hz
+        if flt is not ... and flt and not (len(flt) == 2 and -150e3 <= flt[0] < flt[1] <= 150e3):
+            raise ValueError("filter_hz is [low, high] in Hz, low < high, within ±150 kHz")
+        ch = await S.radio.tune(ssrc, body.freq_hz, body.mode, body.label, flt)
     except ValueError as e:
         raise HTTPException(400, str(e))
     return ch.to_dict()

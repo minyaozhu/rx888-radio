@@ -153,13 +153,18 @@ class Radio:
         return ch
 
     async def tune(self, ssrc: int, freq_hz: Optional[float] = None, mode: Optional[str] = None,
-                   label: Optional[str] = None) -> Channel:
+                   label: Optional[str] = None, filter_hz=...) -> Channel:
+        """filter_hz: (low, high) passband in Hz around the carrier, None for the mode's preset, ... to keep."""
         ch = self.channels[ssrc]
         freq_hz = ch.freq_hz if freq_hz is None else freq_hz
         mode = ch.mode if mode is None else mode
         self._check(freq_hz, mode, ch.band)
         old_mode = ch.mode
         ch.freq_hz, ch.mode = freq_hz, mode
+        if mode != old_mode:
+            ch.filter_hz = None                  # a new mode starts from its preset's passband
+        if filter_hz is not ...:
+            ch.filter_hz = tuple(filter_hz) if filter_hz else None
         if label is not None:
             ch.label = label
         if ch.parked:
@@ -171,13 +176,15 @@ class Radio:
         else:
             freq, preset, rate = self._radiod_params(ch)
             await asyncio.to_thread(self.ctl.set_frequency, ssrc, freq)
-        if mode != old_mode:
-            freq, preset, rate = self._radiod_params(ch)
+        if mode != old_mode or (filter_hz is not ... and not ch.filter_hz):
+            freq, preset, rate = self._radiod_params(ch)        # the preset also restores its own filter
             await asyncio.to_thread(self.ctl.set_preset, ssrc, preset)
             if rate:
                 await asyncio.to_thread(self.ctl.set_sample_rate, ssrc, rate)
             await asyncio.to_thread(self.ctl.set_agc, ssrc, True)
             ch.sample_rate = rate or ch.sample_rate
+        if ch.filter_hz and (filter_hz is not ... or mode != old_mode):
+            await asyncio.to_thread(self.ctl.set_filter, ssrc, *ch.filter_hz)
         return ch
 
     async def pause_vhf(self):

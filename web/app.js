@@ -77,6 +77,38 @@ function renderHfGain(db) {
   $('hfGainVal').textContent = auto ? 'auto' : `${(+$('hfGain').value).toFixed(1)} dB`;
 }
 
+// ------------------------------------------------------------------ bandwidth
+// Total passband width per mode; the edges are placed the way radiod's presets place them. null = the preset.
+const BW = {
+  am: [3e3, 4e3, 5e3, 6e3, 8e3, null, 12e3], sam: [3e3, 4e3, 5e3, 6e3, 8e3, null, 12e3],
+  usb: [1.8e3, 2.1e3, 2.4e3, 2.7e3, null, 3.6e3], lsb: [1.8e3, 2.1e3, 2.4e3, 2.7e3, null, 3.6e3],
+  cwu: [100, 200, 300, null, 500, 800, 1000], cwl: [100, 200, 300, null, 500, 800, 1000],
+  nfm: [6e3, 8e3, 10e3, null, 16e3, 20e3], wfm: [150e3, 180e3, null],
+};
+const BW_DEFAULT = {am: 10e3, sam: 10e3, usb: 2.95e3, lsb: 2.95e3, cwu: 400, cwl: 400, nfm: 12.5e3, wfm: 220e3};
+function bwEdges(mode, w) {
+  if (w == null) return null;
+  if (mode === 'usb') { const lo = w < 2.4e3 ? 300 : 100; return [lo, lo + w]; }
+  if (mode === 'lsb') { const lo = w < 2.4e3 ? 300 : 100; return [-(lo + w), -lo]; }
+  return [-w / 2, w / 2];
+}
+const fmtBw = (w) => w >= 1e3 ? (w / 1e3).toLocaleString(undefined, {maximumFractionDigits: 2}) + ' kHz' : w + ' Hz';
+function renderBw(ch) {
+  const sel = $('bw'), list = BW[ch.mode] || [null];
+  sel.innerHTML = list.map((w, i) => `<option value="${i}">${w == null ? fmtBw(BW_DEFAULT[ch.mode]) + ' (default)' : fmtBw(w)}</option>`).join('');
+  const cur = ch.filter_hz ? Math.round(ch.filter_hz[1] - ch.filter_hz[0]) : null;
+  let i = list.findIndex((w) => cur == null ? w == null : w != null && Math.abs(w - cur) < 1);
+  if (i < 0) { sel.add(new Option(fmtBw(cur) + ' (custom)', 'custom')); i = sel.options.length - 1; }
+  sel.selectedIndex = i;
+}
+async function setBw() {
+  const ch = current(); if (!ch || $('bw').value === 'custom') return;
+  const edges = bwEdges(ch.mode, (BW[ch.mode] || [null])[+$('bw').value]);
+  ch.filter_hz = edges;
+  try { await api('PATCH', `/api/channels/${ch.ssrc}`, {filter_hz: edges || []}); } catch (e) { flash(e.message); }
+  panelsRedraw();
+}
+
 function select(ssrc, ch) {
   state.selected = ssrc;
   ch = ch || state.channels.find((c) => c.ssrc === ssrc);
@@ -84,6 +116,7 @@ function select(ssrc, ch) {
   $('freq').value = fmtTune(ch.freq_hz);
   $('mode').value = ch.mode;
   $('step').value = defaultStep(ch.mode, ch.freq_hz);
+  renderBw(ch);
   if (state.listening) startAudio();
 }
 
@@ -115,7 +148,7 @@ async function tune(freq_hz, mode) {
     ch.freq_hz = freq_hz;
     $('freq').value = fmtTune(freq_hz);
   }
-  if (mode) ch.mode = mode;
+  if (mode && mode !== ch.mode) { ch.mode = mode; ch.filter_hz = null; renderBw(ch); }   // a new mode: its preset width
   panelsRedraw();
   // coalesce wheel/drag bursts into one request every 80 ms
   pendingTune = {freq_hz: ch.freq_hz, mode: ch.mode};
@@ -261,6 +294,7 @@ function wire() {
   $('freq').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { const f = parseFreq($('freq').value); f ? tune(f) : flash('frequency? e.g. 860, 7.2M, 14074k'); $('freq').blur(); }
   });
+  $('bw').addEventListener('change', setBw);
   $('mode').addEventListener('change', () => { tune(null, $('mode').value); $('step').value = defaultStep($('mode').value, current().freq_hz); });
   $('listen').addEventListener('click', () => {
     state.listening ? stopAudio() : startAudio();
@@ -336,6 +370,10 @@ window.rxControl = (action) => {
     case 'tune_down_fast': stepTune(-1, 10); return freqText();
     case 'step_up': cycleSelect($('step'), 1); return 'step ' + $('step').selectedOptions[0].text;
     case 'step_down': cycleSelect($('step'), -1); return 'step ' + $('step').selectedOptions[0].text;
+    case 'bw_up': case 'bw_down': {
+      const sel = $('bw'); if (!cycleSelect(sel, action === 'bw_up' ? 1 : -1)) return 'bandwidth ' + sel.selectedOptions[0].text;
+      return 'bandwidth ' + sel.selectedOptions[0].text;
+    }
     case 'step_cycle': {
       const sel = $('step'); sel.selectedIndex = (sel.selectedIndex + 1) % sel.options.length; sel.dispatchEvent(new Event('change'));
       return 'step ' + sel.selectedOptions[0].text;

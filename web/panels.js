@@ -263,9 +263,10 @@ function drawPanel(p) {
     if (ch.band !== pInput(p.range) || ch.freq_hz < lo || ch.freq_hz > hi) continue;
     if (ch.kind !== 'listen' && ch.ssrc !== state.selected) continue;
     const sel = ch.ssrc === state.selected, x = (ch.freq_hz - lo) / span * W;
-    const bw = ch.mode === 'wfm' ? 200000 : ch.mode === 'nfm' ? 12500 : ch.mode.startsWith('cw') ? 400 : ch.mode === 'usb' || ch.mode === 'lsb' ? 3000 : 10000;
-    const off = ch.mode === 'usb' ? 0 : ch.mode === 'lsb' ? -bw : -bw / 2;
-    const x0 = (ch.freq_hz + off - lo) / span * W, x1 = (ch.freq_hz + off + bw - lo) / span * W;
+    const bw = ch.mode === 'wfm' ? 220000 : ch.mode === 'nfm' ? 12500 : ch.mode.startsWith('cw') ? 400 : ch.mode === 'usb' || ch.mode === 'lsb' ? 2950 : 10000;
+    const [e0, e1] = ch.filter_hz || (ch.mode === 'usb' ? [50, 50 + bw] : ch.mode === 'lsb' ? [-50 - bw, -50] : [-bw / 2, bw / 2]);
+    const sh = ch.mode === 'cwu' ? 500 : ch.mode === 'cwl' ? -500 : 0;     // CW: the filter sits at the BFO pitch
+    const x0 = (ch.freq_hz + sh + e0 - lo) / span * W, x1 = (ch.freq_hz + sh + e1 - lo) / span * W;
     ctx.fillStyle = sel ? 'rgba(255,184,76,0.18)' : 'rgba(76,194,255,0.10)'; ctx.fillRect(x0, 0, Math.max(1, x1 - x0), H);
     ctx.strokeStyle = sel ? '#ffb84c' : '#4cc2ff'; ctx.lineWidth = (sel ? 2 : 1) * d;
     ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();

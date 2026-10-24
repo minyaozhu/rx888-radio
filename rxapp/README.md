@@ -25,6 +25,7 @@ or the SoapySDDC scripts.
 |---|---|
 | **Inputs** | **HF** (direct sampling) or **VHF** (the R828D tuner, 24–1700 MHz), switched from the page. HF **coverage** 0–32 MHz (radiod at 64.8 MS/s) or 0–64 MHz (129.6 MS/s, ~90% of one core); switching restarts radiod and restores the channels. |
 | **Listen** | A 2 × 2 grid of spectrum + waterfall panels, each on its own range: presets (0–2 MHz, 2–30 MHz, amateur and broadcast bands, FM, airband, 2 m, VHF-high, marine, NOAA, UHF 400–470, 70 cm, FRS/GMRS) or a custom range. Defaults: 0–2 MHz, 2–30 MHz, airband, UHF 400–470 MHz; the choice is kept in the browser. The receiver sees one input at a time. On HF every HF panel is live, each with its own radiod spectrum channel (2048 bins, 5 fps). On VHF only the tuner's 8.4 MHz window is live (shaded on VHF panels). The rest of each panel keeps the last picture, greyed, and the panel says how old it is ("seen 4 min ago · receiver on VHF"); it catches up whenever the voice session or you move the receiver there. VHF panels have **Fit 8.4 MHz**: the panel shows just the tuner's window, full width, following the tuner (or, when the receiver is elsewhere, the last window it saw in that range). **Shift + wheel** (or a trackpad pinch) zooms a panel around the pointer, and **Shift + ← / →** (so Shift + a dial that sends arrows) zooms the panel last pointed at around the tuned frequency; ✕ next to the zoom resets it. An HF panel then gets a spectrum channel for just the zoomed range, so detail sharpens (2048 bins over whatever is shown, down to 5 kHz); HF panels can also zoom out to the whole input. VHF panels zoom within their range, down to 100 kHz (the tuner window's bins are 4 kHz). Click a panel to tune; it switches the input or moves the tuner if needed, and pauses the voice session. ←/→ or the wheel step (Option + ←/→: ×10). (`/ws/panels`, `rxapp/panels.py`.) **Gain**: HF −41.5…+34 dB (below −10 dB the attenuator) or Auto; VHF tuner IF gain 0–15. HF modes AM, SAM, USB, LSB, CW, NFM; VHF modes WFM, NFM, AM. Audio in the browser over a WebSocket, S-meter and SNR. |
+| **Bandwidth** | A *BW* menu per channel: AM/SAM 3–12 kHz, USB/LSB 1.8–3.6 kHz, CW 100 Hz–1 kHz, NFM 6–20 kHz, WFM 150–220 kHz, plus the mode's preset width (default). The panels shade the real passband. A new mode goes back to its default. `PATCH /api/channels/{ssrc} {filter_hz: [low, high]}` (`[]` = preset). |
 | **Channels** | Any number at once (radiod demodulates them all); the Radio page tunes and records one, the other pages make their own. |
 | **Scan** | HF: AM broadcast, shortwave broadcast bands, ham bands (peak finding for SSB), CB, WWV propagation check. VHF: FM broadcast, airband, 2 m, NOAA weather; bands wider than the tuner window are scanned in steps (FM: 4 steps, ~25 s), which briefly moves the tuner. HF scans use their own spectrum channel, so the display doesn't move. Run from the AM / SW / FM and SSB Voice pages, or `POST /api/scan/{band}`. |
 | **Monitor** (server-side) | Scheduled scans (default: AM every 10 min, WWV every 30 min) and *watches*: a channel recorded automatically whenever its SNR rises above a threshold, optionally transcribed on-device. API: `/api/schedules`, `/api/watches`, `/api/recordings`. |
@@ -191,7 +192,7 @@ HF/VHF, scan, record, and switching tabs. A small display at the bottom of the w
 (e.g. *88.600 MHz WFM*). Click **Assign** next to an action, then press a key, a dial button or turn the knob:
 whatever it sends is recorded. Bindings are kept in `rxapp_data/controller.json` (`GET/PUT /api/controller`).
 
-Defaults: → / ← tune (Option: ×10; Shift: zoom the panel), `]` / `[` tune (Shift: ×10), `.` / `,` step (`/` cycles), `=` / `-` volume, `L` listen, `M` mode (Shift: back),
+Defaults: → / ← tune (Option: ×10; Shift: zoom the panel; Control: tuning step; Command: bandwidth), `]` / `[` tune (Shift: ×10), `.` / `,` step (`/` cycles), `=` / `-` volume, `L` listen, `M` mode (Shift: back),
 `Z` zoom (Shift: out), `C` centre, `N` channel (Shift: back), `B` HF/VHF, `S` scan, Page Up/Down tabs.
 
 **Ulanzi Dial** (D100H): its knob sends the Mac's volume keys, which web pages never see, and macOS's own
@@ -199,7 +200,7 @@ per-device remapping (`hidutil` UserKeyMapping) does not apply to it. With
 [Karabiner-Elements](https://karabiner-elements.pqrs.org), the rule in `karabiner/ulanzi-dial.json` (copy it to
 `~/.config/karabiner/assets/complex_modifications/`, then Complex Modifications > Add predefined rule > Enable)
 turns the knob into ← / → (tune) and its press into `/` (next tuning step), for that device only. Its buttons
-send Cmd+C/V/Z/Y and media keys. Keys reach rxapp only while its browser window is in front.
+send Cmd+C/V/Z/Y and media keys. Keys reach rxapp only while its browser window is in front. Ulanzi Studio sends the dial's keys without modifier flags, so rxapp remembers Shift / Control / Option / Command held on the Mac's keyboard and applies them to the dial (Shift + dial zoom, Control + dial step, Command + dial bandwidth).
 
 ## SSB voice
 

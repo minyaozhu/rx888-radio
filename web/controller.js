@@ -8,7 +8,8 @@ const CTRL_ACTIONS = [
   ['tune_up', 'Tune up one step'], ['tune_down', 'Tune down one step'],
   ['tune_up_fast', 'Tune up 10 steps'], ['tune_down_fast', 'Tune down 10 steps'],
   ['zoom_in', 'Zoom the panel in (on the tuned frequency)'], ['zoom_out', 'Zoom the panel out'],
-  ['step_up', 'Larger tuning step'], ['step_down', 'Smaller tuning step'], ['step_cycle', 'Next tuning step (wraps around)'],
+  ['step_up', 'Larger tuning step'], ['step_down', 'Smaller tuning step'],
+  ['bw_up', 'Wider bandwidth'], ['bw_down', 'Narrower bandwidth'], ['step_cycle', 'Next tuning step (wraps around)'],
   ['vol_up', 'Volume up'], ['vol_down', 'Volume down'], ['listen', 'Listen / stop'],
   ['mode_next', 'Next mode'], ['mode_prev', 'Previous mode'],
   ['chan_next', 'Next channel'], ['chan_prev', 'Previous channel'],
@@ -18,6 +19,8 @@ const CTRL_ACTIONS = [
 const CTRL_DEFAULTS = {
   ArrowRight: 'tune_up', ArrowLeft: 'tune_down', 'Alt+ArrowRight': 'tune_up_fast', 'Alt+ArrowLeft': 'tune_down_fast',
   'Shift+ArrowRight': 'zoom_in', 'Shift+ArrowLeft': 'zoom_out',     // Shift + the dial (sending ← / →) zooms
+  'Ctrl+ArrowRight': 'step_up', 'Ctrl+ArrowLeft': 'step_down',       // Control + dial: tuning step
+  'Cmd+ArrowRight': 'bw_up', 'Cmd+ArrowLeft': 'bw_down',             // Command + dial: bandwidth
   BracketRight: 'tune_up', BracketLeft: 'tune_down', 'Shift+BracketRight': 'tune_up_fast', 'Shift+BracketLeft': 'tune_down_fast',
   Slash: 'step_cycle', Period: 'step_up', Comma: 'step_down', Equal: 'vol_up', Minus: 'vol_down', KeyL: 'listen',
   KeyM: 'mode_next', 'Shift+KeyM': 'mode_prev',
@@ -28,12 +31,14 @@ window.rxCtrl = ctrl;                   // pages in the frames check for it
 
 // Shift held on the Mac's keyboard while another device types: a dial driven by its own app (Ulanzi Studio)
 // sends keystrokes without the Shift flag, so we remember Shift ourselves.
-const held = {shift: false};
+const held = {shift: false, ctrl: false, alt: false, meta: false};
 const shiftOf = (e) => e.shiftKey || held.shift;
+const HELD_KEY = {Shift: 'shift', Control: 'ctrl', Alt: 'alt', Meta: 'meta'};
 ctrl.held = held;                       // the panels' wheel checks it too
 // "Ctrl+Shift+KeyK" from a key event (physical key code, so it doesn't depend on the keyboard layout)
 function comboOf(e) {
-  const mods = [e.ctrlKey && 'Ctrl', e.altKey && 'Alt', shiftOf(e) && 'Shift', e.metaKey && 'Cmd'].filter(Boolean);
+  const mods = [(e.ctrlKey || held.ctrl) && 'Ctrl', (e.altKey || held.alt) && 'Alt', shiftOf(e) && 'Shift',
+    (e.metaKey || held.meta) && 'Cmd'].filter(Boolean);
   return [...mods, e.code || e.key].join('+');
 }
 function wheelCombo(e) {
@@ -77,8 +82,7 @@ function hud(text) {
 
 // ---- input from the shell and from every frame (same origin, so we can listen inside them)
 function onKey(e) {
-  if (e.key === 'Shift') { held.shift = true; return; }
-  if (['Control', 'Alt', 'Meta'].includes(e.key)) return;
+  if (HELD_KEY[e.key]) { held[HELD_KEY[e.key]] = true; return; }
   const combo = comboOf(e);
   ctrl.last = combo; showLast();
   if (ctrl.learning) { e.preventDefault(); e.stopImmediatePropagation(); learn(combo); return; }
@@ -106,11 +110,11 @@ function onWheel(e) {
   if (wheelAcc < 40 && e.deltaMode === 0) return;
   wheelAcc = 0; ctrl.last = combo; showLast(); runAction(action);
 }
-function onKeyUp(e) { if (e.key === 'Shift') held.shift = false; }
+function onKeyUp(e) { if (HELD_KEY[e.key]) held[HELD_KEY[e.key]] = false; }
 function attach(win) {
   win.addEventListener('keydown', onKey, true);
   win.addEventListener('keyup', onKeyUp, true);
-  win.addEventListener('blur', () => { held.shift = false; });
+  win.addEventListener('blur', () => { for (const k in held) held[k] = false; });
   win.addEventListener('wheel', onWheel, {capture: true, passive: false});
 }
 attach(window);
