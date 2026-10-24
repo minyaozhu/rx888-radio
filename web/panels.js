@@ -314,7 +314,25 @@ function drawStatus(p) {
   st.textContent = txt; st.className = 'pnl-st ' + cls;
   st.title = want === 'vhf' ? 'VHF tuner panel: live only inside the tuner\'s 8.4 MHz window' : 'HF input panel';
 }
-function panelsRedraw() { for (const p of PG.panels) drawPanel(p); }
+// Tuning past the edge of a zoomed panel that was showing the channel: re-centre it there (same width),
+// the way a single spectrum view follows the tuning. Panels not zoomed keep their range.
+function followTuning() {
+  const ch = current(); if (!ch) return;
+  for (const p of PG.panels) {
+    if (!p.range.zoom || ch.band !== pInput(p.range)) { p.following = false; continue; }
+    const [lo, hi] = p.range.zoom, span = hi - lo, f = ch.freq_hz, inside = f >= lo + span * 0.02 && f <= hi - span * 0.02;
+    if (inside) { p.following = true; continue; }
+    if (!p.following || p.lastF == null || Math.abs(f - p.lastF) > span * 2) { p.following = false; continue; }   // a jump, not tuning
+    const hf = pInput(p.range) === 'hf', cov = PG.info ? PG.info.coverage_hz : state.info.max_freq_hz;
+    const [minLo, maxHi] = hf ? [0, cov] : [VHF_LIMITS[0], VHF_LIMITS[1]];
+    let nlo = Math.min(Math.max(minLo, f - span / 2), maxHi - span);
+    p.range = {...p.range, zoom: [nlo, nlo + span]};
+    saveRanges(); subscribeSoon();
+  }
+  for (const p of PG.panels) p.lastF = ch.freq_hz;
+}
+const VHF_LIMITS = [24e6, 1700e6];
+function panelsRedraw() { followTuning(); for (const p of PG.panels) drawPanel(p); }
 
 // ------------------------------------------------------------------ tuning from a panel
 // HF band plan for a click: what voice there is usually sent as. Elsewhere the current mode stays.

@@ -252,12 +252,13 @@ class PanelHub:
                         await ws.send_bytes(b)
 
         task = asyncio.create_task(reader())
-        info_every, last_info = 2.0, 0.0
+        info_every, last_info, last_seen = 2.0, 0.0, None
         try:
             while not task.done():
                 now = time.time()
-                if now - last_info > info_every:          # the input / tuner can move under us
-                    last_info = now
+                moved = (self.radio.band, self.radio.vhf.center_hz) != last_seen
+                if now - last_info > info_every or moved:   # the input / tuner can move under us
+                    last_info, last_seen = now, (self.radio.band, self.radio.vhf.center_hz)
                     if ranges:
                         await ws.send_json(self.describe(ranges))
                 for f in [self.hf.get(r) for r in ranges] + [self.vhf]:
