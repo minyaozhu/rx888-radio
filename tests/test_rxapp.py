@@ -714,3 +714,22 @@ def test_broadcast_station_tables():
     s = broadcast.stations()
     assert {x["call"] for x in s["am"]} >= {"KCBS", "KNBR"}
     assert any(x["call"] == "KQED-FM" and x["freq_hz"] == 88_500_000 for x in s["fm"])
+
+
+# ---- SSB voice ---------------------------------------------------------------------------
+from rxapp import ssb
+
+
+def test_ssb_channels_and_passband():
+    d = ssb.channels(32e6)
+    assert {c["group"] for c in d["channels"]} == {"ham", "air", "mil", "marine"}
+    assert all(c["mode"] in ("usb", "lsb") for c in d["channels"])
+    six = next(c for c in d["channels"] if c["freq_hz"] == 50125e3)
+    assert six["reachable"] is False                     # 6 m needs the 0-64 MHz coverage
+    assert next(c for c in ssb.channels(64.8e6)["channels"] if c["freq_hz"] == 50125e3)["reachable"]
+    # a USB voice signal 1 kHz above the dial: seen as USB, not as LSB on the same dial
+    f = np.arange(8.95e6, 9.05e6, 250.0)
+    db = np.full(f.shape, -110.0)
+    db[(f >= 8992.8e3) & (f <= 8994.0e3)] = -90.0
+    assert ssb.passband_snr(f, db, 8992e3, "usb") > 15
+    assert ssb.passband_snr(f, db, 8992e3, "lsb") < 3

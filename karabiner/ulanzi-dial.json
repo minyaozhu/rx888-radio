@@ -2,17 +2,170 @@
   "title": "rxapp: Ulanzi Dial tunes the radio",
   "rules": [
     {
-      "description": "Ulanzi Dial: knob turns to ← / → (tune), knob press to / (next tuning step); other keyboards unchanged",
+      "description": "Ulanzi Dial: knob turns to \u2190 / \u2192 (tune), knob press to / (next tuning step); other keyboards unchanged",
       "manipulators": [
-        {"type": "basic", "from": {"consumer_key_code": "volume_increment", "modifiers": {"optional": ["any"]}},
-         "to": [{"key_code": "right_arrow"}],
-         "conditions": [{"type": "device_if", "identifiers": [{"vendor_id": 65521, "product_id": 130}]}]},
-        {"type": "basic", "from": {"consumer_key_code": "volume_decrement", "modifiers": {"optional": ["any"]}},
-         "to": [{"key_code": "left_arrow"}],
-         "conditions": [{"type": "device_if", "identifiers": [{"vendor_id": 65521, "product_id": 130}]}]},
-        {"type": "basic", "from": {"consumer_key_code": "mute", "modifiers": {"optional": ["any"]}},
-         "to": [{"key_code": "slash"}],
-         "conditions": [{"type": "device_if", "identifiers": [{"vendor_id": 65521, "product_id": 130}]}]}
+        {
+          "type": "basic",
+          "from": {
+            "consumer_key_code": "volume_increment",
+            "modifiers": {
+              "optional": [
+                "any"
+              ]
+            }
+          },
+          "to": [
+            {
+              "key_code": "right_arrow"
+            }
+          ],
+          "conditions": [
+            {
+              "type": "device_if",
+              "identifiers": [
+                {
+                  "vendor_id": 65521,
+                  "product_id": 130
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "basic",
+          "from": {
+            "consumer_key_code": "volume_decrement",
+            "modifiers": {
+              "optional": [
+                "any"
+              ]
+            }
+          },
+          "to": [
+            {
+              "key_code": "left_arrow"
+            }
+          ],
+          "conditions": [
+            {
+              "type": "device_if",
+              "identifiers": [
+                {
+                  "vendor_id": 65521,
+                  "product_id": 130
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "basic",
+          "from": {
+            "consumer_key_code": "mute",
+            "modifiers": {
+              "optional": [
+                "any"
+              ]
+            }
+          },
+          "to": [
+            {
+              "key_code": "slash"
+            }
+          ],
+          "conditions": [
+            {
+              "type": "device_if",
+              "identifiers": [
+                {
+                  "vendor_id": 65521,
+                  "product_id": 130
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "basic",
+          "from": {
+            "key_code": "volume_increment",
+            "modifiers": {
+              "optional": [
+                "any"
+              ]
+            }
+          },
+          "to": [
+            {
+              "key_code": "right_arrow"
+            }
+          ],
+          "conditions": [
+            {
+              "type": "device_if",
+              "identifiers": [
+                {
+                  "vendor_id": 65521,
+                  "product_id": 130
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "basic",
+          "from": {
+            "key_code": "volume_decrement",
+            "modifiers": {
+              "optional": [
+                "any"
+              ]
+            }
+          },
+          "to": [
+            {
+              "key_code": "left_arrow"
+            }
+          ],
+          "conditions": [
+            {
+              "type": "device_if",
+              "identifiers": [
+                {
+                  "vendor_id": 65521,
+                  "product_id": 130
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "basic",
+          "from": {
+            "key_code": "mute",
+            "modifiers": {
+              "optional": [
+                "any"
+              ]
+            }
+          },
+          "to": [
+            {
+              "key_code": "slash"
+            }
+          ],
+          "conditions": [
+            {
+              "type": "device_if",
+              "identifiers": [
+                {
+                  "vendor_id": 65521,
+                  "product_id": 130
+                }
+              ]
+            }
+          ]
+        }
       ]
     }
   ]

@@ -25,14 +25,15 @@ or the SoapySDDC scripts.
 |---|---|
 | **Inputs** | **HF** (direct sampling) or **VHF** (the R828D tuner, 24–1700 MHz), switched from the page. HF **coverage** 0–32 MHz (radiod at 64.8 MS/s) or 0–64 MHz (129.6 MS/s, ~90% of one core); switching restarts radiod and restores the channels. |
 | **Listen** | Spectrum + waterfall (2048 bins, ~10 fps), click to tune (snaps to the nearest signal), ←/→ or wheel to step (Shift ×10), drag to pan. The same Coverage and Span menus on both inputs (100 kHz up to 0–32 or 0–64 MHz); on VHF, spans up to 8.4 MHz are live and wider ones are *swept* (the tuner steps across the range, ~2.3 s per update for 64 MHz, VHF audio paused; clicking a signal returns to live). **Gain**: HF −41.5…+34 dB (below −10 dB the attenuator) or Auto; VHF tuner IF gain 0–15. HF modes AM, SAM, USB, LSB, CW, NFM; VHF modes WFM, NFM, AM. Audio in the browser over a WebSocket, S-meter and SNR. |
-| **Channels** | Any number at once (radiod demodulates them all); listen to one, record any. |
-| **Scan** | HF: AM broadcast, shortwave broadcast bands, ham bands (peak finding for SSB), CB, WWV propagation check. VHF: FM broadcast, airband, 2 m, NOAA weather; bands wider than the tuner window are scanned in steps (FM: 4 steps, ~25 s), which briefly moves the tuner. HF scans use their own spectrum channel, so the display doesn't move. |
-| **Monitor** (server-side) | Scheduled scans (default: AM every 10 min, WWV every 30 min) and *watches*: a channel recorded automatically whenever its SNR rises above a threshold, optionally transcribed on-device. |
-| **FT8** (server-side) | Every FT8 band at once (160 m–10 m, plus 6 m with 0–64 MHz coverage): one USB channel per dial frequency, cut into 15 s UTC slots and decoded with ft8_lib. Live message list, conversations grouped by station pair (✓ when they reach RR73/73), CQ callers with grids, search by callsign or grid. Keeps running across restarts; pauses while VHF is selected. |
+| **Channels** | Any number at once (radiod demodulates them all); the Radio page tunes and records one, the other pages make their own. |
+| **Scan** | HF: AM broadcast, shortwave broadcast bands, ham bands (peak finding for SSB), CB, WWV propagation check. VHF: FM broadcast, airband, 2 m, NOAA weather; bands wider than the tuner window are scanned in steps (FM: 4 steps, ~25 s), which briefly moves the tuner. HF scans use their own spectrum channel, so the display doesn't move. Run from the AM / SW / FM and SSB Voice pages, or `POST /api/scan/{band}`. |
+| **Monitor** (server-side) | Scheduled scans (default: AM every 10 min, WWV every 30 min) and *watches*: a channel recorded automatically whenever its SNR rises above a threshold, optionally transcribed on-device. API: `/api/schedules`, `/api/watches`, `/api/recordings`. |
+| **FT8** (server-side) | Every FT8 band at once (160 m–10 m, plus 6 m with 0–64 MHz coverage): one USB channel per dial frequency, cut into 15 s UTC slots and decoded with ft8_lib. Shown on the FT8 / FT4 page (map and per-station timeline). Keeps running across restarts; pauses while VHF is selected. |
 | **Airband** (with `voice_session.py`) | Every airband channel in the tuner's 8.4 MHz window recorded and transcribed at once, alternating between the NorCal approach and Bay Area tower windows; a live map page with all Bay Area airports. See [Airband](#airband). |
 | **Public safety** (with `voice_session.py`) | CHP's low band (HF input) and VHF-high conventional channels, recorded and transcribed; digital transmissions logged, not decoded; 7-day retention. See [Public safety](#public-safety). |
 | **SSTV** (server-side) | Watches the SSTV calling frequencies (3.845 and 7.171 MHz LSB; 14.230, 14.233, 21.340, 28.680 MHz USB) and decodes every picture into a gallery, with the audio kept. |
-| **Dashboard** | Occupancy per channel, detections over time, receiver health (IF power, RF gain, spectrum rate, ADC overloads), event log. |
+| **History** | Occupancy per channel, detections over time, receiver health (IF power, RF gain, spectrum rate, ADC overloads), event log: `/api/occupancy/{band}`, `/api/timeline/{band}`, `/api/health/history`, `/api/events`. |
+| **SSB voice** | Known HF voice channels (amateur nets and calling frequencies, Pacific aviation and VOLMET, USAF HFGCS, Coast Guard) with a voice-band signal check, and conversations found anywhere in the amateur phone bands. See [SSB voice](#ssb-voice). |
 | **Recovery** | A supervisor restarts radiod when it stops answering (USB unplug, crash) and re-creates every channel with the same SSRC; open pages reconnect and re-create their channel. |
 
 ## How VHF works with radiod
@@ -94,8 +95,8 @@ The FT8 monitor also runs as an FT4 monitor (`Ft8(..., proto=FT4)`): 7.5 s slots
 (3.575, 7.0475, 10.140, 14.080, 18.104, 21.140, 24.919, 28.180, 50.318 MHz), `decode_ft8 -ft4`, table `ft4`, API
 `/api/ft4/...` (the same endpoints as FT8). Each slot is decoded twice, the second time with its first 0.4 s cut
 (the Malahit toolkit found ft8_lib's FT4 decoder missing signals that start later than ~0.5 s into the file);
-the results are merged. Tested end to end with a signal from ft8_lib's `gen_ft8 -ft4`. The FT4 map
-(`ft4.html`) is the FT8 Skywatch page with `data-proto="ft4"`; both pages have a Start/Stop for their monitor.
+the results are merged. Tested end to end with a signal from ft8_lib's `gen_ft8 -ft4`. FT4 is shown
+on the FT8 / FT4 page (`ft8.html?proto=ft4`, the page's FT8 / FT4 switch); each mode has a Start/Stop for its monitor.
 
 ## SSTV
 
@@ -114,9 +115,9 @@ API: `GET/POST /api/sstv` (status / `{on}`), `GET /api/sstv/pictures`, `GET /api
 
 ## The web app
 
-http://127.0.0.1:8090 is a tab bar with one page per feature: **Radio**, **AM / FM / SW** (`broadcast.html`), (`radio.html`: tuning, waterfall,
-channels, scans, monitors, FT8/SSTV controls, recordings, dashboard), **FT8 map** (`ft8.html`), **FT4 map**
-(`ft4.html`), **WSPR** (`wspr.html`), **Airband**
+http://127.0.0.1:8090 is a tab bar with one page per feature: **Radio** (`radio.html`: tuning, waterfall, listen,
+record), **AM / SW / FM** (`broadcast.html`), **SSB Voice** (`ssb.html`), **FT8 / FT4** (`ft8.html`, with an FT8 / FT4
+switch; `ft8.html?proto=ft4`, and old `#ft4` links land there), **WSPR** (`wspr.html`), **Airband**
 (`airband.html`), **Public safety** (`safety.html`), **Maritime** (`marine.html`), **APRS**
 (`aprs.html`) and **SSTV** (`sstv.html`: the monitor's frequencies with a
 live detector meter and Listen, a *Receiving now* window where a picture builds up line by line while it's
@@ -125,7 +126,7 @@ kept, so audio playing in one tab keeps playing in another; the address names th
 shows radiod's health.
 
 **Switch receiver here.** Each page has a button that holds the voice session on that page's windows until
-released: Airband → approach and towers; Public safety → low band and VHF-high; FT8 map and SSTV → the HF window (FT8 and
+released: Airband → approach and towers; Public safety → low band and VHF-high; FT8 / FT4, SSB Voice and SSTV → the HF window (FT8 and
 SSTV then run all the time); Radio → *pause* the session altogether, for manual tuning. It switches at once
 rather than waiting for a quiet moment. (`GET/POST /api/voice/focus {focus: air|safety|hf|pause|null}`, kept in
 `rxapp_data/voice_control.json`, which the session reads every second.)
@@ -199,9 +200,24 @@ per-device remapping (`hidutil` UserKeyMapping) does not apply to it. With
 turns the knob into ← / → (tune) and its press into `/` (next tuning step), for that device only. Its buttons
 send Cmd+C/V/Z/Y and media keys. Keys reach rxapp only while its browser window is in front.
 
-## Broadcast (AM / FM / shortwave)
+## SSB voice
 
-`broadcast.html` (tab *AM / FM / SW*): Bay Area AM and FM stations (`rxapp/broadcast.py`, from Wikipedia's list
+`ssb.html` (tab *SSB Voice*), styled like the broadcast page. Four sections:
+- **Amateur:** QRP and SSB calling frequencies, the US 60 m channels, the Maritime Mobile Service and Hurricane Watch
+  nets. A scan also searches the 160–10 m phone segments for conversations ("activity"), placing the dial about 600 Hz
+  from the speech-energy peak.
+- **Aviation:** San Francisco Radio's Pacific families (CEP, NP) and Honolulu VOLMET.
+- **Military:** USAF HFGCS.
+- **Marine:** Coast Guard distress and safety channels, and NMC Point Reyes weather.
+
+*Scan* measures each listed channel's voice band (300–2700 Hz above the dial for USB, below for LSB) against the
+local noise floor, one spectrum capture per ~430 kHz of channels (`POST /api/ssb/check {group}`; the list is
+`GET /api/ssb/channels`, from `rxapp/ssb.py`). *Listen* opens the page's own USB/LSB channel. While listening,
+±100 / ±500 Hz buttons nudge the tuning and a button flips the sideband. Like AM and shortwave, it holds the HF input.
+
+## Broadcast (AM / SW / FM)
+
+`broadcast.html` (tab *AM / SW / FM*): Bay Area AM and FM stations (`rxapp/broadcast.py`, from Wikipedia's list
 of Bay Area stations) and shortwave broadcasters scheduled this hour in the 120 m-13 m bands, from the EiBi
 schedule (eibispace.de; downloaded for the current season, A = summer, B = winter, into `rxapp_data/eibi/`).
 *Scan* runs the band scanner and adds a signal column (stations heard but not listed show as unlisted /

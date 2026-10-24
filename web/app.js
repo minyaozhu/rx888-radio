@@ -28,17 +28,12 @@ const state = {
 // ------------------------------------------------------------------ setup
 async function init() {
   state.info = await api('GET', '/api/info');
-  for (const b of Object.keys(state.info.bands)) {
-    $('schedBand').add(new Option(b, b));
-    $('dashBand').add(new Option(b, b));
-  }
   state.channels = await api('GET', '/api/channels');
   await applyBand(state.info.band);
   wire();
   resizeCanvases();
   openSpectrum();
   openStatus();
-  refreshRecordings();
 }
 
 // Show the controls for the selected input and pick (or make) a channel on it.
@@ -54,8 +49,6 @@ async function applyBand(band) {
   $('vga').value = state.info.vhf.vga; $('vgaVal').textContent = state.info.vhf.vga;
   const modes = state.info.band_modes[band];
   $('mode').innerHTML = ''; for (const m of modes) $('mode').add(new Option(m.toUpperCase(), m));
-  $('band').innerHTML = '';
-  for (const [k, b] of Object.entries(state.info.bands)) if (b.band === band) $('band').add(new Option(k, k));
   buildZoom();
   wctx.fillStyle = '#05070a'; wctx.fillRect(0, 0, wf.width, wf.height);   // old band's waterfall
   const mine = state.channels.filter((c) => c.kind === 'listen' && c.band === band);
@@ -118,7 +111,6 @@ function select(ssrc, ch) {
   $('mode').value = ch.mode;
   $('step').value = defaultStep(ch.mode, ch.freq_hz);
   if (state.listening) startAudio();
-  renderChannels();
 }
 
 const defaultStep = (mode, f) => mode === 'wfm' ? 100000 : f >= 30e6 ? (mode === 'am' ? 25000 : 12500) :
@@ -177,8 +169,10 @@ function setView(center, bin) {
   viewTimer = setTimeout(() => api('POST', '/api/spectrum', {center_hz: center, bin_hz: bin}).catch((e) => flash(e.message)), 120);
 }
 
+let flashTimer = null;
 function flash(msg) {
-  $('scanStatus').textContent = msg;
+  $('flash').textContent = msg;
+  clearTimeout(flashTimer); flashTimer = setTimeout(() => { $('flash').textContent = ''; }, 8000);
   console.warn(msg);
 }
 
@@ -437,7 +431,6 @@ function openStatus() {
     }
     renderHealth(s.health, s.scanning);
     renderMeter();
-    renderChannels();
   };
   ws.onclose = () => { $('health').innerHTML = '<span class="bad">disconnected</span>'; setTimeout(openStatus, 1500); };
 }
@@ -464,303 +457,6 @@ function renderMeter() {
   $('record').textContent = ch.recording ? '■ Stop rec' : '● Rec';
 }
 
-function renderChannels() {
-  const rows = state.channels.filter((c) => c.band === state.band && c.kind === 'listen').map((c) => `
-    <tr class="${c.ssrc === state.selected ? 'sel' : ''}">
-      <td>${fmtHz(c.freq_hz)}${c.parked ? ' <span class="dim">(paused: outside tuner window)</span>' : ''}</td><td>${c.mode.toUpperCase()}</td><td>${c.label || ''}${c.recording ? ' <span style="color:var(--rec)">● rec</span>' : ''}</td>
-      <td>${c.power_db != null ? c.power_db.toFixed(1) + ' dB' : ''}</td>
-      <td>${c.snr_db != null ? `<span class="snrbar" style="width:${Math.max(2, Math.min(80, c.snr_db * 1.5))}px"></span>${c.snr_db.toFixed(1)}` : ''}</td>
-      <td><button data-act="sel" data-ssrc="${c.ssrc}">Tune/listen</button>
-          <button data-act="del" data-ssrc="${c.ssrc}">✕</button></td>
-    </tr>`).join('');
-  $('channelRows').innerHTML = rows;
-}
-
-// ------------------------------------------------------------------ scans
-let autoScanTimer = null;
-async function runScan() {
-  const band = $('band').value;
-  $('scanBtn').disabled = true;
-  $('scanStatus').textContent = `scanning ${band}…`;
-  try {
-    const r = await api('POST', `/api/scan/${band}`);
-    $('scanStatus').textContent = `${r.hits.length} signals · floor ${r.floor_db?.toFixed(1) ?? '—'} dB · ${r.frames} frames at ${r.bin_hz} Hz · ${new Date().toLocaleTimeString()}`;
-    const mode = r.mode;
-    $('scanRows').innerHTML = r.hits.map((h) => `
-      <tr><td>${fmtHz(h.freq_hz)}</td>
-      <td><span class="snrbar" style="width:${Math.max(2, Math.min(120, h.snr_db * 2))}px"></span>${h.snr_db} dB</td>
-      <td><button data-act="tune" data-f="${h.freq_hz}" data-m="${mode}">Tune</button>
-          <button data-act="add" data-f="${h.freq_hz}" data-m="${mode}">+ Channel</button></td></tr>`).join('');
-  } catch (e) {
-    $('scanStatus').textContent = 'scan failed: ' + e.message;
-  } finally {
-    $('scanBtn').disabled = false;
-  }
-}
-
-// ------------------------------------------------------------------ recordings
-async function refreshRecordings() {
-  const recs = await api('GET', '/api/recordings');
-  $('recRows').innerHTML = recs.map((r) => `
-    <tr><td>${fmtTime(r.start)}</td><td>${fmtHz(r.freq_hz)}</td><td>${(r.mode || '').toUpperCase()}</td>
-    <td>${r.seconds != null ? r.seconds.toFixed(0) + ' s' : '<span style="color:var(--rec)">recording…</span>'}</td>
-    <td>${r.peak_dbfs != null ? r.peak_dbfs.toFixed(1) + ' dBFS' : ''}</td>
-    <td>${r.seconds != null ? `<audio controls preload="none" src="/api/recordings/${r.id}/audio"></audio>` : ''}</td></tr>` +
-    (r.transcript ? `<tr><td></td><td colspan="5" class="dim">“${escapeHtml(r.transcript)}”</td></tr>` : '')).join('');
-}
-
-const escapeHtml = (t) => t.replace(/[&<>"]/g, (c) => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
-
-// ------------------------------------------------------------------ monitor (server-side jobs)
-async function refreshMonitor() {
-  const [sch, wat] = await Promise.all([api('GET', '/api/schedules'), api('GET', '/api/watches')]);
-  $('schedRows').innerHTML = sch.map((s) => `<tr><td>${s.band}</td><td>${s.every_min} min</td>
-    <td>${s.last_run ? fmtTime(s.last_run) : 'pending'}</td>
-    <td><button data-act="delsched" data-id="${s.id}">✕</button></td></tr>`).join('');
-  $('watchRows').innerHTML = wat.map((w) => `<tr><td>${fmtHz(w.freq_hz)}</td><td>${w.mode.toUpperCase()}</td>
-    <td>${w.label || ''}</td><td>${w.snr_db} dB${w.transcribe ? ' · transcribe' : ''}</td>
-    <td>${w.snr_now != null ? w.snr_now.toFixed(1) + ' dB' : '—'}</td>
-    <td>${w.recording ? '<span style="color:var(--rec)">● recording</span>' : 'waiting'} · ${w.recordings_this_run} saved</td>
-    <td><button data-act="delwatch" data-id="${w.id}">✕</button></td></tr>`).join('');
-}
-let monitorTimer = null;
-
-// ---------------------------------------------------------------- SSTV
-let sstvTimer = null;
-const sstv = {info: null, ids: null};
-
-function wireSstv() {
-  $('sstvToggle').addEventListener('click', async () => {
-    $('sstvToggle').disabled = true;
-    try { sstv.info = await api('POST', '/api/sstv', {on: !(sstv.info && sstv.info.running)}); }
-    catch (e) { flash(e.message); }
-    $('sstvToggle').disabled = false;
-    refreshSstv();
-  });
-  $('sstvRows').addEventListener('click', (e) => {     // hear a frequency on the main receiver
-    const b = e.target.closest('button'); if (!b) return;
-    if (state.band !== 'hf') return flash('switch to HF first');
-    $('mode').value = b.dataset.mode; tune(+b.dataset.f, b.dataset.mode);
-  });
-  $('sstvGallery').addEventListener('click', async (e) => {
-    const del = e.target.closest('button[data-del]');
-    if (del && confirm('Delete this picture?')) { await api('DELETE', `/api/sstv/pictures/${del.dataset.del}`); sstv.ids = null; refreshSstv(); }
-    const img = e.target.closest('img'); if (img) window.open(img.src, '_blank');
-  });
-}
-
-async function refreshSstv() {
-  try {
-    const i = sstv.info = await api('GET', '/api/sstv');
-    $('sstvToggle').textContent = i.running ? 'Stop SSTV monitor' : 'Start SSTV monitor';
-    $('sstvToggle').classList.toggle('on', i.running);
-    $('sstvRows').innerHTML = i.channels.map((c) => `<tr><td>${c.band}</td><td>${fmtHz(c.freq_hz)} ${c.mode.toUpperCase()}</td>
-      <td>${c.parked ? '<span class="dim">paused (VHF selected)</span>' : c.state.startsWith('capturing') ? `<span style="color:var(--rec)">● ${c.state}</span>` : c.state}</td>
-      <td class="dim">${c.last && c.last.sync != null ? `sync ${c.last.sync.toFixed(2)} · video ${c.last.video.toFixed(2)}${c.last.mode !== '?' && c.last.sync >= 0.25 ? ' · ' + c.last.mode : ''}` : ''}</td>
-      <td>${c.triggers}</td><td>${c.pictures}</td>
-      <td><button data-f="${c.freq_hz}" data-mode="${c.mode}">Listen</button></td></tr>`).join('')
-      || '<tr><td colspan="7" class="dim">Not running.</td></tr>';
-    const pics = await api('GET', '/api/sstv/pictures?limit=200');
-    const ids = pics.map((p) => p.id).join();
-    if (ids !== sstv.ids) {
-      sstv.ids = ids;
-      $('sstvCount').textContent = pics.length ? `(${pics.length})` : '';
-      $('sstvGallery').innerHTML = pics.map((p) => `<figure>
-        <img src="/api/sstv/pictures/${p.id}.png" alt="SSTV picture, ${p.mode}, ${fmtTime(p.t)}" loading="lazy">
-        <figcaption><span>${fmtTime(p.t)}</span><span>${fmtHz(p.freq_hz)} · ${p.mode.replace(/_/g, ' ')}${p.complete ? '' : ' · <span class="partial">partial</span>'}</span>
-          <span><a href="/api/sstv/pictures/${p.id}.wav" download>audio</a> <button data-del="${p.id}">delete</button></span></figcaption>
-      </figure>`).join('') || '<p class="dim">No pictures yet. SSTV is busiest on weekend daytimes on 14.230 MHz.</p>';
-    }
-  } catch (e) { console.warn('sstv', e); }
-}
-
-// ---------------------------------------------------------------- FT8
-let ft8Timer = null;
-const ft8 = {info: null, rows: [], since: 0, view: 'msgs', stations: {}};
-const utc = (t) => new Date(t * 1000).toISOString().slice(11, 19);
-const esc = (x) => String(x ?? '').replace(/[&<>"]/g, (c) => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'})[c]);
-
-function wireFt8() {
-  $('ft8Toggle').addEventListener('click', async () => {
-    const on = !(ft8.info && ft8.info.running);
-    const bands = [...document.querySelectorAll('#ft8Bands input:checked')].map((x) => x.value);
-    $('ft8Toggle').disabled = true;
-    try { ft8.info = await api('POST', '/api/ft8', {on, bands: on ? bands : null}); }
-    catch (e) { flash(e.message); }
-    $('ft8Toggle').disabled = false;
-    renderFt8Info();
-  });
-  document.querySelectorAll('[data-ft8view]').forEach((b) => b.addEventListener('click', () => {
-    document.querySelectorAll('[data-ft8view]').forEach((x) => x.classList.toggle('active', x === b));
-    ft8.view = b.dataset.ft8view;
-    $('ft8Msgs').style.display = ft8.view === 'msgs' ? '' : 'none';
-    $('ft8Qso').style.display = ft8.view === 'qso' ? '' : 'none';
-    refreshFt8(true);
-  }));
-  $('ft8Filter').addEventListener('change', () => refreshFt8(true));
-  $('ft8BandRows').addEventListener('click', (e) => {   // hear a band: the main receiver goes there in USB
-    const b = e.target.closest('button'); if (!b) return;
-    const band = ft8.info.bands.find((x) => x.band === b.dataset.band);
-    if (state.band !== 'hf') return flash('switch to HF first');
-    $('mode').value = 'usb'; tune(band.dial_hz, 'usb');
-  });
-  $('ft8Find').addEventListener('input', () => ft8.view === 'msgs' ? renderFt8Rows() : refreshFt8(true));
-}
-
-function renderFt8Info() {
-  const i = ft8.info; if (!i) return;
-  $('ft8Toggle').textContent = i.running ? 'Stop FT8 monitor' : 'Start FT8 monitor';
-  $('ft8Toggle').classList.toggle('on', i.running);
-  const active = new Set(i.bands.map((b) => b.band));
-  const chips = $('ft8Bands');
-  if (!chips.dataset.built || chips.dataset.built !== i.available.join()) {
-    chips.innerHTML = i.available.map((b) => `<label><input type="checkbox" value="${b}" checked> ${b}</label>`).join('');
-    chips.dataset.built = i.available.join();
-    $('ft8Filter').innerHTML = '<option value="">all</option>' + i.available.map((b) => `<option>${b}</option>`).join('');
-  }
-  if (i.running) chips.querySelectorAll('input').forEach((x) => { x.checked = active.has(x.value); });
-  chips.querySelectorAll('input').forEach((x) => { x.disabled = i.running; x.parentElement.classList.toggle('off', !x.checked); });
-  const next = i.slot_sec - (Date.now() / 1000) % i.slot_sec;
-  $('ft8Status').textContent = !i.decoder ? 'decode_ft8 is missing: build tools/ft8_lib (see README).'
-    : i.running ? `Decoding ${i.bands.length} bands · next slot ends in ${next.toFixed(0)} s · runs on the server, keeps going with this page closed.`
-    : 'Decodes FT8 on every chosen band at once, every 15 s slot. Runs on the server, so it keeps going with this page closed.';
-  $('ft8BandRows').innerHTML = i.bands.map((b) => `<tr><td>${b.band}</td><td>${fmtHz(b.dial_hz)}</td>
-    <td>${b.parked ? '<span class="dim">paused (VHF selected)</span>' : b.last_count == null ? '<span class="dim">waiting</span>' : `${b.last_count} at ${utc(b.last_slot)}`}</td>
-    <td>${b.decodes}</td><td>${ft8.stations[b.band] ?? ''}</td>
-    <td><button data-band="${b.band}">Listen</button></td></tr>`).join('');
-}
-
-function ft8Match(r, q) {
-  if (!q) return true;
-  return r.msg.includes(q);
-}
-
-function renderFt8Rows() {
-  const q = $('ft8Find').value.trim().toUpperCase();
-  const rows = ft8.rows.filter((r) => ft8Match(r, q));
-  const newest = ft8.rows.length ? ft8.rows[0].t : 0;
-  $('ft8Rows').innerHTML = rows.slice(0, 400).map((r) => `<tr class="${r.t === newest ? 'fresh' : ''}">
-    <td>${utc(r.t)}</td><td>${r.band}</td><td>${r.score.toFixed(0)}</td><td>${r.dt.toFixed(1)}</td><td>${r.hz.toFixed(0)}</td>
-    <td class="msg ${r.to_call === 'CQ' ? 'cq' : ''}">${esc(r.msg)}</td></tr>`).join('');
-  $('ft8Count').textContent = `${rows.length} messages${q ? ' matching' : ''} (latest 1 h)`;
-}
-
-function renderFt8Qso(d) {
-  const q = $('ft8Find').value.trim().toUpperCase();
-  const convs = d.conversations.filter((c) => !q || c.a.includes(q) || c.b.includes(q) || c.messages.some((m) => m.msg.includes(q)));
-  $('ft8Count').textContent = `${convs.length} conversations · ${d.cq.length} stations calling CQ (last 1 h)`;
-  $('ft8Qso').innerHTML = convs.slice(0, 150).map((c) => `<div class="qso">
-      <h4>${esc(c.a)} ↔ ${esc(c.b)} <span class="dim">${c.band} · ${c.messages.length} msgs · ${utc(c.first)}–${utc(c.last)} UTC</span>
-        ${c.complete ? '<span class="done">✓ completed</span>' : ''}</h4>
-      ${c.messages.map((m) => `<div>${utc(m.t)} ${String(m.score.toFixed(0)).padStart(3)}  ${esc(m.msg)}</div>`).join('')}
-    </div>`).join('') || '<p class="dim">No conversations yet.</p>';
-}
-
-async function refreshFt8(reset) {
-  try {
-    ft8.info = await api('GET', '/api/ft8');
-    const band = $('ft8Filter').value;
-    if (reset === true || ft8.band !== band) { ft8.rows = []; ft8.lastId = 0; ft8.band = band; }
-    if (ft8.view === 'msgs') {
-      const since = Date.now() / 1000 - 3600;
-      const add = await api('GET', `/api/ft8/decodes?since=${since}&after_id=${ft8.lastId}${band ? '&band=' + band : ''}&limit=2000`);
-      if (add.length) {
-        ft8.rows = add.concat(ft8.rows).sort((a, b) => b.t - a.t || a.band.localeCompare(b.band) || a.hz - b.hz);
-        ft8.lastId = Math.max(ft8.lastId, ...add.map((r) => r.id));
-      }
-      const cut = Date.now() / 1000 - 3600;
-      ft8.rows = ft8.rows.filter((r) => r.t > cut);
-      renderFt8Rows();
-    } else {
-      renderFt8Qso(await api('GET', `/api/ft8/conversations?hours=1${band ? '&band=' + band : ''}`));
-    }
-    if (reset === true || !ft8.statsT || Date.now() - ft8.statsT > 60000) {
-      const st = await api('GET', '/api/ft8/stats?hours=24');
-      ft8.stations = Object.fromEntries(st.per_band.map((b) => [b.band, b.stations]));
-      ft8.statsT = Date.now();
-    }
-    renderFt8Info();
-  } catch (e) { console.warn('ft8', e); }
-}
-
-// ------------------------------------------------------------------ dashboard
-async function refreshDashboard() {
-  const band = $('dashBand').value, hours = $('dashHours').value;
-  const [occ, tl, hh, ev] = await Promise.all([
-    api('GET', `/api/occupancy/${band}?hours=${hours}`), api('GET', `/api/timeline/${band}?hours=${hours}`),
-    api('GET', `/api/health/history?hours=${hours}`), api('GET', '/api/events?limit=30')]);
-  $('dashInfo').textContent = `${occ.scans} scans of ${band} in the last ${hours} h`;
-  drawOccupancy(occ, state.info.bands[band]);
-  drawTimeline(tl, state.info.bands[band], hours);
-  drawHealth(hh, hours);
-  $('eventRows').innerHTML = ev.map((e) => `<tr><td>${fmtTime(e.t)}</td><td>${e.kind}</td><td class="dim">${e.detail}</td></tr>`).join('');
-}
-
-function prepCanvas(c) {
-  c.width = Math.floor(c.clientWidth * devicePixelRatio);
-  c.height = Math.floor(parseInt(c.getAttribute('height')) * devicePixelRatio);
-  const g = c.getContext('2d');
-  g.fillStyle = '#05070a'; g.fillRect(0, 0, c.width, c.height);
-  g.font = `${11 * devicePixelRatio}px -apple-system, sans-serif`;
-  return g;
-}
-
-function bandAxis(g, W, H, b, pad) {
-  const span = b.stop_hz - b.start_hz, step = niceStep(span / 8);
-  g.fillStyle = '#5b6573'; g.strokeStyle = '#1b222b';
-  for (let f = Math.ceil(b.start_hz / step) * step; f <= b.stop_hz; f += step) {
-    const x = pad + (f - b.start_hz) / span * (W - pad);
-    g.beginPath(); g.moveTo(x, 0); g.lineTo(x, H - 14 * devicePixelRatio); g.stroke();
-    g.fillText(f >= 1e6 ? (f / 1e6).toFixed(3) : (f / 1e3).toFixed(0), x + 2, H - 3);
-  }
-}
-
-const snrColor = (s) => { const c = Math.max(0, Math.min(255, s * 6)) | 0; return `rgb(${LUT[c * 3]},${LUT[c * 3 + 1]},${LUT[c * 3 + 2]})`; };
-
-function drawOccupancy(occ, b) {
-  const c = $('occ'), g = prepCanvas(c), W = c.width, H = c.height, pad = 30 * devicePixelRatio, bottom = H - 16 * devicePixelRatio;
-  bandAxis(g, W, H, b, pad);
-  if (!occ.scans) { g.fillStyle = '#8b96a5'; g.fillText('No scans of this band yet — run one from the Scan tab.', pad + 10, 30); return; }
-  const span = b.stop_hz - b.start_hz, bw = Math.max(2, (b.step_hz || span / 200) / span * (W - pad) * 0.8);
-  for (const r of occ.channels) {
-    const x = pad + (r.freq_hz - b.start_hz) / span * (W - pad), h = r.heard / occ.scans * (bottom - 10);
-    g.fillStyle = snrColor(r.mean_snr);
-    g.fillRect(x - bw / 2, bottom - h, bw, h);
-  }
-  g.fillStyle = '#5b6573'; g.fillText('100%', 2, 14 * devicePixelRatio); g.fillText('0', 2, bottom);
-}
-
-function drawTimeline(tl, b, hours) {
-  const c = $('timeline'), g = prepCanvas(c), W = c.width, H = c.height, pad = 30 * devicePixelRatio, bottom = H - 16 * devicePixelRatio;
-  bandAxis(g, W, H, b, pad);
-  if (!tl.length) return;
-  const span = b.stop_hz - b.start_hz, t1 = Date.now() / 1000, t0 = t1 - hours * 3600;
-  for (const r of tl) {
-    const x = pad + (r.freq_hz - b.start_hz) / span * (W - pad), y = (r.t - t0) / (t1 - t0) * bottom;
-    g.fillStyle = snrColor(r.snr_db);
-    g.fillRect(x - 1.5 * devicePixelRatio, y - 1.5 * devicePixelRatio, 3 * devicePixelRatio, 3 * devicePixelRatio);
-  }
-  g.fillStyle = '#5b6573'; g.fillText(`-${hours}h`, 2, 12 * devicePixelRatio); g.fillText('now', 2, bottom);
-}
-
-function drawHealth(hh, hours) {
-  const c = $('healthChart'), g = prepCanvas(c), W = c.width, H = c.height;
-  if (hh.length < 2) { g.fillStyle = '#8b96a5'; g.fillText('Collecting (one sample every 30 s)…', 10, 30); return; }
-  const t1 = Date.now() / 1000, t0 = t1 - hours * 3600;
-  const series = [['if_power_db', '#4cc2ff', -60, 0, 'IF power dBFS'], ['rf_gain_db', '#ffb84c', 0, 40, 'RF gain dB'],
-                  ['spectrum_fps', '#4cd98a', 0, 15, 'spectrum fps']];
-  series.forEach(([k, col, lo, hi, name], i) => {
-    g.strokeStyle = col; g.lineWidth = devicePixelRatio; g.beginPath();
-    hh.forEach((r, j) => {
-      const x = (r.t - t0) / (t1 - t0) * W, y = H - ((r[k] ?? lo) - lo) / (hi - lo) * H;
-      j ? g.lineTo(x, y) : g.moveTo(x, y);
-    });
-    g.stroke(); g.fillStyle = col; g.fillText(name, 8 + i * 120 * devicePixelRatio, 14 * devicePixelRatio);
-  });
-  const overs = hh.filter((r) => r.ad_over);
-  if (overs.length) { g.fillStyle = '#ff6b6b'; g.fillText(`ADC overloads seen: ${overs.at(-1).ad_over}`, 8, 30 * devicePixelRatio); }
-}
-
 // ------------------------------------------------------------------ wiring
 function wire() {
   $('freq').addEventListener('keydown', (e) => {
@@ -779,7 +475,7 @@ function wire() {
     try {
       if (ch.recording) { await api('DELETE', `/api/channels/${ch.ssrc}/record`); ch.recording = false; }
       else { await api('POST', `/api/channels/${ch.ssrc}/record`); ch.recording = true; }
-      renderMeter(); refreshRecordings();
+      renderMeter();
     } catch (e) { flash(e.message); }
   });
   $('zoom').addEventListener('change', () => setView(current()?.freq_hz ?? state.view.center, +$('zoom').value / state.view.n));
@@ -825,72 +521,6 @@ function wire() {
   $('center').addEventListener('click', () => setView(current().freq_hz, null));
   $('autoscale').addEventListener('change', () => {});
   wireScope(spec); wireScope(wf);
-
-  document.querySelectorAll('.tabs button').forEach((b) => b.addEventListener('click', () => {
-    document.querySelectorAll('.tabs button, .tab').forEach((x) => x.classList.remove('active'));
-    b.classList.add('active'); $('tab-' + b.dataset.tab).classList.add('active');
-    if (b.dataset.tab === 'recordings') refreshRecordings();
-    clearInterval(monitorTimer);
-    if (b.dataset.tab === 'monitor') { refreshMonitor(); monitorTimer = setInterval(refreshMonitor, 2000); }
-    if (b.dataset.tab === 'dashboard') refreshDashboard();
-    clearInterval(ft8Timer); clearInterval(sstvTimer);
-    if (b.dataset.tab === 'sstv') { refreshSstv(); sstvTimer = setInterval(refreshSstv, 3000); }
-    if (b.dataset.tab === 'ft8') { refreshFt8(true); ft8Timer = setInterval(refreshFt8, 3000); }
-  }));
-  wireFt8();
-  wireSstv();
-
-  $('addChannel').addEventListener('click', async () => {
-    const ch = current();
-    const c = await api('POST', '/api/channels', {freq_hz: ch.freq_hz, mode: ch.mode, label: '', band: state.band});
-    state.channels.push(c); renderChannels();
-  });
-  $('channelRows').addEventListener('click', async (e) => {
-    const b = e.target.closest('button'); if (!b) return;
-    const ssrc = +b.dataset.ssrc;
-    if (b.dataset.act === 'sel') select(ssrc);
-    if (b.dataset.act === 'del') {
-      if (ssrc === state.selected && state.channels.length === 1) return flash('keep at least one channel');
-      await api('DELETE', `/api/channels/${ssrc}`);
-      state.channels = state.channels.filter((c) => c.ssrc !== ssrc);
-      if (ssrc === state.selected) {
-        const next = state.channels.find((c) => c.kind === 'listen' && c.band === state.band);
-        if (next) select(next.ssrc, next);
-      }
-      renderChannels();
-    }
-  });
-  $('scanBtn').addEventListener('click', runScan);
-  $('autoScan').addEventListener('change', () => {
-    clearInterval(autoScanTimer);
-    if ($('autoScan').checked) { runScan(); autoScanTimer = setInterval(runScan, Math.max(1, +$('autoMin').value) * 60000); }
-  });
-  $('scanRows').addEventListener('click', async (e) => {
-    const b = e.target.closest('button'); if (!b) return;
-    const f = +b.dataset.f, m = b.dataset.m;
-    if (b.dataset.act === 'tune') { $('mode').value = m; tune(f, m); }
-    if (b.dataset.act === 'add') { const c = await api('POST', '/api/channels', {freq_hz: f, mode: m, band: state.band}); state.channels.push(c); renderChannels(); }
-  });
-  $('schedAdd').addEventListener('click', async () => {
-    try { await api('POST', '/api/schedules', {band: $('schedBand').value, every_min: +$('schedMin').value}); refreshMonitor(); }
-    catch (e) { flash(e.message); }
-  });
-  $('watchAdd').addEventListener('click', async () => {
-    const ch = current();
-    try {
-      await api('POST', '/api/watches', {freq_hz: ch.freq_hz, mode: ch.mode, label: '', snr_db: +$('watchSnr').value,
-                                          transcribe: $('watchTx').checked});
-      refreshMonitor();
-    } catch (e) { flash(e.message); }
-  });
-  for (const id of ['schedRows', 'watchRows']) $(id).addEventListener('click', async (e) => {
-    const b = e.target.closest('button'); if (!b) return;
-    await api('DELETE', b.dataset.act === 'delsched' ? `/api/schedules/${b.dataset.id}` : `/api/watches/${b.dataset.id}`);
-    refreshMonitor();
-  });
-  $('dashRefresh').addEventListener('click', refreshDashboard);
-  $('dashBand').addEventListener('change', refreshDashboard);
-  $('dashHours').addEventListener('change', refreshDashboard);
 }
 
 // ------------------------------------------------------------------ remote control (controller.js in the tab shell)
@@ -934,11 +564,9 @@ window.rxControl = (action) => {
       if (list.length < 2) return 'only one channel';
       const i = list.findIndex((c) => c.ssrc === state.selected);
       const next = list[(i + (action === 'chan_next' ? 1 : list.length - 1)) % list.length];
-      select(next.ssrc, next); renderChannels(); return `channel ${list.indexOf(next) + 1}/${list.length} · ${fmtHz(next.freq_hz)}`;
+      select(next.ssrc, next); return `channel ${list.indexOf(next) + 1}/${list.length} · ${fmtHz(next.freq_hz)}`;
     }
     case 'record': $('record').click(); return ch && !ch.recording ? '● recording' : 'recording stopped';
-    case 'scan': runScan(); return 'scanning…';
-    case 'add_channel': $('addChannel').click(); return 'channel added · ' + freqText();
   }
   return null;
 };

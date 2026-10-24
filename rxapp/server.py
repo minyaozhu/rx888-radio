@@ -22,6 +22,7 @@ from pydantic import BaseModel
 from .config import BAND_MODES, CONFIG, MODES, RADIOD_CONFS, RUNTIME, VHF_MAX_HZ, VHF_MIN_HZ
 from .adsb import AdsbFeed
 from .broadcast import Eibi, stations as broadcast_stations
+from . import ssb
 from .ft8 import FT4, Ft8, conversations
 from .places import HOME_CITY, Geocoder, locate
 from .wspr import WsprMonitor, grid_ll, km_between
@@ -638,6 +639,27 @@ async def put_controller(body: dict):
     CONTROLLER_FILE.parent.mkdir(parents=True, exist_ok=True)
     CONTROLLER_FILE.write_text(json.dumps({"bindings": b} if b is not None else {}, indent=1))
     return await get_controller()
+
+
+# ---------------------------------------------------------------- SSB voice (HF)
+@app.get("/api/ssb/channels")
+async def ssb_channels():
+    return ssb.channels(CONFIG.max_freq_hz)
+
+
+class SsbCheck(BaseModel):
+    group: Optional[str] = None          # one group (ham | air | mil | marine), or every listed channel
+
+
+@app.post("/api/ssb/check")
+async def ssb_check(body: SsbCheck):
+    """Signal in each listed channel's voice band right now (one spectrum capture per ~430 kHz of channels)."""
+    items = [c for c in ssb.channels(CONFIG.max_freq_hz)["channels"]
+             if c["reachable"] and (body.group is None or c["group"] == body.group)]
+    try:
+        return {"t": time.time(), "results": await ssb.check(S.scanner, items)}
+    except ValueError as e:
+        raise HTTPException(409, str(e))
 
 
 # ---------------------------------------------------------------- broadcast (AM / FM / shortwave)

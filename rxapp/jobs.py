@@ -50,6 +50,8 @@ BANDS: Dict[str, Band] = {b.name: b for b in [
     Band("20m", 14.15e6, 14.35e6, 0, "usb"),
     Band("17m", 18.11e6, 18.168e6, 0, "usb"),
     Band("15m", 21.2e6, 21.45e6, 0, "usb"),
+    Band("12m", 24.93e6, 24.99e6, 0, "usb"),
+    Band("10m", 28.3e6, 28.85e6, 0, "usb"),
     Band("cb", 26.965e6, 27.405e6, 10e3, "am"),
     Band("fm", 88.1e6, 107.9e6, 200e3, "wfm", band="vhf"),
     Band("air", 118.0e6, 136.975e6, 25e3, "am", band="vhf"),

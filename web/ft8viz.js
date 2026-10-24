@@ -1,8 +1,31 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // FT8 / FT4 Skywatch: world map + per-station timeline of rxapp's FT8 or FT4 decodes, live or replayed.
-// The page says which: <script src="ft8viz.js" data-proto="ft4">.
+// Which one: ft8.html?proto=ft4 (the page's FT8 / FT4 switch), else <script data-proto>, else FT8.
 'use strict';
-const PROTO = (document.currentScript && document.currentScript.dataset.proto) || 'ft8';
+const PROTO = (() => {
+  const q = new URLSearchParams(location.search).get('proto');
+  if (q === 'ft4' || q === 'ft8') return q;
+  return (document.currentScript && document.currentScript.dataset.proto) || 'ft8';
+})();
+// the page's words follow the mode
+(() => {
+  const up = PROTO.toUpperCase();
+  const sub = PROTO === 'ft4'
+    ? 'Every FT4 message the RX-888 decoded (FT4: like FT8 but twice as fast, 7.5 s slots, popular for contests), on a world map and one timeline lane per station. Scrub the timeline or press Play to replay; click any message to read it. With the slider at the end it follows live.'
+    : 'Every FT8 message the RX-888 decoded, on a world map and one timeline lane per station. Scrub the timeline or press Play to replay; click any message to read it. With the slider at the end it follows live.';
+  document.title = `${up} Skywatch`;
+  const set = (id, f) => { const el = document.getElementById(id); if (el) f(el); };
+  set('pageTitle', (el) => { el.textContent = `${up} Skywatch`; });
+  set('pageSub', (el) => { el.textContent = sub; });
+  set('pageMode', (el) => { el.textContent = up; });
+  set('map', (el) => el.setAttribute('aria-label', `World map of ${up} stations heard`));
+  set('timeline', (el) => el.setAttribute('aria-label', `Timeline of ${up} messages by station`));
+  document.querySelectorAll('[data-proto-btn]').forEach((b) => {
+    b.classList.toggle('on', b.dataset.protoBtn === PROTO);
+    b.setAttribute('aria-pressed', b.dataset.protoBtn === PROTO);
+    b.addEventListener('click', () => { if (b.dataset.protoBtn !== PROTO) location.search = '?proto=' + b.dataset.protoBtn; });
+  });
+})();
 const API = '/api/' + PROTO;
 let SLOT = PROTO === 'ft4' ? 7.5 : 15;          // replaced by the monitor's own slot length once loaded
 

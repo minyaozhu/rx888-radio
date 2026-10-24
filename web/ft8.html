@@ -76,6 +76,10 @@ button,select,input[type=text]{font:600 14px/1 "Barlow Condensed",sans-serif;let
 button{text-transform:uppercase;background:var(--ink);color:var(--bg);border:0;cursor:pointer;min-width:76px}
 select,input[type=text]{background:var(--panel);color:var(--ink);border:1px solid var(--line);letter-spacing:.04em}
 input[type=text]{font-family:"IBM Plex Mono",monospace;font-weight:500;width:9ch;text-transform:uppercase}
+.titlerow{display:flex;flex-wrap:wrap;align-items:center;gap:10px 18px}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:4px;overflow:hidden}
+.seg button{border:0;border-radius:0;background:transparent;color:var(--ink);min-width:0;padding:9px 18px}
+.seg button.on{background:var(--ink);color:var(--bg)}
 label.tog{display:inline-flex;gap:6px;align-items:center;font:600 13px "Barlow Condensed",sans-serif;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
 button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--magenta);outline-offset:2px}
 #scrub{flex:1 1 240px;accent-color:var(--magenta)}
@@ -93,9 +97,10 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid 
 <body>
 <div class="wrap">
   <header>
-    <div class="eyebrow"><a href="/" target="_top">rxapp</a> · FT8 · every HF band at once · RX-888</div>
-    <h1>FT8 Skywatch</h1>
-    <p class="sub">Every FT8 message the RX-888 decoded, on a world map and one timeline lane per station. Scrub the timeline or press Play to replay; click any message to read it. With the slider at the end it follows live.</p>
+    <div class="eyebrow"><a href="/" target="_top">rxapp</a> · <span id="pageMode">FT8</span> · every HF band at once · RX-888</div>
+    <div class="titlerow"><h1 id="pageTitle">FT8 Skywatch</h1>
+      <div class="seg" role="group" aria-label="Mode"><button type="button" data-proto-btn="ft8">FT8</button><button type="button" data-proto-btn="ft4">FT4</button></div></div>
+    <p class="sub" id="pageSub"></p>
     <div class="facts">
       <span><button id="monBtn" type="button" style="min-width:0;padding:7px 11px;font-size:12px">…</button> <em id="monNote" style="font-style:normal"></em></span>
       <span id="focusBox"></span>
@@ -148,7 +153,7 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid 
 <script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/topojson-client@3.1.0/dist/topojson-client.min.js"></script>
 <script src="prefixes.js?v=1"></script>
-<script src="ft8viz.js?v=5" data-proto="ft8"></script>
-<script src="focus.js?v=1" data-focus="hf" data-what="the HF input, so FT8 runs all the time"></script>
+<script src="ft8viz.js?v=6" data-proto="ft8"></script>
+<script src="focus.js?v=1" data-focus="hf" data-what="the HF input, so FT8 and FT4 run all the time"></script>
 </body>
 </html>
