@@ -164,13 +164,20 @@ button.on{background:var(--magenta)}
 .plog{max-height:420px;overflow:auto;margin:0;padding:0;list-style:none;font:400 12px/1.4 "IBM Plex Mono",monospace}
 .plog li{border-top:1px solid var(--line);padding:4px 2px;word-break:break-all;cursor:pointer}
 .plog li:hover{background:var(--bg)} .plog .t{color:var(--muted);margin-right:8px}
+.titlerow{display:flex;flex-wrap:wrap;align-items:center;gap:10px 18px}
+.seg.modes{display:inline-flex;border:1px solid var(--line);border-radius:4px;overflow:hidden}
+.seg.modes a{display:inline-block;padding:9px 18px;color:var(--ink);text-decoration:none;font:600 14px/1 "Barlow Condensed",sans-serif;letter-spacing:.1em;text-transform:uppercase}
+.seg.modes a:hover{background:var(--bg)}
+.seg.modes a.on{background:var(--ink);color:var(--bg)}
+.seg.modes a:focus-visible{outline:2px solid var(--magenta);outline-offset:-2px}
 </style>
 </head>
 <body>
 <div class="wrap">
   <header>
     <div class="eyebrow"><a href="/" target="_top" style="color:inherit">rxapp</a> · WSPR · every HF band at once · RX-888</div>
-    <h1>WSPR Propagation</h1>
+    <div class="titlerow"><h1>WSPR Propagation</h1>
+      <nav class="seg modes" aria-label="Mode"><a href="ft8.html?proto=ft8" data-mode="ft8">FT8</a><a href="ft8.html?proto=ft4" data-mode="ft4">FT4</a><a href="wspr.html" data-mode="wspr" class="on" aria-current="page">WSPR</a></nav></div>
     <p class="sub">WSPR beacons are tiny transmitters (often under 1 W) that send their call sign, grid square and power every two minutes. Each line on the map is a beacon this receiver heard: where the radio waves reach right now. With FT8 and FT4, the table says which bands are open.</p>
     <div class="facts">
       <span><b>MONITOR</b><em id="fMon" class="live off" style="font-style:normal"><i></i>–</em></span>

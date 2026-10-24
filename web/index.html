@@ -76,8 +76,7 @@ const TABS = [
   {id: 'radio', label: 'Radio', src: 'radio.html'},
   {id: 'broadcast', label: 'AM / SW / FM', src: 'broadcast.html'},
   {id: 'ssb', label: 'SSB Voice', src: 'ssb.html'},
-  {id: 'ft8', label: 'FT8 / FT4', src: 'ft8.html'},
-  {id: 'wspr', label: 'WSPR', src: 'wspr.html'},
+  {id: 'digital', label: 'FT8 / FT4 / WSPR', src: 'ft8.html'},
   {id: 'airband', label: 'Airband', src: 'airband.html'},
   {id: 'safety', label: 'Public safety', src: 'safety.html'},
   {id: 'marine', label: 'Maritime', src: 'marine.html'},
@@ -91,9 +90,10 @@ for (const t of TABS) {
   a.href = '#' + t.id; a.textContent = t.label; a.dataset.id = t.id;
   nav.appendChild(a);
 }
-const ALIASES = {ft4: 'ft8'};             // tabs that were merged: old links still land
+// tabs that were merged: old links still land, on the right page of the merged tab
+const ALIASES = {ft8: ['digital', 'ft8.html?proto=ft8'], ft4: ['digital', 'ft8.html?proto=ft4'], wspr: ['digital', 'wspr.html']};
 function ensureFrame(id) {
-  id = ALIASES[id] || id;
+  id = ALIASES[id] ? ALIASES[id][0] : id;
   const t = TABS.find((x) => x.id === id) || TABS[0];
   if (!made[t.id]) {
     const f = document.createElement('iframe');
@@ -107,7 +107,12 @@ function ensureFrame(id) {
 let shown = null;
 const current = () => shown;
 function show(id) {
-  if (ALIASES[id]) { const f = ensureFrame(id); if (id === 'ft4' && !/proto=ft4/.test(f.src)) f.src = 'ft8.html?proto=ft4'; id = ALIASES[id]; }
+  if (ALIASES[id]) {
+    const [tab, page] = ALIASES[id], f = ensureFrame(tab);
+    if (!f.src.endsWith(page)) f.src = page;
+    history.replaceState(null, '', '#' + tab);
+    id = tab;
+  }
   const t = TABS.find((x) => x.id === id) || TABS[0];
   ensureFrame(t.id); shown = t.id;
   for (const [k, f] of Object.entries(made)) f.classList.toggle('on', k === t.id);

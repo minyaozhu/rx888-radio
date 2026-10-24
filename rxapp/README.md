@@ -116,8 +116,9 @@ API: `GET/POST /api/sstv` (status / `{on}`), `GET /api/sstv/pictures`, `GET /api
 ## The web app
 
 http://127.0.0.1:8090 is a tab bar with one page per feature: **Radio** (`radio.html`: tuning, waterfall, listen,
-record), **AM / SW / FM** (`broadcast.html`), **SSB Voice** (`ssb.html`), **FT8 / FT4** (`ft8.html`, with an FT8 / FT4
-switch; `ft8.html?proto=ft4`, and old `#ft4` links land there), **WSPR** (`wspr.html`), **Airband**
+record), **AM / SW / FM** (`broadcast.html`), **SSB Voice** (`ssb.html`), **FT8 / FT4 / WSPR** (one tab with a three-way
+switch: `ft8.html?proto=ft8`, `ft8.html?proto=ft4`, `wspr.html`; old `#ft8`, `#ft4` and `#wspr` links land on the
+right one), **Airband**
 (`airband.html`), **Public safety** (`safety.html`), **Maritime** (`marine.html`), **APRS**
 (`aprs.html`) and **SSTV** (`sstv.html`: the monitor's frequencies with a
 live detector meter and Listen, a *Receiving now* window where a picture builds up line by line while it's
@@ -126,7 +127,7 @@ kept, so audio playing in one tab keeps playing in another; the address names th
 shows radiod's health.
 
 **Switch receiver here.** Each page has a button that holds the voice session on that page's windows until
-released: Airband → approach and towers; Public safety → low band and VHF-high; FT8 / FT4, SSB Voice and SSTV → the HF window (FT8 and
+released: Airband → approach and towers; Public safety → low band and VHF-high; FT8 / FT4 / WSPR, SSB Voice and SSTV → the HF window (FT8 and
 SSTV then run all the time); Radio → *pause* the session altogether, for manual tuning. It switches at once
 rather than waiting for a quiet moment. (`GET/POST /api/voice/focus {focus: air|safety|hf|pause|null}`, kept in
 `rxapp_data/voice_control.json`, which the session reads every second.)

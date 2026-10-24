@@ -77,9 +77,11 @@ button{text-transform:uppercase;background:var(--ink);color:var(--bg);border:0;c
 select,input[type=text]{background:var(--panel);color:var(--ink);border:1px solid var(--line);letter-spacing:.04em}
 input[type=text]{font-family:"IBM Plex Mono",monospace;font-weight:500;width:9ch;text-transform:uppercase}
 .titlerow{display:flex;flex-wrap:wrap;align-items:center;gap:10px 18px}
-.seg{display:inline-flex;border:1px solid var(--line);border-radius:4px;overflow:hidden}
-.seg button{border:0;border-radius:0;background:transparent;color:var(--ink);min-width:0;padding:9px 18px}
-.seg button.on{background:var(--ink);color:var(--bg)}
+.seg.modes{display:inline-flex;border:1px solid var(--line);border-radius:4px;overflow:hidden}
+.seg.modes a{display:inline-block;padding:9px 18px;color:var(--ink);text-decoration:none;font:600 14px/1 "Barlow Condensed",sans-serif;letter-spacing:.1em;text-transform:uppercase}
+.seg.modes a:hover{background:var(--bg)}
+.seg.modes a.on{background:var(--ink);color:var(--bg)}
+.seg.modes a:focus-visible{outline:2px solid var(--magenta);outline-offset:-2px}
 label.tog{display:inline-flex;gap:6px;align-items:center;font:600 13px "Barlow Condensed",sans-serif;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
 button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--magenta);outline-offset:2px}
 #scrub{flex:1 1 240px;accent-color:var(--magenta)}
@@ -99,7 +101,7 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid 
   <header>
     <div class="eyebrow"><a href="/" target="_top">rxapp</a> · <span id="pageMode">FT8</span> · every HF band at once · RX-888</div>
     <div class="titlerow"><h1 id="pageTitle">FT8 Skywatch</h1>
-      <div class="seg" role="group" aria-label="Mode"><button type="button" data-proto-btn="ft8">FT8</button><button type="button" data-proto-btn="ft4">FT4</button></div></div>
+      <nav class="seg modes" aria-label="Mode"><a href="ft8.html?proto=ft8" data-mode="ft8">FT8</a><a href="ft8.html?proto=ft4" data-mode="ft4">FT4</a><a href="wspr.html" data-mode="wspr">WSPR</a></nav></div>
     <p class="sub" id="pageSub"></p>
     <div class="facts">
       <span><button id="monBtn" type="button" style="min-width:0;padding:7px 11px;font-size:12px">…</button> <em id="monNote" style="font-style:normal"></em></span>
@@ -153,7 +155,7 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid 
 <script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/topojson-client@3.1.0/dist/topojson-client.min.js"></script>
 <script src="prefixes.js?v=1"></script>
-<script src="ft8viz.js?v=6" data-proto="ft8"></script>
-<script src="focus.js?v=1" data-focus="hf" data-what="the HF input, so FT8 and FT4 run all the time"></script>
+<script src="ft8viz.js?v=7" data-proto="ft8"></script>
+<script src="focus.js?v=1" data-focus="hf" data-what="the HF input, so FT8, FT4 and WSPR run all the time"></script>
 </body>
 </html>

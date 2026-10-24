@@ -20,10 +20,10 @@ const PROTO = (() => {
   set('pageMode', (el) => { el.textContent = up; });
   set('map', (el) => el.setAttribute('aria-label', `World map of ${up} stations heard`));
   set('timeline', (el) => el.setAttribute('aria-label', `Timeline of ${up} messages by station`));
-  document.querySelectorAll('[data-proto-btn]').forEach((b) => {
-    b.classList.toggle('on', b.dataset.protoBtn === PROTO);
-    b.setAttribute('aria-pressed', b.dataset.protoBtn === PROTO);
-    b.addEventListener('click', () => { if (b.dataset.protoBtn !== PROTO) location.search = '?proto=' + b.dataset.protoBtn; });
+  document.querySelectorAll('.modes [data-mode]').forEach((a) => {     // the FT8 / FT4 / WSPR switch
+    const on = a.dataset.mode === PROTO;
+    a.classList.toggle('on', on);
+    if (on) a.setAttribute('aria-current', 'page');
   });
 })();
 const API = '/api/' + PROTO;
