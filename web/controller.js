@@ -18,7 +18,7 @@ const CTRL_ACTIONS = [
 const CTRL_DEFAULTS = {
   ArrowRight: 'tune_up', ArrowLeft: 'tune_down', 'Shift+ArrowRight': 'tune_up_fast', 'Shift+ArrowLeft': 'tune_down_fast',
   BracketRight: 'tune_up', BracketLeft: 'tune_down', 'Shift+BracketRight': 'tune_up_fast', 'Shift+BracketLeft': 'tune_down_fast',
-  Period: 'step_up', Comma: 'step_down', Equal: 'vol_up', Minus: 'vol_down', KeyL: 'listen',
+  Slash: 'step_cycle', Period: 'step_up', Comma: 'step_down', Equal: 'vol_up', Minus: 'vol_down', KeyL: 'listen',
   KeyM: 'mode_next', 'Shift+KeyM': 'mode_prev', KeyZ: 'zoom_in', 'Shift+KeyZ': 'zoom_out', KeyC: 'center',
   KeyN: 'chan_next', 'Shift+KeyN': 'chan_prev', KeyB: 'band', KeyS: 'scan', PageDown: 'tab_next', PageUp: 'tab_prev',
 };

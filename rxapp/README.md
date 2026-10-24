@@ -189,14 +189,15 @@ HF/VHF, scan, record, and switching tabs. A small display at the bottom of the w
 (e.g. *88.600 MHz WFM*). Click **Assign** next to an action, then press a key, a dial button or turn the knob:
 whatever it sends is recorded. Bindings are kept in `rxapp_data/controller.json` (`GET/PUT /api/controller`).
 
-Defaults: → / ← and `]` / `[` tune (Shift: ×10), `.` / `,` step, `=` / `-` volume, `L` listen, `M` mode (Shift: back),
+Defaults: → / ← and `]` / `[` tune (Shift: ×10), `.` / `,` step (`/` cycles), `=` / `-` volume, `L` listen, `M` mode (Shift: back),
 `Z` zoom (Shift: out), `C` centre, `N` channel (Shift: back), `B` HF/VHF, `S` scan, Page Up/Down tabs.
 
 **Ulanzi Dial** (D100H): its knob sends the Mac's volume keys, which web pages never see, and macOS's own
-per-device remapping (`hidutil` UserKeyMapping) does not apply to it. Have the knob send keys instead: in
-Ulanzi Studio (knob turn left/right -> `←` / `→`), or with Karabiner-Elements (a per-device rule from
-`volume_increment` / `volume_decrement` to `right_arrow` / `left_arrow`). Its buttons send Cmd+C/V/Z/Y and media
-keys. Keys reach rxapp only while its browser window is in front.
+per-device remapping (`hidutil` UserKeyMapping) does not apply to it. With
+[Karabiner-Elements](https://karabiner-elements.pqrs.org), the rule in `karabiner/ulanzi-dial.json` (copy it to
+`~/.config/karabiner/assets/complex_modifications/`, then Complex Modifications > Add predefined rule > Enable)
+turns the knob into ← / → (tune) and its press into `/` (next tuning step), for that device only. Its buttons
+send Cmd+C/V/Z/Y and media keys. Keys reach rxapp only while its browser window is in front.
 
 ## Broadcast (AM / FM / shortwave)
 
