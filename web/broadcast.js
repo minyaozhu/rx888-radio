@@ -13,7 +13,7 @@ const esc = (x) => String(x ?? '').replace(/[&<>"]/g, (c) => ({'&': '&amp;', '<'
 const khz = (f) => (f / 1e3).toLocaleString(undefined, {maximumFractionDigits: 1});
 const mhzs = (f) => (f / 1e6).toFixed(1);
 
-const S = {sec: 'am', st: null, sw: null, hits: {am: {}, fm: {}, sw: {}}, scanned: {}, playing: null, chans: {}};
+const S = {stereo: {}, stereoAt: 0, sec: 'am', st: null, sw: null, hits: {am: {}, fm: {}, sw: {}}, scanned: {}, playing: null, chans: {}};
 
 // ------------------------------------------------------------------ receiver input
 // AM and shortwave need the HF input; FM the VHF tuner at the station's frequency. Either way the voice
@@ -71,6 +71,7 @@ function connect(ssrc) {
   ws.binaryType = 'arraybuffer';
   ws.onmessage = (e) => {
     const hdr = new DataView(e.data).getUint32(0, true), rate = hdr & 0x7fffffff, nch = hdr >>> 31 ? 2 : 1;
+    if (nch === 2) S.stereoAt = performance.now();
     const pcm = new Int16Array(e.data, 4), frames = Math.floor(pcm.length / nch);
     if (!frames) return;
     const buf = audio.ctx.createBuffer(nch, frames, rate);
@@ -101,6 +102,11 @@ function stop() {
   draw();
 }
 $('stop').addEventListener('click', stop);
+setInterval(() => {                        // the live stereo light
+  const on = S.playing && S.playing.sec === 'fm' && performance.now() - S.stereoAt < 1500;
+  $('stLive').style.display = S.playing && S.playing.sec === 'fm' ? '' : 'none';
+  $('stLive').classList.toggle('on', !!on); $('stLive').textContent = on ? '● STEREO' : 'MONO';
+}, 400);
 $('vol').addEventListener('input', () => { if (audio.gain) audio.gain.gain.value = +$('vol').value; });
 
 // ------------------------------------------------------------------ scanning
@@ -123,6 +129,11 @@ $('scan').addEventListener('click', async () => {
       const r = await post(`/api/scan/${S.sec}`, {});
       S.hits[S.sec] = {};
       for (const h of r.hits) S.hits[S.sec][Math.round(h.freq_hz)] = h.snr_db;
+      if (S.sec === 'fm' && r.hits.length) {
+        $('scanNote').textContent = `checking ${r.hits.length} stations for stereo…`;
+        try { S.stereo = (await post('/api/broadcast/fm/stereo', {freqs_hz: r.hits.map((h) => h.freq_hz)})).known; }
+        catch (e) { /* the scan result stands */ }
+      }
     }
     S.scanned[S.sec] = Date.now();
     $('scanNote').textContent = `scanned ${new Date().toLocaleTimeString([], {hour12: false})}`;
@@ -144,15 +155,22 @@ function hitFor(sec, f) {
   for (const [k, v] of Object.entries(H)) if (Math.abs(+k - f) <= tol && (best == null || v > best)) best = v;
   return best;
 }
+function stereoOf(f) {
+  if (S.sec !== 'fm') return undefined;
+  const v = S.stereo[String(Math.round(f / 1e5) * 100)];
+  return v ? v.stereo : undefined;
+}
+const stSign = (st) => st === true ? ' <span class="st" title="Broadcasting in stereo (pilot heard)">ST</span>'
+  : st === false ? ' <span class="st mono" title="Heard in mono: no stereo pilot strong enough here">mono</span>' : '';
 function rowsFor() {
   const q = $('find').value.trim().toLowerCase(), only = $('heardOnly').checked;
   const rows = [];
   if (S.sec === 'am' || S.sec === 'fm') {
     const list = S.st ? S.st[S.sec] : [];
-    for (const s of list) rows.push({sec: S.sec, freq_hz: s.freq_hz, title: s.call, sub: `${s.city} · ${s.format}`, cols: [s.call, s.city, s.format], snr: hitFor(S.sec, s.freq_hz)});
+    for (const s of list) rows.push({sec: S.sec, freq_hz: s.freq_hz, title: s.call, sub: `${s.city} · ${s.format}`, cols: [s.call, s.city, s.format], snr: hitFor(S.sec, s.freq_hz), st: stereoOf(s.freq_hz)});
     const known = new Set(list.map((s) => Math.round(s.freq_hz / (S.sec === 'fm' ? 1e5 : 1e4))));
     for (const [f, snr] of Object.entries(S.hits[S.sec])) {        // heard but not in the list
-      if (!known.has(Math.round(+f / (S.sec === 'fm' ? 1e5 : 1e4)))) rows.push({sec: S.sec, freq_hz: +f, title: 'Unlisted station', sub: 'not in the Bay Area list', cols: ['?', '', 'heard, not in the list'], snr});
+      if (!known.has(Math.round(+f / (S.sec === 'fm' ? 1e5 : 1e4)))) rows.push({sec: S.sec, freq_hz: +f, title: 'Unlisted station', sub: 'not in the Bay Area list', cols: ['?', '', 'heard, not in the list'], snr, st: stereoOf(+f)});
     }
   } else {
     const bands = selectedBands();
@@ -188,7 +206,7 @@ function draw() {
     const playing = S.playing && S.playing.sec === r.sec && Math.abs(S.playing.freq - r.freq_hz) < 1;
     const f = r.sec === 'fm' ? mhzs(r.freq_hz) : khz(r.freq_hz);
     return `<tr data-i="${i}" class="${playing ? 'playing' : ''} ${S.scanned[S.sec] && r.snr == null ? 'dim' : ''}"><td>${f}</td>
-      ${r.cols.map((c, k) => `<td class="${k === 0 ? 'name' : ''}">${esc(c)}</td>`).join('')}<td>${sigCell(r.snr)}</td>
+      ${r.cols.map((c, k) => `<td class="${k === 0 ? 'name' : ''}">${esc(c)}${k === 0 ? stSign(r.st) : ''}</td>`).join('')}<td>${sigCell(r.snr)}</td>
       <td><button class="smallbtn" data-i="${i}">${playing ? '● playing' : 'Listen'}</button></td></tr>`;
   }).join('') || `<tr><td colspan="9" class="lanesub">${sw ? 'Nothing scheduled in these bands right now.' : 'No stations.'}</td></tr>`;
   S.rows = rows;
@@ -206,6 +224,7 @@ $('find').addEventListener('input', draw);
 
 async function load() {
   S.st = await api('/api/broadcast/stations');
+  try { S.stereo = await api('/api/broadcast/fm/stereo'); } catch (e) { /* none yet */ }
   try {
     S.sw = await api('/api/broadcast/sw/now');
     $('bands').innerHTML = S.sw.bands.map((b) => `<label><input type="checkbox" value="${b.name}">${b.name}</label>`).join('')

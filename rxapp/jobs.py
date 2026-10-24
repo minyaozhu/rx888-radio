@@ -214,7 +214,8 @@ class Recorder:
         stamp = time.strftime("%Y%m%d-%H%M%S")
         self.path = CONFIG.recordings_dir / f"{stamp}_{ch.freq_hz / 1e3:.0f}kHz_{ch.mode}.wav"
         self.w = wave.open(str(self.path), "wb")
-        self.w.setnchannels(2 if ch.mode == "wfm" and getattr(ch, "stereo", False) else 1)
+        self.nch = 2 if ch.mode == "wfm" and getattr(ch, "stereo", False) else 1
+        self.w.setnchannels(self.nch)
         self.w.setsampwidth(2)
         self.w.setframerate(ch.sample_rate)
         self.samples = 0
@@ -225,6 +226,8 @@ class Recorder:
         rtp.subscribe(ch.ssrc, self._on_pcm)
 
     def _on_pcm(self, pcm: bytes, ts, seq):
+        if self.nch == 2 and self.rtp.channels(self.ch.ssrc) == 1:     # the pilot dropped: mono into both
+            pcm = np.repeat(np.frombuffer(pcm, "<i2"), 2).tobytes()
         self.w.writeframes(pcm)
         a = np.frombuffer(pcm, "<i2")
         self.samples += len(a)

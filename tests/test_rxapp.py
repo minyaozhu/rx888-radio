@@ -750,3 +750,18 @@ def test_panel_history_round_trip(tmp_path, monkeypatch):
     b = hub(); b.load()
     assert list(b.vhf_history) == [135656] and b.vhf_history[135656][2][5] == 5
     assert b.hf[(2e6, 30e6)].latest[3] == 2.0
+
+
+# ---- RTP: channels per packet, learned from the payload type ----------------------------------
+def test_rtp_learns_stereo_payload_types():
+    from rxapp.rtp import RtpHub
+    h = RtpHub("127.0.0.1", 5004)
+    ts = 0
+    for seq in range(3):                       # mono: 480 frames, 480 samples, PT 120
+        h.learn(7, 120, seq, ts, 480); ts += 480
+    assert h.pt_channels[120] == 1 and h.channels(7) == 1
+    for seq in range(3, 6):                    # the pilot appears: stereo, 480 frames, 960 samples, PT 121
+        h.learn(7, 121, seq, ts, 960); ts += 480
+    assert h.pt_channels[121] == 2 and h.channels(7) == 2 and h.stereo_packets[7] == 2
+    h.learn(7, 120, 6, ts, 480)                # and back to mono, already known
+    assert h.channels(7) == 1

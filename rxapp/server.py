@@ -24,6 +24,7 @@ from .adsb import AdsbFeed
 from .broadcast import Eibi, stations as broadcast_stations
 from . import ssb
 from .panels import PanelHub
+from .vhf import WINDOW_HZ
 from .ft8 import FT4, Ft8, conversations
 from .places import HOME_CITY, Geocoder, locate
 from .wspr import WsprMonitor, grid_ll, km_between
@@ -679,6 +680,81 @@ async def _schedule() -> Eibi:
     return _eibi
 
 
+# FM stereo: which stations send the 19 kHz pilot. Probed by opening a stereo WFM channel on every station in
+# a tuner window at once and counting the stereo packets radiod sends (it sends stereo only with the pilot).
+FM_STEREO_FILE = CONFIG.data_dir / "fm_stereo.json"
+
+
+def _fm_stereo() -> Dict:
+    try:
+        return json.loads(FM_STEREO_FILE.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+class StereoProbe(BaseModel):
+    freqs_hz: List[float]
+    seconds: float = 2.5
+
+
+@app.get("/api/broadcast/fm/stereo")
+async def fm_stereo_known():
+    """{"<kHz>": {"stereo": true | false | null (no audio: squelched), "t": unix time}} from earlier probes."""
+    return _fm_stereo()
+
+
+@app.post("/api/broadcast/fm/stereo")
+async def fm_stereo_probe(body: StereoProbe):
+    if S.radio.band != "vhf":
+        raise HTTPException(409, "FM is on the VHF tuner; switch the input to VHF first")
+    freqs = sorted({round(f / 1e5) * 1e5 for f in body.freqs_hz if 87.5e6 <= f <= 108.1e6})[:60]
+    use = 2 * WINDOW_HZ * 0.85                     # stay clear of the tuner window's edges
+    groups, i = [], 0
+    while i < len(freqs):
+        g = [f for f in freqs[i:] if f - freqs[i] <= use]
+        groups.append(g)
+        i += len(g)
+    home = S.radio.vhf.center_hz
+    known, out = _fm_stereo(), {}
+    async with S.scanner.lock:                     # not under a scan
+        try:
+            for g in groups:
+                if not all(S.radio.vhf.in_window(f) and abs(f - S.radio.vhf.center_hz) < use / 2 for f in g):
+                    await S.radio.move_tuner((g[0] + g[-1]) / 2)
+                chans, base = [], {}
+                for f in g:
+                    ch = await S.radio.create(f, "wfm", label="stereo probe", kind="probe", band="vhf")
+                    await S.radio.tune(ch.ssrc, stereo=True)
+                    S.rtp.subscribe(ch.ssrc, _noop_pcm)          # the hub learns channel counts only for subscribers
+                    chans.append(ch)
+                await asyncio.sleep(0.5)                          # let the stereo decoders settle
+                for ch in chans:
+                    base[ch.ssrc] = (S.rtp.packets[ch.ssrc], S.rtp.stereo_packets[ch.ssrc])
+                await asyncio.sleep(max(1.0, min(body.seconds, 6.0)))
+                for ch in chans:
+                    total = S.rtp.packets[ch.ssrc] - base[ch.ssrc][0]
+                    st = S.rtp.stereo_packets[ch.ssrc] - base[ch.ssrc][1]
+                    verdict = None if total < 20 else st >= 0.3 * total     # the pilot detector flickers on weak stations
+                    out[f"{ch.freq_hz / 1e3:.0f}"] = {"stereo": verdict, "t": time.time(), "packets": total}
+                    S.rtp.unsubscribe(ch.ssrc, _noop_pcm)
+                    await S.radio.remove(ch.ssrc)
+        finally:
+            for ch in [c for c in list(S.radio.channels.values()) if c.kind == "probe"]:
+                S.rtp.unsubscribe(ch.ssrc, _noop_pcm)
+                await S.radio.remove(ch.ssrc)
+            if home and abs((S.radio.vhf.center_hz or 0) - home) > 1:
+                await S.radio.move_tuner(home)
+    for k, v in out.items():                       # keep an earlier yes/no over a squelched "don't know"
+        if v["stereo"] is not None or k not in known:
+            known[k] = v
+    FM_STEREO_FILE.write_text(json.dumps(known))
+    return {"results": out, "known": known}
+
+
+def _noop_pcm(pcm, ts, seq):
+    pass
+
+
 @app.get("/api/broadcast/stations")
 async def broadcast_station_list():
     """Bay Area AM and FM stations (call sign, city, format)."""
@@ -939,7 +1015,7 @@ async def ws_audio(ws: WebSocket, ssrc: int):
     def on_pcm(pcm, ts, seq):
         ch = S.radio.channels.get(ssrc)
         rate = ch.sample_rate if ch else 12000
-        if ch and ch.mode == "wfm" and ch.stereo:
+        if S.rtp.channels(ssrc) == 2:             # radiod sends stereo only while it hears the pilot
             rate |= 0x80000000
         try:
             q.put_nowait(np.array([rate], "<u4").tobytes() + pcm)

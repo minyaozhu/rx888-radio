@@ -103,6 +103,11 @@ function renderBw(ch) {
 }
 // ------------------------------------------------------------------ FM stereo
 const stereoPref = () => { try { return localStorage.getItem('rx.stereo') !== '0'; } catch (e) { return true; } };
+setInterval(() => {                           // the live stereo light: stereo frames in the last 1.5 s
+  const el = $('stLive'); if (!el) return;
+  const on = state.listening && performance.now() - (state.stereoAt || 0) < 1500;
+  el.textContent = on ? '● stereo' : state.listening ? 'mono' : ''; el.style.color = on ? 'var(--good)' : 'var(--dim)';
+}, 400);
 function renderStereo(ch) {
   $('stereoWrap').style.display = ch && ch.mode === 'wfm' ? '' : 'none';
   if (!ch || ch.mode !== 'wfm') return;
@@ -204,6 +209,7 @@ function startAudio() {
   ws.onmessage = (e) => {
     const hdr = new DataView(e.data).getUint32(0, true);
     const rate = hdr & 0x7fffffff, nch = hdr >>> 31 ? 2 : 1;      // top bit: stereo, L R interleaved
+    if (nch === 2) state.stereoAt = performance.now();
     const pcm = new Int16Array(e.data, 4), frames = Math.floor(pcm.length / nch);
     if (!frames) return;
     const buf = audio.ctx.createBuffer(nch, frames, rate);

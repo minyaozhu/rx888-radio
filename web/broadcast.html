@@ -165,6 +165,10 @@ button.on{background:var(--magenta)}
 .nowbar .m{font:12px "IBM Plex Mono",monospace;opacity:.8}
 .nowbar button{background:var(--bg);color:var(--ink)}
 .nowbar input{accent-color:var(--magenta)}
+.st{display:inline-block;margin-left:6px;font:700 10px/1 "IBM Plex Mono",monospace;letter-spacing:.06em;padding:3px 5px;border-radius:3px;background:var(--c-app);color:var(--panel);vertical-align:2px}
+.st.mono{background:transparent;color:var(--muted);border:1px solid var(--line);font-weight:500}
+.stlive{font:700 11px "IBM Plex Mono",monospace;letter-spacing:.08em;padding:4px 7px;border-radius:3px;border:1px solid currentColor;opacity:.6}
+.stlive.on{color:#6CC99A;opacity:1}
 </style>
 </head>
 <body>
@@ -178,6 +182,7 @@ button.on{background:var(--magenta)}
   <div class="nowbar" id="nowbar">
     <b id="nowName">Nothing playing</b><span class="m" id="nowMeta">pick a station below</span>
     <span style="flex:1"></span>
+    <span class="stlive" id="stLive" style="display:none">MONO</span>
     <label class="m" id="stereoWrap" style="display:none" title="FM stereo: needs a strong signal; mono is quieter on weak stations"><input type="checkbox" id="stereo"> stereo</label>
     <label class="m">vol <input id="vol" type="range" min="0" max="3" step="0.05" value="1"></label>
     <button id="stop" type="button" class="smallbtn" disabled>Stop</button>
@@ -199,6 +204,6 @@ button.on{background:var(--magenta)}
   </div>
   <p class="caveat">AM / FM station list from Wikipedia's list of Bay Area stations; shortwave from the EiBi schedule (eibispace.de), which lists what is scheduled, not what is audible: the signal column is from your last scan. AM and shortwave use the HF input, FM the VHF tuner; listening or scanning switches the receiver and holds it (the airband / public-safety rotation pauses) until “Resume rotation”. FM plays in stereo when the station sends it (untick “stereo” for mono, quieter on weak stations).</p>
 </div>
-<script src="broadcast.js?v=2"></script>
+<script src="broadcast.js?v=3"></script>
 </body>
 </html>
