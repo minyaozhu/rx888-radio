@@ -10,7 +10,6 @@ const CTRL_ACTIONS = [
   ['step_up', 'Larger tuning step'], ['step_down', 'Smaller tuning step'], ['step_cycle', 'Next tuning step (wraps around)'],
   ['vol_up', 'Volume up'], ['vol_down', 'Volume down'], ['listen', 'Listen / stop'],
   ['mode_next', 'Next mode'], ['mode_prev', 'Previous mode'],
-  ['zoom_in', 'Zoom in (narrower span)'], ['zoom_out', 'Zoom out (wider span)'], ['center', 'Centre the view'],
   ['chan_next', 'Next channel'], ['chan_prev', 'Previous channel'],
   ['band', 'Switch HF / VHF'], ['record', 'Record / stop'],
   ['tab_next', 'Next tab'], ['tab_prev', 'Previous tab'], ['tab_radio', 'Go to the Radio tab'],
@@ -19,7 +18,7 @@ const CTRL_DEFAULTS = {
   ArrowRight: 'tune_up', ArrowLeft: 'tune_down', 'Shift+ArrowRight': 'tune_up_fast', 'Shift+ArrowLeft': 'tune_down_fast',
   BracketRight: 'tune_up', BracketLeft: 'tune_down', 'Shift+BracketRight': 'tune_up_fast', 'Shift+BracketLeft': 'tune_down_fast',
   Slash: 'step_cycle', Period: 'step_up', Comma: 'step_down', Equal: 'vol_up', Minus: 'vol_down', KeyL: 'listen',
-  KeyM: 'mode_next', 'Shift+KeyM': 'mode_prev', KeyZ: 'zoom_in', 'Shift+KeyZ': 'zoom_out', KeyC: 'center',
+  KeyM: 'mode_next', 'Shift+KeyM': 'mode_prev',
   KeyN: 'chan_next', 'Shift+KeyN': 'chan_prev', KeyB: 'band', PageDown: 'tab_next', PageUp: 'tab_prev',
 };
 const ctrl = {bindings: {...CTRL_DEFAULTS}, learning: null, last: ''};

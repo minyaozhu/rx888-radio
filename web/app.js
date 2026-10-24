@@ -31,8 +31,7 @@ async function init() {
   state.channels = await api('GET', '/api/channels');
   await applyBand(state.info.band);
   wire();
-  resizeCanvases();
-  openSpectrum();
+  initPanels();
   openStatus();
 }
 
@@ -49,8 +48,6 @@ async function applyBand(band) {
   $('vga').value = state.info.vhf.vga; $('vgaVal').textContent = state.info.vhf.vga;
   const modes = state.info.band_modes[band];
   $('mode').innerHTML = ''; for (const m of modes) $('mode').add(new Option(m.toUpperCase(), m));
-  buildZoom();
-  wctx.fillStyle = '#05070a'; wctx.fillRect(0, 0, wf.width, wf.height);   // old band's waterfall
   const mine = state.channels.filter((c) => c.kind === 'listen' && c.band === band);
   let main = mine.find((c) => !c.parked) || mine[0];      // prefer a channel that's playing
   if (!main) {
@@ -72,35 +69,12 @@ async function switchBand(band) {
   finally { for (const b of ['bandHF', 'bandVHF']) $(b).disabled = false; }
 }
 
-// Span choices: what the input can show (HF: up to Nyquist; VHF: the tuner window).
-// Same span choices on both inputs, up to the coverage. On VHF, spans wider than the tuner
-// window are built by sweeping the tuner (slower updates, VHF audio paused).
-function buildZoom() {
-  const maxSpan = state.info.max_freq_hz;
-  const live = 2 * state.info.vhf.window_hz;
-  const spans = [100e3, 200e3, 500e3, 1e6, 2e6, 5e6, 10e6, 20e6].filter((x) => x < maxSpan * 0.98);
-  $('zoom').innerHTML = '';
-  const tag = (sp) => state.band === 'vhf' && sp > live + 1 ? ' (sweep)' : '';
-  for (const sp of spans) $('zoom').add(new Option((sp >= 1e6 ? sp / 1e6 + ' MHz' : sp / 1e3 + ' kHz') + tag(sp), sp));
-  const full = state.band === 'vhf' ? `${Math.floor(maxSpan / 1e6)} MHz (sweep)` : `0–${Math.floor(maxSpan / 1e6)} MHz (full)`;
-  $('zoom').add(new Option(full, maxSpan));
-  if (state.band === 'vhf') $('zoom').add(new Option(`${(live / 1e6).toFixed(1)} MHz (tuner, live)`, live));
-  syncZoom();
-}
-
 function renderHfGain(db) {
   const auto = db === null || db === undefined;
   $('hfAuto').checked = auto;
   $('hfGain').disabled = auto;
   if (!auto) $('hfGain').value = db;
   $('hfGainVal').textContent = auto ? 'auto' : `${(+$('hfGain').value).toFixed(1)} dB`;
-}
-
-function syncZoom() {
-  const span = state.view.bin * state.view.n;
-  let best = null, bd = Infinity;
-  for (const o of $('zoom').options) { const d = Math.abs(Math.log(+o.value / span)); if (d < bd) { bd = d; best = o; } }
-  if (best) $('zoom').value = best.value;
 }
 
 function select(ssrc, ch) {
@@ -140,10 +114,9 @@ async function tune(freq_hz, mode) {
     freq_hz = Math.max(lo, Math.min(freq_hz, hi));
     ch.freq_hz = freq_hz;
     $('freq').value = fmtTune(freq_hz);
-    keepInView(freq_hz);
   }
   if (mode) ch.mode = mode;
-  drawSpectrumOverlay();
+  panelsRedraw();
   // coalesce wheel/drag bursts into one request every 80 ms
   pendingTune = {freq_hz: ch.freq_hz, mode: ch.mode};
   if (tuneTimer) return;
@@ -155,18 +128,6 @@ async function tune(freq_hz, mode) {
       if (mode && state.listening) startAudio();
     } catch (e) { flash(e.message); }
   }, 80);
-}
-
-function keepInView(f) {
-  const span = state.view.bin * state.view.n;
-  const lo = state.view.center - span / 2, hi = state.view.center + span / 2;
-  if (f < lo + span * 0.05 || f > hi - span * 0.05) setView(f, null);
-}
-
-let viewTimer = null;
-function setView(center, bin) {
-  clearTimeout(viewTimer);
-  viewTimer = setTimeout(() => api('POST', '/api/spectrum', {center_hz: center, bin_hz: bin}).catch((e) => flash(e.message)), 120);
 }
 
 let flashTimer = null;
@@ -224,131 +185,6 @@ function stopAudio(updateButton = true) {
   }
 }
 
-// ------------------------------------------------------------------ spectrum + waterfall
-const spec = $('spectrum'), wf = $('waterfall');
-const sctx = spec.getContext('2d'), wctx = wf.getContext('2d');
-let lastFrame = null;
-
-// viridis-like palette
-const LUT = (() => {
-  const stops = [[0, 0, 4], [40, 11, 84], [101, 21, 110], [159, 42, 99], [212, 72, 66], [245, 125, 21], [250, 193, 39], [252, 255, 164]];
-  const lut = new Uint8ClampedArray(256 * 3);
-  for (let i = 0; i < 256; i++) {
-    const x = i / 255 * (stops.length - 1), k = Math.min(Math.floor(x), stops.length - 2), f = x - k;
-    for (let c = 0; c < 3; c++) lut[i * 3 + c] = stops[k][c] + (stops[k + 1][c] - stops[k][c]) * f;
-  }
-  return lut;
-})();
-
-function resizeCanvases() {
-  for (const c of [spec, wf]) {
-    const w = Math.floor(c.clientWidth * devicePixelRatio);
-    if (c.width !== w) c.width = w;
-  }
-  wf.height = Math.floor(300 * devicePixelRatio);
-  spec.height = Math.floor(160 * devicePixelRatio);
-}
-window.addEventListener('resize', resizeCanvases);
-
-function openSpectrum() {
-  const ws = new WebSocket(wsUrl('/ws/spectrum'));
-  ws.binaryType = 'arraybuffer';
-  ws.onmessage = (e) => {
-    const dv = new DataView(e.data);
-    const center = dv.getFloat64(0, true), bin = dv.getFloat32(8, true), n = dv.getUint32(12, true);
-    const db = new Float32Array(e.data, 16, n);
-    if (center !== state.view.center || bin !== state.view.bin) {
-      state.view = {center, bin, n};
-      syncZoom();
-    }
-    state.view.n = n;
-    lastFrame = db;
-    if ($('autoscale').checked) autoLevels(db);
-    drawWaterfallLine(db);
-    drawSpectrum();
-  };
-  ws.onclose = () => setTimeout(openSpectrum, 1000);
-}
-
-function autoLevels(db) {
-  const s = Float32Array.from(db).sort();
-  const floor = s[Math.floor(s.length * 0.1)], top = s[Math.floor(s.length * 0.999)];
-  state.levels.floor += (floor - 3 - state.levels.floor) * 0.1;
-  state.levels.ceil += (Math.max(top + 3, floor + 30) - state.levels.ceil) * 0.1;
-}
-
-function drawWaterfallLine(db) {
-  const W = wf.width, H = wf.height;
-  wctx.drawImage(wf, 0, 0, W, H - 1, 0, 1, W, H - 1);   // scroll down one row
-  const row = wctx.createImageData(W, 1), d = row.data, n = db.length;
-  const {floor, ceil} = state.levels, k = 255 / (ceil - floor);
-  for (let x = 0; x < W; x++) {
-    // max over the bins that fall in this pixel, so narrow carriers stay visible
-    const a = Math.floor(x * n / W), b = Math.max(a + 1, Math.floor((x + 1) * n / W));
-    let v = -1e9; for (let i = a; i < b; i++) if (db[i] > v) v = db[i];
-    const c = Math.max(0, Math.min(255, (v - floor) * k)) | 0;
-    d[x * 4] = LUT[c * 3]; d[x * 4 + 1] = LUT[c * 3 + 1]; d[x * 4 + 2] = LUT[c * 3 + 2]; d[x * 4 + 3] = 255;
-  }
-  wctx.putImageData(row, 0, 0);
-}
-
-const xToFreq = (x, w) => state.view.center + (x / w - 0.5) * state.view.bin * state.view.n;
-const freqToX = (f, w) => ((f - state.view.center) / (state.view.bin * state.view.n) + 0.5) * w;
-
-function drawSpectrum() {
-  const W = spec.width, H = spec.height, db = lastFrame;
-  sctx.fillStyle = '#05070a'; sctx.fillRect(0, 0, W, H);
-  const {floor, ceil} = state.levels, span = state.view.bin * state.view.n;
-  // frequency grid
-  const step = niceStep(span / 8);
-  sctx.font = `${11 * devicePixelRatio}px -apple-system, sans-serif`;
-  sctx.fillStyle = '#5b6573'; sctx.strokeStyle = '#1b222b';
-  for (let f = Math.ceil((state.view.center - span / 2) / step) * step; f < state.view.center + span / 2; f += step) {
-    const x = freqToX(f, W);
-    sctx.beginPath(); sctx.moveTo(x, 0); sctx.lineTo(x, H); sctx.stroke();
-    sctx.fillText(f >= 1e6 ? (f / 1e6).toFixed(step < 1e5 ? 3 : 1) + ' M' : (f / 1e3).toFixed(0) + ' k', x + 3, H - 4);
-  }
-  // dB grid
-  for (let v = Math.ceil(floor / 10) * 10; v < ceil; v += 10) {
-    const y = H - (v - floor) / (ceil - floor) * H;
-    sctx.beginPath(); sctx.moveTo(0, y); sctx.lineTo(W, y); sctx.stroke();
-    sctx.fillText(v + ' dB', 3, y - 2);
-  }
-  if (db) {
-    sctx.strokeStyle = '#4cc2ff'; sctx.lineWidth = devicePixelRatio; sctx.beginPath();
-    const n = db.length;
-    for (let x = 0; x < W; x++) {
-      const a = Math.floor(x * n / W), b = Math.max(a + 1, Math.floor((x + 1) * n / W));
-      let v = -1e9; for (let i = a; i < b; i++) if (db[i] > v) v = db[i];
-      const y = H - (v - floor) / (ceil - floor) * H;
-      x ? sctx.lineTo(x, y) : sctx.moveTo(x, y);
-    }
-    sctx.stroke();
-  }
-  drawSpectrumOverlay();
-  $('viewInfo').textContent = `${fmtHz(Math.max(0, state.view.center - span / 2))} – ${fmtHz(state.view.center + span / 2)} · ${Math.round(state.view.bin)} Hz bins` +
-    (state.band === 'vhf' ? (state.sweeping ? ` · sweep, ${state.sweepSec ? state.sweepSec.toFixed(1) + ' s/update' : 'starting…'} · VHF audio paused (click a signal to listen)`
-                                            : ` · tuner ${fmtMHz(state.info.vhf.center_hz)} MHz`) : '');
-}
-
-function drawSpectrumOverlay() {
-  const W = spec.width, H = spec.height;
-  for (const ch of state.channels) {
-    if (ch.band !== state.band || ch.parked) continue;
-    const x = freqToX(ch.freq_hz, W);
-    if (x < 0 || x > W) continue;
-    const sel = ch.ssrc === state.selected;
-    // passband
-    const bw = ch.mode === 'wfm' ? 200000 : ch.mode === 'nfm' ? 12500 : ch.mode.startsWith('cw') ? 400 : ch.mode === 'usb' || ch.mode === 'lsb' ? 3000 : 10000;
-    const lo = ch.mode === 'usb' ? 0 : ch.mode === 'lsb' ? -bw : -bw / 2;
-    const x0 = freqToX(ch.freq_hz + lo, W), x1 = freqToX(ch.freq_hz + lo + bw, W);
-    sctx.fillStyle = sel ? 'rgba(255,184,76,0.15)' : 'rgba(76,194,255,0.10)';
-    sctx.fillRect(x0, 0, Math.max(1, x1 - x0), H);
-    sctx.strokeStyle = sel ? '#ffb84c' : '#4cc2ff'; sctx.lineWidth = devicePixelRatio;
-    sctx.beginPath(); sctx.moveTo(x, 0); sctx.lineTo(x, H); sctx.stroke();
-  }
-}
-
 function niceStep(raw) {
   const p = Math.pow(10, Math.floor(Math.log10(raw)));
   for (const m of [1, 2, 5, 10]) if (m * p >= raw) return m * p;
@@ -360,43 +196,6 @@ function stepTune(dir, n = 1) {
   const ch = current(); if (!ch) return;
   const step = +$('step').value;
   tune(Math.round(ch.freq_hz / step) * step + dir * n * step);
-}
-
-// Move a click onto the strongest signal within +-frac of the view, if one stands out.
-function snapToPeak(f, frac) {
-  const db = lastFrame; if (!db) return f;
-  const n = db.length, span = state.view.bin * n;
-  const i0 = Math.round((f - state.view.center) / state.view.bin + n / 2), w = Math.max(1, Math.round(frac * n));
-  let best = -1, bv = -1e9;
-  for (let i = Math.max(0, i0 - w); i <= Math.min(n - 1, i0 + w); i++) if (db[i] > bv) { bv = db[i]; best = i; }
-  if (best < 0 || bv < state.levels.floor + 12) return f;   // nothing clearly above the noise
-  return state.view.center + (best - n / 2) * state.view.bin;
-}
-
-// mouse: click tunes (snapping to a nearby signal), wheel steps, drag pans
-function wireScope(canvas) {
-  let drag = null;
-  canvas.addEventListener('mousedown', (e) => { drag = {x: e.clientX, center: state.view.center, moved: false}; });
-  window.addEventListener('mousemove', (e) => {
-    if (!drag) return;
-    const dx = e.clientX - drag.x;
-    if (Math.abs(dx) > 4) drag.moved = true;
-    if (drag.moved) setView(drag.center - dx / canvas.clientWidth * state.view.bin * state.view.n, null);
-  });
-  window.addEventListener('mouseup', (e) => {
-    if (drag && !drag.moved && e.target === canvas) {
-      const r = canvas.getBoundingClientRect();
-      const step = +$('step').value;
-      tune(Math.round(snapToPeak(xToFreq(e.clientX - r.left, r.width), 8 / r.width) / step) * step);
-    }
-    drag = null;
-  });
-  canvas.addEventListener('wheel', (e) => {
-    e.preventDefault();
-    const ch = current(); if (!ch) return;
-    const step = +$('step').value;
-    tune(Math.round(ch.freq_hz / step) * step + (e.deltaY < 0 ? step : -step));
-  }, {passive: false});
 }
 
 // ------------------------------------------------------------------ status, channels
@@ -427,7 +226,7 @@ function openStatus() {
     const now = current();
     if (now && document.activeElement !== $('freq') && !pendingTune && !tuneTimer) {
       const txt = fmtTune(now.freq_hz);
-      if ($('freq').value !== txt) { $('freq').value = txt; drawSpectrumOverlay(); }
+      if ($('freq').value !== txt) { $('freq').value = txt; panelsRedraw(); }
     }
     renderHealth(s.health, s.scanning);
     renderMeter();
@@ -464,9 +263,6 @@ function wire() {
   });
   $('mode').addEventListener('change', () => { tune(null, $('mode').value); $('step').value = defaultStep($('mode').value, current().freq_hz); });
   $('listen').addEventListener('click', () => {
-    if (!state.listening && state.band === 'vhf' && state.sweeping) {   // the tuner is sweeping: go live first
-      setView(current().freq_hz, 2 * state.info.vhf.window_hz / state.view.n);
-    }
     state.listening ? stopAudio() : startAudio();
   });
   $('volume').addEventListener('input', () => { if (audio.gain) audio.gain.gain.value = parseFloat($('volume').value); });
@@ -478,7 +274,6 @@ function wire() {
       renderMeter();
     } catch (e) { flash(e.message); }
   });
-  $('zoom').addEventListener('change', () => setView(current()?.freq_hz ?? state.view.center, +$('zoom').value / state.view.n));
   $('bandHF').addEventListener('click', () => { state.switching = true; switchBand('hf').finally(() => { state.switching = false; }); });
   $('bandVHF').addEventListener('click', () => { state.switching = true; switchBand('vhf').finally(() => { state.switching = false; }); });
   $('coverage').addEventListener('change', async () => {
@@ -486,7 +281,7 @@ function wire() {
     $('coverage').disabled = true; flash('restarting radiod at ' + rate / 1e6 + ' MS/s…');
     try {
       state.info = await api('POST', '/api/coverage', {adc_rate_hz: rate});
-      buildZoom(); flash(`coverage 0–${Math.floor(state.info.max_freq_hz / 1e6)} MHz`);
+      flash(`coverage 0–${Math.floor(state.info.max_freq_hz / 1e6)} MHz`);
     } catch (e) { flash(e.message); $('coverage').value = String(state.info.adc_rate_hz); }
     finally { $('coverage').disabled = false; }
   });
@@ -518,9 +313,7 @@ function wire() {
   $('stepUp').addEventListener('click', (e) => stepTune(1, e.shiftKey ? 10 : 1));
   $('vga').addEventListener('input', () => { $('vgaVal').textContent = $('vga').value; });
   $('vga').addEventListener('change', () => api('POST', '/api/vhf/gain', {vga: +$('vga').value}).catch((e) => flash(e.message)));
-  $('center').addEventListener('click', () => setView(current().freq_hz, null));
   $('autoscale').addEventListener('change', () => {});
-  wireScope(spec); wireScope(wf);
 }
 
 // ------------------------------------------------------------------ remote control (controller.js in the tab shell)
@@ -555,9 +348,6 @@ window.rxControl = (action) => {
       sel.selectedIndex = (sel.selectedIndex + (action === 'mode_next' ? 1 : n - 1)) % n;
       sel.dispatchEvent(new Event('change')); return 'mode ' + sel.value.toUpperCase();
     }
-    case 'zoom_in': cycleSelect($('zoom'), -1); return 'span ' + $('zoom').selectedOptions[0].text;
-    case 'zoom_out': cycleSelect($('zoom'), 1); return 'span ' + $('zoom').selectedOptions[0].text;
-    case 'center': $('center').click(); return 'centred on ' + freqText();
     case 'band': (state.band === 'hf' ? $('bandVHF') : $('bandHF')).click(); return 'switching to ' + (state.band === 'hf' ? 'VHF' : 'HF');
     case 'chan_next': case 'chan_prev': {
       const list = state.channels.filter((c) => c.band === state.band && c.kind === 'listen');

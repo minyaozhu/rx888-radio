@@ -23,6 +23,7 @@ from .config import BAND_MODES, CONFIG, MODES, RADIOD_CONFS, RUNTIME, VHF_MAX_HZ
 from .adsb import AdsbFeed
 from .broadcast import Eibi, stations as broadcast_stations
 from . import ssb
+from .panels import PanelHub
 from .ft8 import FT4, Ft8, conversations
 from .places import HOME_CITY, Geocoder, locate
 from .wspr import WsprMonitor, grid_ll, km_between
@@ -118,6 +119,8 @@ async def lifespan(app):
             await S.spectrum.band_changed("hf")
         except Exception as e:
             log.warning("could not restore VHF: %s", e)
+    S.panels = PanelHub(S.radio, S.spectrum)
+    S.panels.start()
     S.store.event("app_start")
     log.info("rxapp ready on http://%s:%d", CONFIG.host, CONFIG.port)
     yield
@@ -129,6 +132,7 @@ async def lifespan(app):
     await S.wspr.stop(save=False)
     await S.sstv.stop(save=False)
     await S.adsb.stop()
+    await S.panels.stop()
     await S.hfgain.stop()
     await S.supervisor.stop()
     await S.spectrum.stop()
@@ -964,6 +968,18 @@ async def ws_spectrum(ws: WebSocket):
     finally:
         if on_frame in S.spectrum.subs:
             S.spectrum.subs.remove(on_frame)
+
+
+@app.websocket("/ws/panels")
+async def ws_panels(ws: WebSocket):
+    """The Radio page's panel grid: send {"ranges": [[lo_hz, hi_hz], ...]}; frames come back (see panels.py)."""
+    await ws.accept()
+    if S.spectrum.sweeping:                # an old wide VHF view would keep the tuner moving
+        await S.spectrum.ensure_live(S.radio.vhf.center_hz)
+    try:
+        await S.panels.serve(ws)
+    except (WebSocketDisconnect, RuntimeError, ValueError):
+        pass
 
 
 @app.websocket("/ws/status")
