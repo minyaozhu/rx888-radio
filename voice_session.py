@@ -21,7 +21,7 @@ after SAFETY_KEEP_DAYS. At the end the session removes its channels and puts rxa
     .venv/bin/python voice_session.py --windows approach:135.7 --minutes 60        # one airband window
     .venv/bin/python voice_session.py --retranscribe rxapp_data/airband/<stamp>
 
-Window syntax: name:band:centre_MHz[:service[:hold]], band = vhf | hf, service = air (default) | safety | marine;
+Window syntax: name:band:centre_MHz[:service[:hold]], band = vhf | hf, service = air (default) | safety | marine | aprs;
 "hold" = visit this window only while the receiver is held on its service (the page's button).
 (The older name:centre_MHz means a VHF airband window.) Live pages: /airband.html, /safety.html.
 """
@@ -113,7 +113,11 @@ MARINE_PROMPT = ("Marine VHF radio, San Francisco Bay. Coast Guard Sector San Fr
 MARINE = Profile("marine", "nfm", 25e3, 1, 3, 10.0, 0.0,
                  ((156.0e6, 156.5e6), (156.55e6, 157.45e6), (160.6e6, 161.95e6)), MARINE_PROMPT, "MAR", False,
                  min_frames=2)
-PROFILES = {"air": AIR, "safety": SAFETY, "marine": MARINE}
+# APRS: data only (no voice channels); the window's work is AprsReceiver on 144.390 MHz
+APRS = Profile("aprs", "nfm", 25e3, 1, 3, 10.0, 0.0, (), "", "APRS", False)
+PROFILES = {"air": AIR, "safety": SAFETY, "marine": MARINE, "aprs": APRS}
+APRS_HZ = 144.390e6
+MULTIMON = Path(__file__).resolve().parent / "tools" / "multimon-ng" / "build" / "multimon-ng"
 NOAA_HZ = [162.400e6, 162.425e6, 162.450e6, 162.475e6, 162.500e6, 162.525e6, 162.550e6]
 AIS_CENTRE = 162.000e6        # AIS channel A 161.975, B 162.025: both in a 96 kHz IQ channel here
 AIS_RATE = 96000
@@ -439,6 +443,127 @@ class AisReceiver:
         self.write(time.time() + 3)
 
 
+# ---- APRS ---------------------------------------------------------------------------------
+class AprsReceiver:
+    """While the APRS window is on: radiod FM audio on 144.390 MHz, resampled to 22,050 Hz and piped into
+    multimon-ng (AFSK1200, -A); its TNC2 lines are parsed with aprslib into stations."""
+
+    def __init__(self, out_dir: Path):
+        from rxapp.aprs import Stations
+        self.out = out_dir
+        self.stations = Stations()
+        self.running = False
+        self.error = None
+        self.last_write = 0.0
+        self.lock = threading.Lock()
+
+    def start(self, ctl, f_if: float):
+        if self.running:
+            return
+        if not MULTIMON.exists():
+            self.error = f"multimon-ng not built ({MULTIMON}); see README"
+            log.warning(self.error)
+            return
+        import subprocess
+        self.ctl = ctl
+        group = maddr("voice-aprs.local")
+        self.ssrc = int(time.time()) % 1_000_000_000 + 9_000_000
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 8 << 20)
+        s.bind((group, CONFIG.rtp_port))
+        s.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, socket.inet_aton(group) + socket.inet_aton(CONFIG.iface_addr))
+        s.settimeout(1.0)
+        self.sock = s
+        ctl.create_channel(frequency_hz=f_if, preset="nfm", sample_rate=24000, destination=group, ssrc=self.ssrc, lifetime=1500)
+        self.proc = subprocess.Popen([str(MULTIMON), "-t", "raw", "-a", "AFSK1200", "-A", "-"],
+                                     stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        self.running, self.error = True, None
+        threading.Thread(target=self._pump, daemon=True).start()
+        threading.Thread(target=self._read, args=(self.proc,), daemon=True).start()
+        log.info("APRS: receiving on %.3f MHz", APRS_HZ / 1e6)
+
+    def _pump(self):
+        from scipy.signal import resample_poly
+        proc, last_keep, carry = self.proc, time.time(), np.zeros(0, np.float32)
+        while self.running:
+            try:
+                d, _ = self.sock.recvfrom(65536)
+            except socket.timeout:
+                continue
+            except OSError:
+                break
+            if len(d) < 12 or struct.unpack("!I", d[8:12])[0] != self.ssrc:
+                continue
+            h = 12 + 4 * (d[0] & 15)
+            if d[0] & 0x10:
+                h += 4 + 4 * struct.unpack("!H", d[h + 2:h + 4])[0]
+            carry = np.concatenate([carry, np.frombuffer(d[h:], ">i2").astype(np.float32)])
+            if len(carry) < 2400:                 # resample in 0.1 s blocks (24 kHz -> 22.05 kHz = 147/160)
+                continue
+            n = len(carry) // 160 * 160
+            y = resample_poly(carry[:n], 147, 160)
+            carry = carry[n:]
+            try:
+                proc.stdin.write(np.clip(y, -32767, 32767).astype("<i2").tobytes())
+                proc.stdin.flush()
+            except (BrokenPipeError, ValueError, OSError):
+                break
+            if time.time() - last_keep > 10:
+                try:
+                    self.ctl.set_channel_lifetime(self.ssrc, 1500)
+                except Exception:
+                    pass
+                last_keep = time.time()
+
+    def _read(self, proc):
+        import aprslib
+        out = self.out / "packets.jsonl"
+        for raw in proc.stdout:
+            line = raw.decode("latin-1", "replace").strip()
+            if not line.startswith("APRS: "):
+                continue
+            tnc2 = line[6:]
+            now = time.time()
+            try:
+                p = aprslib.parse(tnc2)
+            except Exception as e:                # unparseable or unsupported: keep the raw packet
+                p = {"raw": tnc2, "from": tnc2.split(">", 1)[0], "error": str(e)[:80]}
+            with self.lock:
+                self.stations.ingest(p, now)
+            keep = {k: p[k] for k in ("from", "to", "format", "latitude", "longitude", "symbol", "symbol_table", "comment",
+                                      "object_name", "speed", "course", "altitude", "weather", "status", "error") if k in p}
+            with open(out, "a") as f:
+                f.write(json.dumps({"t": round(now, 2), "raw": tnc2, **keep}) + "\n")
+            log.info("APRS %s", tnc2[:120])
+
+    def write(self, now):
+        if now - self.last_write < 2:
+            return
+        self.last_write = now
+        with self.lock:
+            self.stations.prune(now)
+            snap = self.stations.snapshot()
+        snap.update(running=self.running, error=self.error)
+        tmp = self.out / "stations.json.tmp"
+        tmp.write_text(json.dumps(snap))
+        tmp.replace(self.out / "stations.json")
+
+    def stop(self):
+        if not self.running:
+            return
+        self.running = False
+        for f in (lambda: self.ctl.remove_channel(self.ssrc), lambda: self.proc.stdin.close(),
+                  lambda: self.proc.terminate(), lambda: self.sock.close()):
+            try:
+                f()
+            except Exception:
+                pass
+        log.info("APRS: stopped")
+        self.write(time.time() + 3)
+
+
 # ---- the session -------------------------------------------------------------------------
 class Session:
     def __init__(self, windows: List[Window], minutes, stamp, dwell_sec=300.0, preload=()):
@@ -469,6 +594,7 @@ class Session:
         self.focus = None             # air | safety | marine | hf | pause | None (all windows), from rxapp
         self.focus_checked = 0.0
         self.ais = AisReceiver(self.outs["marine"]) if "marine" in self.outs else None
+        self.aprs = AprsReceiver(self.outs["aprs"]) if "aprs" in self.outs else None
         self.weather = {}             # NOAA weather radio frequency -> rxapp channel (listen only)
 
     @property
@@ -527,6 +653,11 @@ class Session:
                             log.warning("weather channel %.3f: %s", f / 1e6, e)
             else:
                 self.ais.stop()
+        if self.aprs is not None:
+            if prof.service == "aprs" and win.band == "vhf" and lo <= APRS_HZ <= hi:
+                self.aprs.start(self.ctl, info["vhf"]["if_hz"] - (APRS_HZ - self.tuner_hz))
+            else:
+                self.aprs.stop()
         self.settle_until = time.time() + 1.0       # spectrum frames from before the move, PLL settling
         log.info("window %s (%s, %s): watching %.4f-%.4f MHz, %d channels on the %.1f kHz grid",
                  win.name, win.band, prof.service, self.lo / 1e6, self.hi / 1e6, len(self.grid), prof.grid / 1e3)
@@ -611,6 +742,8 @@ class Session:
             pass
         if self.ais is not None:
             self.ais.stop()
+        if self.aprs is not None:
+            self.aprs.stop()
         for f, ssrc in list(self.weather.items()):
             try:
                 call("DELETE", f"/channels/{ssrc}")
@@ -676,12 +809,16 @@ class Session:
                   "window_since": self.window_since, "next_switch": None if self.idle else nxt,
                   "listening": here and not self.idle, "focus": self.focus,
                   "windows": [{"name": w.name, "band": w.band, "service": w.profile.service, "on_demand": w.on_demand,
-                               "lo": max(w.profile.ranges[0][0], w.centre - half), "hi": min(w.profile.ranges[-1][1], w.centre + half)}
+                               "lo": max(w.profile.ranges[0][0], w.centre - half) if w.profile.ranges else w.centre - half,
+                               "hi": min(w.profile.ranges[-1][1], w.centre + half) if w.profile.ranges else w.centre + half}
                               for w in self.windows],
                   "channels": {f"{f:.0f}": c["ssrc"] for f, c in mine.items() if here and self.lo <= f <= self.hi},
                   "known": sorted(f"{f:.0f}" for f in mine),
                   "keyed": {f"{f:.0f}": round(self.peak.get(f, 0), 1) for f in self.keyed_since if f in mine},
                   "spurs": [f"{f:.0f}" for f in sorted(self.spurs)], "end": self.end}
+            if service == "aprs":
+                st["aprs"] = {"running": bool(self.aprs.running), "error": self.aprs.error,
+                              "packets": self.aprs.stations.packets, "stations": len(self.aprs.stations.s)}
             if service == "marine":
                 st["weather"] = {f"{f:.0f}": ssrc for f, ssrc in self.weather.items()} if here else {}
                 st["ais"] = {"running": bool(self.ais and self.ais.running), "error": self.ais and self.ais.error,
@@ -702,6 +839,8 @@ class Session:
                 last_status = time.time()
                 if self.ais is not None and self.ais.running:
                     self.ais.write(time.time())
+                if self.aprs is not None and self.aprs.running:
+                    self.aprs.write(time.time())
             if "safety" in self.outs and time.time() - self.last_prune > 3600:
                 n = prune(CONFIG.data_dir / "safety", SAFETY_KEEP_DAYS)
                 if n:

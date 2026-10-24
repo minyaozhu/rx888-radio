@@ -116,8 +116,9 @@ API: `GET/POST /api/sstv` (status / `{on}`), `GET /api/sstv/pictures`, `GET /api
 
 http://127.0.0.1:8090 is a tab bar with one page per feature: **Radio** (`radio.html`: tuning, waterfall,
 channels, scans, monitors, FT8/SSTV controls, recordings, dashboard), **FT8 map** (`ft8.html`), **FT4 map**
-(`ft4.html`), **Airband**
-(`airband.html`), **Public safety** (`safety.html`) and **SSTV** (`sstv.html`: the monitor's frequencies with a
+(`ft4.html`), **WSPR** (`wspr.html`), **Airband**
+(`airband.html`), **Public safety** (`safety.html`), **Maritime** (`marine.html`), **APRS**
+(`aprs.html`) and **SSTV** (`sstv.html`: the monitor's frequencies with a
 live detector meter and Listen, a *Receiving now* window where a picture builds up line by line while it's
 being received (the capture is decoded every 5 s), and the picture gallery with a full-size viewer). A page is loaded the first time its tab is opened and then
 kept, so audio playing in one tab keeps playing in another; the address names the tab (`/#airband`). The bar
@@ -179,6 +180,43 @@ While the low-band window is on, the FT8 and SSTV monitors (HF) run too. Output 
 
 API: `GET /api/safety?session=`, `GET /api/safety/transmissions?session=&after=`, `GET /api/safety/places?session=`,
 `GET /api/safety/clip/{session}/{wav}`.
+
+## WSPR
+
+`rxapp/wspr.py`: one USB channel per WSPR dial frequency (1.8366, 3.5686, 5.2872, 7.0386, 10.1387, 14.0956,
+18.1046, 21.0946, 24.9246, 28.1246, 50.293 MHz), cut into 2-minute slots on even UTC minutes (the FT8
+monitor's RTP timing, with a 150 s buffer), each decoded with WSJT-X's `wsprd`. Spots go to the `wspr` table
+with the distance from this station's locator. `/api/wspr` (status, `{on}`), `/api/wspr/spots`, and
+`/api/propagation?minutes=30`: per band, WSPR spots and FT8/FT4 decodes, stations and the farthest one heard,
+i.e. which bands are open. Page `wspr.html`: great-circle lines from home to each beacon (coloured by band,
+width by SNR), band conditions, latest spots. Runs while the HF input is selected. Tested end to end with a
+beacon synthesised from `wsprsim`'s symbols, decoded at about -15 dB SNR.
+
+Build wsprd (C only; its optional Fortran OSD decoder, used only with `-o`, is replaced by a stub):
+
+```bash
+git clone --depth 1 --filter=blob:none --sparse https://github.com/WSJTX/wsjtx.git tools/wsjtx
+git -C tools/wsjtx sparse-checkout set lib/wsprd
+cd tools/wsjtx/lib/wsprd
+printf 'void osdwspr_(float s[], unsigned char a[], int *d, unsigned char c[], int *h, float *m){*h=999;*m=999;}\n' > osd_stub.c
+clang -O3 -ffast-math -o wsprd wsprd.c wsprsim_utils.c wsprd_utils.c tab.c fano.c jelinek.c nhash.c metric_tables.c osd_stub.c \
+      -I/opt/homebrew/include -L/opt/homebrew/lib -lfftw3f -lm
+clang -O3 -o wsprsim wsprsim.c wsprsim_utils.c wsprd_utils.c tab.c fano.c nhash.c -lm      # test signals
+```
+
+## APRS
+
+A VHF window (`aprs:vhf:146.0:aprs`) in the rotation: while it's on, the session takes radiod's FM audio on
+144.390 MHz, resamples it to 22,050 Hz and pipes it into multimon-ng (`-a AFSK1200 -A`); each TNC2 line is
+parsed with [aprslib](https://pypi.org/project/aprslib/) (positions, compressed, Mic-E, objects, weather) and
+tracked per station (`rxapp/aprs.py`): `rxapp_data/aprs/<stamp>/packets.jsonl` and `stations.json`.
+`/api/aprs`, `/api/aprs/stations`, `/api/aprs/packets`. Page `aprs.html`: stations on the Bay map by type
+(car, house, weather station, digipeater...), tracks, station list, raw packets. Tested with AX.25 frames
+generated as Bell 202 audio (`tests/afsk.py`). With the current antenna 144.390 MHz stayed below the noise
+in a 2-minute check, so nothing was decoded on the air yet.
+
+Build multimon-ng: `git clone --depth 1 https://github.com/EliasOenal/multimon-ng.git tools/multimon-ng &&
+cmake -S tools/multimon-ng -B tools/multimon-ng/build && cmake --build tools/multimon-ng/build -j`
 
 ## Maritime
 

@@ -22,6 +22,7 @@ from .config import BAND_MODES, CONFIG, MODES, RADIOD_CONFS, RUNTIME, VHF_MAX_HZ
 from .adsb import AdsbFeed
 from .ft8 import FT4, Ft8, conversations
 from .places import HOME_CITY, Geocoder, locate
+from .wspr import WsprMonitor, grid_ll, km_between
 from .hfgain import GAIN_MAX, SLIDER_MIN, HfGain
 from .jobs import BANDS, Recorder, Scanner
 from .monitor import Monitor
@@ -47,6 +48,7 @@ class State:
     hfgain: HfGain
     ft8: Ft8
     ft4: Ft8
+    wspr: WsprMonitor
     sstv: SstvMonitor
     adsb: AdsbFeed
     geo: Geocoder
@@ -86,6 +88,12 @@ async def lifespan(app):
     S.hfgain.start()
     S.ft8 = Ft8(S.radio, S.rtp, S.store)
     S.ft4 = Ft8(S.radio, S.rtp, S.store, FT4)
+    S.wspr = WsprMonitor(S.radio, S.rtp, S.store)
+    if RUNTIME.wspr_bands:
+        try:
+            await S.wspr.start(RUNTIME.wspr_bands)
+        except Exception as e:
+            log.warning("could not restart WSPR: %s", e)
     for mon in (S.ft8, S.ft4):           # a monitor that was on: carry on
         if mon.saved_bands:
             try:
@@ -115,6 +123,7 @@ async def lifespan(app):
     await S.monitor.stop()
     await S.ft8.stop(save=False)
     await S.ft4.stop(save=False)
+    await S.wspr.stop(save=False)
     await S.sstv.stop(save=False)
     await S.adsb.stop()
     await S.hfgain.stop()
@@ -306,6 +315,60 @@ _digital_mode_routes("ft8")
 _digital_mode_routes("ft4")
 
 
+@app.get("/api/wspr")
+async def wspr_info():
+    return S.wspr.info()
+
+
+@app.post("/api/wspr")
+async def wspr_set(body: Ft8Set):
+    try:
+        if body.on:
+            await S.wspr.start(body.bands)
+        else:
+            await S.wspr.stop()
+    except (ValueError, RuntimeError) as e:
+        raise HTTPException(400, str(e))
+    return S.wspr.info()
+
+
+@app.get("/api/wspr/spots")
+async def wspr_spots(since: float = 0, after_id: int = 0, limit: int = 5000):
+    """WSPR spots, newest first (poll with after_id)."""
+    return S.store.query("SELECT * FROM wspr WHERE t > ? AND id > ? ORDER BY t DESC, band LIMIT ?",
+                         (since, after_id, min(limit, 50000)))
+
+
+@app.get("/api/propagation")
+async def propagation(minutes: float = 30):
+    """Which bands are open now: per band, WSPR spots and FT8/FT4 decodes in the last `minutes`, distinct
+    stations, and the farthest station heard (from grids)."""
+    t0 = time.time() - minutes * 60
+    me = grid_ll(RUNTIME.qth)
+    bands = {}
+    def row(b):
+        return bands.setdefault(b, {"band": b, "wspr": 0, "ft8": 0, "ft4": 0, "stations": set(), "far_km": 0, "far_call": None})
+    for r in S.store.query("SELECT band, call, grid, km FROM wspr WHERE t > ?", (t0,)):
+        x = row(r["band"]); x["wspr"] += 1; x["stations"].add(r["call"])
+        if r["km"] and r["km"] > x["far_km"]:
+            x["far_km"], x["far_call"] = r["km"], r["call"]
+    for table in ("ft8", "ft4"):
+        for r in S.store.query(f"SELECT band, from_call, extra FROM {table} WHERE t > ?", (t0,)):
+            x = row(r["band"]); x[table] += 1
+            if r["from_call"]:
+                x["stations"].add(r["from_call"])
+            g = (r["extra"] or "").split(" ")[0]
+            if g and g != "RR73":
+                d = km_between(me, grid_ll(g))
+                if d and d > x["far_km"]:
+                    x["far_km"], x["far_call"] = round(d, 1), r["from_call"]
+    out = []
+    for x in bands.values():
+        x["stations"] = len(x["stations"])
+        out.append(x)
+    return {"minutes": minutes, "qth": RUNTIME.qth, "bands": out}
+
+
 class SstvSet(BaseModel):
     on: bool
 
@@ -371,6 +434,7 @@ async def sstv_delete(pid: int):
 AIRBAND_DIR = CONFIG.data_dir / "airband"
 SAFETY_DIR = CONFIG.data_dir / "safety"
 MARINE_DIR = CONFIG.data_dir / "marine"
+APRS_DIR = CONFIG.data_dir / "aprs"
 
 
 def _session_dir(base: Path, name: Optional[str]) -> Path:
@@ -484,6 +548,29 @@ async def marine_vessels(session: Optional[str] = None):
         return {"t": None, "messages": 0, "vessels": [], "running": False, "error": None}
 
 
+@app.get("/api/aprs")
+async def aprs_info(session: Optional[str] = None):
+    """The latest (or a named) APRS session's live status."""
+    return _session_info(APRS_DIR, session)
+
+
+@app.get("/api/aprs/stations")
+async def aprs_stations(session: Optional[str] = None):
+    """APRS stations heard on 144.390 MHz (multimon-ng + aprslib via voice_session.py), with tracks."""
+    d = _session_dir(APRS_DIR, session)
+    try:
+        return json.loads((d / "stations.json").read_text())
+    except (OSError, ValueError):
+        return {"t": None, "packets": 0, "stations": [], "running": False, "error": None}
+
+
+@app.get("/api/aprs/packets")
+async def aprs_packets(session: Optional[str] = None, limit: int = 300):
+    """The latest raw packets, newest first."""
+    d = _session_dir(APRS_DIR, session)
+    return list(reversed(_jsonl(d / "packets.jsonl")[-min(limit, 5000):]))
+
+
 @app.get("/api/safety/places")
 async def safety_places(session: Optional[str] = None, after: int = -1):
     """Places mentioned in public-safety transmissions (towns; highway + cross street via OpenStreetMap),
@@ -499,6 +586,7 @@ async def safety_places(session: Optional[str] = None, after: int = -1):
 # ---------------------------------------------------------------- receiver focus (voice_session.py reads this)
 FOCUS_FILE = CONFIG.data_dir / "voice_control.json"
 FOCUS_VALUES = {"air": "airband windows", "safety": "public-safety windows", "marine": "the marine window (AIS, marine radio, weather)",
+                "aprs": "the APRS window (144.390 MHz)",
                 "hf": "the HF input (FT8, SSTV, low band)",
                 "pause": "paused for manual tuning"}
 
@@ -576,7 +664,7 @@ async def update_channel(ssrc: int, body: ChannelUpdate):
 async def delete_channel(ssrc: int):
     if _channel(ssrc).kind == "watch":
         raise HTTPException(409, "this channel belongs to a watch; delete the watch instead")
-    if _channel(ssrc).kind in ("ft8", "ft4"):
+    if _channel(ssrc).kind in ("ft8", "ft4", "wspr"):
         raise HTTPException(409, f"this channel belongs to the {_channel(ssrc).kind.upper()} monitor; stop it on its tab")
     if _channel(ssrc).kind == "sstv":
         raise HTTPException(409, "this channel belongs to the SSTV monitor; stop it on the SSTV tab")

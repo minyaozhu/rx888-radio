@@ -112,6 +112,7 @@ class Feed:
     """One band: its channel and recent audio, keyed by unwrapped RTP timestamp."""
     band: str
     dial_hz: float
+    buffer_sec: float = BUFFER_SEC                     # audio kept: must exceed the slot (WSPR: 2 min)
     ssrc: Optional[int] = None
     chunks: deque = field(default_factory=deque)       # (ts_start, int16 array)
     offsets: deque = field(default_factory=deque)      # (arrival, arrival - ts/RATE)
@@ -143,7 +144,7 @@ class Feed:
         self.offsets.append((now, now - (t + len(a)) / RATE))
         while self.offsets and now - self.offsets[0][0] > OFFSET_WINDOW:
             self.offsets.popleft()
-        while self.chunks and (t - self.chunks[0][0]) / RATE > BUFFER_SEC:
+        while self.chunks and (t - self.chunks[0][0]) / RATE > self.buffer_sec:
             self.chunks.popleft()
 
     def offset(self) -> Optional[float]:

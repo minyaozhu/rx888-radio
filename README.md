@@ -31,7 +31,7 @@ sees it (carrier removed, 250–3200 Hz, normalised).
 
 | Script | What it does |
 |---|---|
-| **`rxapp/`** | **Your own SDR app: HF (0–32 or 0–64 MHz) and VHF/UHF inputs, browser waterfall, click-to-tune, audio, scans, FT8 and FT4 on every band at once with world maps, an SSTV picture monitor, a live Bay Area airband map, a public-safety monitor (CHP low band, VHF-high), server-side monitoring, dashboard, auto-recovery. `./run_rxapp.sh`, then http://127.0.0.1:8090: tabs for Radio, FT8 map, FT4 map, Airband, Public safety and SSTV. See [rxapp/README.md](rxapp/README.md)** |
+| **`rxapp/`** | **Your own SDR app: HF (0–32 or 0–64 MHz) and VHF/UHF inputs, browser waterfall, click-to-tune, audio, scans, FT8, FT4 and WSPR on every band at once with world maps and band conditions, an SSTV picture monitor, a live Bay Area airband map, a public-safety monitor (CHP low band, VHF-high), maritime (AIS ships, marine radio, NOAA weather), APRS, server-side monitoring, dashboard, auto-recovery. `./run_rxapp.sh`, then http://127.0.0.1:8090: tabs for Radio, FT8 map, FT4 map, WSPR, Airband, Public safety, Maritime, APRS and SSTV. See [rxapp/README.md](rxapp/README.md)** |
 | **`voice_session.py`** | **Records and transcribes every voice channel in view at once, rotating through windows: airband approach and towers, CHP's low band (HF input), VHF-high public safety. Feeds the Airband and Public safety tabs. See [rxapp/README.md](rxapp/README.md#voice-sessions-airband-and-public-safety)** (`airband_session.py` is the old name and still works) |
 | `probe.py` | Finds the RX-888, reports firmware state and USB link speed |
 | `rx888/usb.py` | USB discovery (VID/PID for bootloader and SDDC states) |

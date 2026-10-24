@@ -1,6 +1,8 @@
 """Unit tests for rxapp's pure logic (no radio needed)."""
 
 import struct
+import sys
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -583,3 +585,101 @@ def test_on_demand_window_only_while_held():
     assert s.allowed(s.windows[0]) and not s.allowed(s.windows[1])
     s.focus = "marine"
     assert s.allowed(s.windows[1]) and not s.allowed(s.windows[0])
+
+
+# ---- WSPR ----------------------------------------------------------------------------
+from rxapp import wspr
+
+WSPRSIM = wspr.WSPRD.parent / "wsprsim"
+
+
+def test_wspr_parse_messages_and_distance():
+    out = ("1030 -15  0.3  14.097105  0  K6ABC CM87 33\n"
+           "1030 -24 -1.1  14.097012  1  PJ4/K1ABC 37\n"
+           "1030 -21  0.0  14.096990  0  <PJ4/K1ABC> FK52UD 37\n"
+           "<DecodeFinished>\n")
+    s = wspr.parse(out, home="FN42")
+    assert [(x["call"], x["grid"], x["dbm"]) for x in s] == [("K6ABC", "CM87", 33), ("PJ4/K1ABC", None, 37), ("PJ4/K1ABC", "FK52UD", 37)]
+    assert s[0]["snr"] == -15 and s[0]["freq_hz"] == pytest.approx(14.097105e6)
+    assert 4000 < s[0]["km"] < 4400                       # CM87 (SF Bay) to FN42 (Boston): ~4,300 km
+    lat, lon = wspr.grid_ll("CM87")
+    assert (lat, lon) == (37.5, -123.0)
+
+
+@pytest.mark.skipif(not (wspr.WSPRD.exists() and WSPRSIM.exists()), reason="needs wsprd and wsprsim (tools/wsjtx)")
+def test_wspr_slot_decodes_a_beacon_below_the_noise(tmp_path, monkeypatch):
+    import re as _re, subprocess
+    syms = subprocess.run([str(WSPRSIM), "-c", "K6ABC CM87 33"], capture_output=True, text=True).stdout
+    sym = [int(c) for c in _re.findall(r"[0-3]", syms.split("Channel symbols:")[-1])][:162]
+    fs, n = wspr.RATE, 8192
+    ph, parts = 0.0, []
+    for s_ in sym:                                        # 4-FSK, 1.46 Hz spacing, 0.683 s symbols, at 1500 Hz
+        f = 1500 - 1.5 * fs / n + s_ * fs / n
+        parts.append(np.sin(ph + 2 * np.pi * f * np.arange(n) / fs))
+        ph = (ph + 2 * np.pi * f * n / fs) % (2 * np.pi)
+    a = np.zeros(fs * 120)
+    a[fs:fs + n * len(sym)] = np.concatenate(parts) * 0.05
+    a = a + np.random.default_rng(2).normal(0, 0.3, len(a))
+    a = (a / np.abs(a).max() * 20000).astype("<i2")
+    mon = wspr.WsprMonitor.__new__(wspr.WsprMonitor)
+    mon.tmp, mon._sem = tmp_path, asyncio.Semaphore(1)
+    rows = []
+
+    class DB:
+        def executemany(self, sql, r): rows.extend(r)
+        def commit(self): pass
+    mon.store = SimpleNamespace(lock=__import__("threading").Lock(), db=DB())
+    monkeypatch.setattr(wspr.RUNTIME, "qth", "CM87")
+    feed = ft8.Feed("20m", 14.0956e6)
+    feed.cut = lambda t0, seconds: a
+    asyncio.run(mon._decode(feed, 1_800_000_000.0))
+    (row,) = rows
+    assert row[1] == "20m" and row[6:9] == ("K6ABC", "CM87", 33) and row[3] < -10   # heard at about -15 dB SNR
+
+
+# ---- APRS -------------------------------------------------------------------------------
+from rxapp.aprs import Stations, kind as aprs_kind
+
+
+def test_aprs_stations_track_positions_weather_and_objects():
+    import aprslib
+    st = Stations()
+    t0 = 1_800_000_000.0
+    for i, tnc2 in enumerate([
+            "K6ABC-9>APRS,WIDE1-1,WIDE2-1:!3745.12N/12224.50W>Testing rxapp",
+            "K6ABC-9>APRS,WIDE1-1:!3745.30N/12224.10W>Testing rxapp",
+            "KJ6WX>APRS:@231530z3746.00N/12223.00W_270/005g010t061r000p000h80b10150",
+            "N6EOC>APRS:;EVENT    *231530z3747.00N/12225.00W[Bay to Breakers aid station"]):
+        st.ingest(aprslib.parse(tnc2), t0 + i)
+    car, wx, obj = st.s["K6ABC-9"], st.s["KJ6WX"], st.s["EVENT"]
+    assert car["kind"] == "car" and len(car["track"]) == 2 and car["lat"] == pytest.approx(37.755)
+    assert wx["kind"] == "weather" and wx["weather"]["temperature"] == pytest.approx(16.1, abs=0.2)   # 61 F
+    assert obj["kind"] == "person" and obj["via"] == "N6EOC"
+    assert aprs_kind("\\", "#") == "digipeater" and aprs_kind("/", "-") == "house"
+    st.prune(t0 + 13 * 3600)
+    assert not st.s
+
+
+@pytest.mark.skipif(not vs.MULTIMON.exists(), reason="needs tools/multimon-ng")
+def test_aprs_audio_decodes_through_multimon():
+    import subprocess, aprslib
+    sys.path.insert(0, str(Path(__file__).parent))
+    from afsk import frame, afsk
+    pk = frame("K6ABC-9", "APRS", ["WIDE1-1"], "!3745.12N/12224.50W>rxapp test")
+    a = np.concatenate([np.zeros(11025), afsk(pk) * 0.5, np.zeros(11025)])
+    a = (a + np.random.default_rng(0).normal(0, 0.05, len(a))) * 20000
+    out = subprocess.run([str(vs.MULTIMON), "-t", "raw", "-a", "AFSK1200", "-A", "-"], input=a.astype("<i2").tobytes(),
+                         capture_output=True).stdout.decode()
+    line = next(l for l in out.splitlines() if l.startswith("APRS: "))
+    p = aprslib.parse(line[6:])
+    assert p["from"] == "K6ABC-9" and p["latitude"] == pytest.approx(37.752, abs=1e-3)
+
+
+def test_wspr_feed_keeps_a_whole_two_minute_slot(monkeypatch):
+    feed = ft8.Feed("20m", 14.0956e6, buffer_sec=wspr.SLOT_SEC + 30)
+    t_start = 1_800_000_000.0                               # an even minute
+    _packets(feed, t_start - 2, 125, monkeypatch=monkeypatch)
+    assert feed.cut(t_start, wspr.SLOT_SEC) is not None     # all 120 s still there
+    short = ft8.Feed("20m", 14.0956e6)                      # the FT8 default keeps 40 s: not enough
+    _packets(short, t_start - 2, 125, monkeypatch=monkeypatch)
+    assert short.cut(t_start, wspr.SLOT_SEC) is None
