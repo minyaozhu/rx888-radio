@@ -17,7 +17,7 @@ header { display: flex; align-items: center; justify-content: space-between; gap
 .tuner { display: flex; align-items: center; gap: 14px; padding: 12px 16px; flex-wrap: wrap;
   border-bottom: 1px solid var(--line); }
 .freq-wrap { display: flex; align-items: baseline; gap: 6px; }
-.freq { width: 9.5ch; font: 600 30px/1 ui-monospace, "SF Mono", Menlo, monospace; color: var(--accent);
+.freq { width: 9.5ch; font: 600 30px/1 ui-monospace, "SF Mono", Menlo, monospace; color: #ffd84a; text-shadow: 0 0 10px rgba(255,216,74,.35);
   background: transparent; border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; text-align: right; }
 .freq:focus { outline: none; border-color: var(--accent); }
 .unit { color: var(--dim); }
