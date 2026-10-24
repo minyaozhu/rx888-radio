@@ -804,6 +804,7 @@ function wire() {
   // Capture phase, so a focused dropdown or slider doesn't swallow them.
   window.addEventListener('keydown', (e) => {
     if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    if (window.parent !== window && window.parent.rxCtrl) return;    // in the tab shell, its controller has the arrows
     const t = e.target;
     if (t && (t.id === 'freq' || t.tagName === 'TEXTAREA' || (t.tagName === 'INPUT' && t.type === 'number'))) return;
     e.preventDefault(); e.stopPropagation();
@@ -902,6 +903,10 @@ window.rxControl = (action) => {
     case 'tune_down_fast': stepTune(-1, 10); return freqText();
     case 'step_up': cycleSelect($('step'), 1); return 'step ' + $('step').selectedOptions[0].text;
     case 'step_down': cycleSelect($('step'), -1); return 'step ' + $('step').selectedOptions[0].text;
+    case 'step_cycle': {
+      const sel = $('step'); sel.selectedIndex = (sel.selectedIndex + 1) % sel.options.length; sel.dispatchEvent(new Event('change'));
+      return 'step ' + sel.selectedOptions[0].text;
+    }
     case 'vol_up': case 'vol_down': {
       const v = Math.max(0, Math.min(1, +$('volume').value + (action === 'vol_up' ? 0.05 : -0.05)));
       $('volume').value = v; $('volume').dispatchEvent(new Event('input'));

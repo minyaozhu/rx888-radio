@@ -189,14 +189,15 @@ HF/VHF, scan, record, and switching tabs. A small display at the bottom of the w
 (e.g. *88.600 MHz WFM*). Click **Assign** next to an action, then press a key, a dial button or turn the knob:
 whatever it sends is recorded. Bindings are kept in `rxapp_data/controller.json` (`GET/PUT /api/controller`).
 
-Defaults: `]` / `[` tune (Shift: ×10), `.` / `,` step, `=` / `-` volume, `L` listen, `M` mode (Shift: back),
+Defaults: → / ← and `]` / `[` tune (Shift: ×10), `.` / `,` step, `=` / `-` volume, `L` listen, `M` mode (Shift: back),
 `Z` zoom (Shift: out), `C` centre, `N` channel (Shift: back), `B` HF/VHF, `S` scan, Page Up/Down tabs.
 
-**Ulanzi Dial** (Bluetooth, shows up as a keyboard, mouse and media keys): in Ulanzi Studio set the knob to send
-`[` / `]` and the buttons to the keys above (or anything, then Assign). The knob's default *volume* action
-changes the Mac's volume, which also works. Plain scroll-wheel bindings would take over scrolling everywhere,
-so give the knob a modifier (Ctrl + wheel) if you use the wheel. The browser only sees the dial while its
-window is in front.
+**Ulanzi Dial** (D100H, Bluetooth "Ulanzi Dial"): out of the box its knob sends volume down/up, which web pages
+never see. rxapp remaps them for that device only (`hidutil property --matching '{"VendorID":0xfff1,"ProductID":0x82}'`,
+`UserKeyMapping`) to ← / →, which tune on every tab (Shift: ×10). macOS drops the mapping when the dial reconnects
+or the Mac restarts, so rxapp checks every 20 s and re-applies it; the panel shows whether the dial is connected
+and mapped. The dial's other buttons send their factory keys (Ctrl+C/V/Z/Y, media keys); the Ctrl ones can be
+assigned in the panel. Keys reach rxapp only while its browser window is in front.
 
 ## Broadcast (AM / FM / shortwave)
 

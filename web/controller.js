@@ -7,7 +7,7 @@
 const CTRL_ACTIONS = [
   ['tune_up', 'Tune up one step'], ['tune_down', 'Tune down one step'],
   ['tune_up_fast', 'Tune up 10 steps'], ['tune_down_fast', 'Tune down 10 steps'],
-  ['step_up', 'Larger tuning step'], ['step_down', 'Smaller tuning step'],
+  ['step_up', 'Larger tuning step'], ['step_down', 'Smaller tuning step'], ['step_cycle', 'Next tuning step (wraps around)'],
   ['vol_up', 'Volume up'], ['vol_down', 'Volume down'], ['listen', 'Listen / stop'],
   ['mode_next', 'Next mode'], ['mode_prev', 'Previous mode'],
   ['zoom_in', 'Zoom in (narrower span)'], ['zoom_out', 'Zoom out (wider span)'], ['center', 'Centre the view'],
@@ -16,12 +16,14 @@ const CTRL_ACTIONS = [
   ['tab_next', 'Next tab'], ['tab_prev', 'Previous tab'], ['tab_radio', 'Go to the Radio tab'],
 ];
 const CTRL_DEFAULTS = {
+  ArrowRight: 'tune_up', ArrowLeft: 'tune_down', 'Shift+ArrowRight': 'tune_up_fast', 'Shift+ArrowLeft': 'tune_down_fast',
   BracketRight: 'tune_up', BracketLeft: 'tune_down', 'Shift+BracketRight': 'tune_up_fast', 'Shift+BracketLeft': 'tune_down_fast',
   Period: 'step_up', Comma: 'step_down', Equal: 'vol_up', Minus: 'vol_down', KeyL: 'listen',
   KeyM: 'mode_next', 'Shift+KeyM': 'mode_prev', KeyZ: 'zoom_in', 'Shift+KeyZ': 'zoom_out', KeyC: 'center',
   KeyN: 'chan_next', 'Shift+KeyN': 'chan_prev', KeyB: 'band', KeyS: 'scan', PageDown: 'tab_next', PageUp: 'tab_prev',
 };
 const ctrl = {bindings: {...CTRL_DEFAULTS}, learning: null, last: ''};
+window.rxCtrl = ctrl;                   // pages in the frames check for it
 
 // "Ctrl+Shift+KeyK" from a key event (physical key code, so it doesn't depend on the keyboard layout)
 function comboOf(e) {
@@ -77,7 +79,8 @@ function onKey(e) {
   if (!action) return;
   const plain = !e.ctrlKey && !e.altKey && !e.metaKey;
   if (plain && typing(e.target)) return;             // let a text box have its letters
-  if (e.target && e.target.tagName === 'SELECT' && /^Arrow/.test(e.code)) return;
+  if (e.target && e.target.tagName === 'SELECT' && /^Arrow(Up|Down)/.test(e.code)) return;
+  if (/^Arrow/.test(e.code) && e.target && e.target.blur && e.target !== e.target.ownerDocument.body) e.target.blur();  // a focused control mustn't keep the arrows
   e.preventDefault(); e.stopImmediatePropagation();
   runAction(action);
 }
@@ -102,6 +105,19 @@ function attach(win) {
 attach(window);
 const hookFrame = (f) => { const go = () => { try { attach(f.contentWindow); } catch (e) { /* not same origin */ } }; f.addEventListener('load', go); };
 
+// ---- the Ulanzi Dial: rxapp remaps its knob to the arrow keys (see server.py), so it arrives as keys
+async function dialStatus() {
+  const el = document.getElementById('ctrlDial'); if (!el || document.getElementById('ctrlPanel').hidden) return;
+  try {
+    const d = await (await fetch('/api/controller/status')).json();
+    el.className = 'dialst ' + (d.remapped ? 'ok' : 'bad');
+    el.textContent = d.remapped ? 'Ulanzi Dial connected: the knob sends ← / → (tune). The browser needs to be in front.'
+      : d.connected ? 'Ulanzi Dial connected; mapping its knob to the arrow keys…'
+      : 'Ulanzi Dial not connected (turn it on, or press its Bluetooth button). Its knob is mapped to ← / → once it is.';
+  } catch (e) { el.textContent = 'rxapp not reachable'; }
+}
+setInterval(dialStatus, 2000);
+
 // ---- the panel
 function showLast() { const el = document.getElementById('ctrlLast'); if (el) el.textContent = ctrl.last ? pretty(ctrl.last) : '—'; }
 function drawPanel() {
@@ -125,12 +141,17 @@ async function save() {
   catch (e) { hud('could not save: ' + e.message); }
 }
 async function loadBindings() {
-  try { const d = await (await fetch('/api/controller')).json(); if (d.bindings) ctrl.bindings = d.bindings; } catch (e) { /* defaults */ }
+  try {
+    const d = await (await fetch('/api/controller')).json();
+    if (d.bindings) {
+      ctrl.bindings = d.bindings;
+    }
+  } catch (e) { /* defaults */ }
 }
 
 document.getElementById('ctrlBtn').addEventListener('click', () => {
   const p = document.getElementById('ctrlPanel');
-  p.hidden = !p.hidden; ctrl.learning = null; if (!p.hidden) drawPanel();
+  p.hidden = !p.hidden; ctrl.learning = null; if (!p.hidden) { drawPanel(); dialStatus(); }
 });
 document.getElementById('ctrlClose').addEventListener('click', () => { document.getElementById('ctrlPanel').hidden = true; ctrl.learning = null; });
 document.getElementById('ctrlReset').addEventListener('click', () => { ctrl.bindings = {...CTRL_DEFAULTS}; ctrl.learning = null; save(); drawPanel(); });

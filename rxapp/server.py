@@ -117,9 +117,11 @@ async def lifespan(app):
             await S.spectrum.band_changed("hf")
         except Exception as e:
             log.warning("could not restore VHF: %s", e)
+    S.dialmap = asyncio.create_task(keep_dial_mapping())
     S.store.event("app_start")
     log.info("rxapp ready on http://%s:%d", CONFIG.host, CONFIG.port)
     yield
+    S.dialmap.cancel()
     for ssrc, rec in list(S.recorders.items()):
         rec.stop()
     await S.monitor.stop()
@@ -638,6 +640,47 @@ async def put_controller(body: dict):
     CONTROLLER_FILE.parent.mkdir(parents=True, exist_ok=True)
     CONTROLLER_FILE.write_text(json.dumps({"bindings": b} if b is not None else {}, indent=1))
     return await get_controller()
+
+
+# The Ulanzi Dial (D100H) sends volume down/up from its knob, which web pages never see. macOS can remap one
+# device's keys (hidutil UserKeyMapping), so the knob becomes the left/right arrow keys, which tune. The
+# mapping is lost when the dial reconnects (after it sleeps) or the Mac restarts, so it is re-applied here.
+DIAL_MATCH = '{"VendorID":0xfff1,"ProductID":0x82}'
+DIAL_MAP = [(0xC000000E9, 0x70000004F),      # knob clockwise (Volume Up)  -> Right arrow
+            (0xC000000EA, 0x700000050)]      # knob counter-clockwise (Volume Down) -> Left arrow
+DIAL = {"connected": False, "remapped": False, "checked": 0.0}
+
+
+async def _hidutil(*args) -> str:
+    p = await asyncio.create_subprocess_exec("hidutil", "property", "--matching", DIAL_MATCH, *args,
+                                             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+    out, _ = await p.communicate()
+    return out.decode(errors="replace")
+
+
+async def keep_dial_mapping():
+    want = {src for src, _ in DIAL_MAP}
+    body = json.dumps({"UserKeyMapping": [{"HIDKeyboardModifierMappingSrc": s_, "HIDKeyboardModifierMappingDst": d}
+                                          for s_, d in DIAL_MAP]})
+    while True:
+        try:
+            out = await _hidutil("--get", "UserKeyMapping")
+            DIAL["connected"] = "UserKeyMapping" in out          # no matching device: no table at all
+            have = {int(x) for x in re.findall(r"HIDKeyboardModifierMappingSrc = (\d+)", out)}
+            if DIAL["connected"] and not want <= have:
+                await _hidutil("--set", body)
+                log.info("Ulanzi Dial: knob mapped to the arrow keys")
+                have = want
+            DIAL["remapped"] = DIAL["connected"] and want <= have
+            DIAL["checked"] = time.time()
+        except Exception as e:
+            log.warning("hidutil: %s", e)
+        await asyncio.sleep(20)
+
+
+@app.get("/api/controller/status")
+async def controller_status():
+    return DIAL
 
 
 # ---------------------------------------------------------------- broadcast (AM / FM / shortwave)
