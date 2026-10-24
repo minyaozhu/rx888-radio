@@ -391,7 +391,8 @@ function wirePanelMouse(p) {
     c.addEventListener('wheel', (e) => {
       e.preventDefault();
       const dy = e.deltaY || e.deltaX;          // macOS turns Shift + wheel into a sideways scroll
-      if (e.shiftKey || e.ctrlKey) {            // ctrlKey: a trackpad pinch
+      let held = false; try { held = !!(window.parent.rxCtrl && window.parent.rxCtrl.held.shift); } catch (err) { /* standalone */ }
+      if (e.shiftKey || held || e.ctrlKey) {    // ctrlKey: a trackpad pinch; held: Shift on the Mac while a dial scrolls
         const r = c.getBoundingClientRect();
         zoomPanel(p, (e.clientX - r.left) / r.width, Math.exp(Math.max(-0.5, Math.min(0.5, dy * (e.deltaMode ? 0.05 : 0.002)))));
         return;

@@ -26,13 +26,18 @@ const CTRL_DEFAULTS = {
 const ctrl = {bindings: {...CTRL_DEFAULTS}, learning: null, last: ''};
 window.rxCtrl = ctrl;                   // pages in the frames check for it
 
+// Shift held on the Mac's keyboard while another device types: a dial driven by its own app (Ulanzi Studio)
+// sends keystrokes without the Shift flag, so we remember Shift ourselves.
+const held = {shift: false};
+const shiftOf = (e) => e.shiftKey || held.shift;
+ctrl.held = held;                       // the panels' wheel checks it too
 // "Ctrl+Shift+KeyK" from a key event (physical key code, so it doesn't depend on the keyboard layout)
 function comboOf(e) {
-  const mods = [e.ctrlKey && 'Ctrl', e.altKey && 'Alt', e.shiftKey && 'Shift', e.metaKey && 'Cmd'].filter(Boolean);
+  const mods = [e.ctrlKey && 'Ctrl', e.altKey && 'Alt', shiftOf(e) && 'Shift', e.metaKey && 'Cmd'].filter(Boolean);
   return [...mods, e.code || e.key].join('+');
 }
 function wheelCombo(e) {
-  const mods = [e.ctrlKey && 'Ctrl', e.altKey && 'Alt', e.shiftKey && 'Shift', e.metaKey && 'Cmd'].filter(Boolean);
+  const mods = [e.ctrlKey && 'Ctrl', e.altKey && 'Alt', shiftOf(e) && 'Shift', e.metaKey && 'Cmd'].filter(Boolean);
   const dy = e.deltaY || e.deltaX;
   return [...mods, dy < 0 ? 'WheelUp' : 'WheelDown'].join('+');
 }
@@ -72,7 +77,8 @@ function hud(text) {
 
 // ---- input from the shell and from every frame (same origin, so we can listen inside them)
 function onKey(e) {
-  if (['Shift', 'Control', 'Alt', 'Meta'].includes(e.key)) return;
+  if (e.key === 'Shift') { held.shift = true; return; }
+  if (['Control', 'Alt', 'Meta'].includes(e.key)) return;
   const combo = comboOf(e);
   ctrl.last = combo; showLast();
   if (ctrl.learning) { e.preventDefault(); e.stopImmediatePropagation(); learn(combo); return; }
@@ -88,6 +94,7 @@ function onKey(e) {
 let wheelAcc = 0, wheelAt = 0;
 function onWheel(e) {
   const combo = wheelCombo(e);
+  ctrl.last = combo; showLast();
   if (ctrl.learning) { e.preventDefault(); e.stopImmediatePropagation(); learn(combo); return; }
   const action = ctrl.bindings[combo];
   if (!action) return;
@@ -99,8 +106,11 @@ function onWheel(e) {
   if (wheelAcc < 40 && e.deltaMode === 0) return;
   wheelAcc = 0; ctrl.last = combo; showLast(); runAction(action);
 }
+function onKeyUp(e) { if (e.key === 'Shift') held.shift = false; }
 function attach(win) {
   win.addEventListener('keydown', onKey, true);
+  win.addEventListener('keyup', onKeyUp, true);
+  win.addEventListener('blur', () => { held.shift = false; });
   win.addEventListener('wheel', onWheel, {capture: true, passive: false});
 }
 attach(window);
