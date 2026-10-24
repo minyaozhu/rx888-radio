@@ -290,10 +290,24 @@ function drawStatus(p) {
 function panelsRedraw() { for (const p of PG.panels) drawPanel(p); }
 
 // ------------------------------------------------------------------ tuning from a panel
+// HF band plan for a click: what voice there is usually sent as. Elsewhere the current mode stays.
+const HF_PLAN = [
+  [530e3, 1710e3, 'am'],                                     // AM broadcast
+  [1.8e6, 2.0e6, 'lsb'], [3.6e6, 4.0e6, 'lsb'], [7.125e6, 7.3e6, 'lsb'],   // amateur phone, LSB below 10 MHz
+  [5.33e6, 5.41e6, 'usb'],                                   // 60 m channels
+  [14.15e6, 14.35e6, 'usb'], [18.11e6, 18.168e6, 'usb'], [21.2e6, 21.45e6, 'usb'], [24.93e6, 24.99e6, 'usb'],
+  [28.3e6, 29.3e6, 'usb'], [29.5e6, 29.7e6, 'nfm'],          // 10 m: SSB, then the FM repeaters
+  [26.965e6, 27.405e6, 'am'],                                // CB: AM (SSB users mostly on channel 38 LSB)
+  [2.3e6, 2.5e6, 'am'], [3.2e6, 3.4e6, 'am'], [4.75e6, 5.06e6, 'am'], [5.9e6, 6.2e6, 'am'], [7.3e6, 7.45e6, 'am'],
+  [9.4e6, 9.9e6, 'am'], [11.6e6, 12.1e6, 'am'], [13.57e6, 13.87e6, 'am'], [15.1e6, 15.8e6, 'am'],
+  [17.48e6, 17.9e6, 'am'], [21.45e6, 21.85e6, 'am'], [25.67e6, 26.1e6, 'am'],   // shortwave broadcast
+];
 function modeFor(f, band) {
   if (band === 'vhf') return f >= 87.5e6 && f <= 108e6 ? 'wfm' : f >= 108e6 && f < 137e6 ? 'am' : 'nfm';
+  const plan = HF_PLAN.find(([lo, hi]) => f >= lo && f <= hi);
+  if (plan) return plan[2];
   const m = current() && current().mode;
-  return m && state.info.band_modes.hf.includes(m) ? m : 'am';
+  return m && state.info.band_modes.hf.includes(m) && m !== 'nfm' ? m : 'am';   // NFM off-plan on HF: rarely right
 }
 function snapPanel(p, x) {
   const W = p.cols.length, k = Math.round(6 * (devicePixelRatio || 1));
@@ -306,7 +320,7 @@ async function tuneFromPanel(p, x) {
   let f = p.v.lo + (xi + 0.5) / W * (p.v.hi - p.v.lo);
   const want = pInput(p.range), step = +$('step').value;
   const fresh = state.band !== want;
-  const mode = fresh ? modeFor(f, want) : (want === 'vhf' ? modeFor(f, want) : current().mode);
+  const mode = modeFor(f, want);
   f = Math.round(f / step) * step;
   try {
     const out = want === 'vhf' && PG.info && PG.info.vhf.center_hz && Math.abs(f - PG.info.vhf.center_hz) > PG.info.vhf.span_hz / 2;
