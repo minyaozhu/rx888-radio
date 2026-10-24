@@ -292,11 +292,16 @@ function drawStatus(p) {
     seen++; if (tnow - t < PANEL_LIVE_S) live++; else newest = Math.max(newest, t);
   }
   const W = p.colT.length, want = pInput(p.range), band = PG.info ? PG.info.band : state.band;
+  // where the receiver is, when it isn't looking at this panel
+  const tc = PG.info && PG.info.vhf.center_hz;
+  const away = band !== want ? `receiver on ${band.toUpperCase()}`
+    : want === 'vhf' && tc ? `tuner at ${pfmt(tc)}` : '';
   let txt, cls;
   if (live >= W * 0.98) { txt = '● live'; cls = 'live'; }
   else if (live) { txt = `● live in part${newest ? ' · rest ' + pAgo(newest) + ' ago' : ''}`; cls = 'part'; }
-  else if (seen) { txt = `seen ${pAgo(newest)} ago${band !== want ? ` · receiver on ${band.toUpperCase()}` : ''}`; cls = 'old'; }
-  else { txt = band !== want ? `not seen yet · receiver on ${band.toUpperCase()}` : 'waiting for the receiver…'; cls = 'old'; }
+  else if (seen) { txt = `seen ${pAgo(newest)} ago${away ? ' · ' + away : ''}`; cls = 'old'; }
+  else if (away) { txt = `not seen yet · ${away}, outside this range · click to look`; cls = 'old'; }
+  else { txt = 'starting…'; cls = 'old'; }
   const fit = p.el.querySelector('.fit');
   fit.style.display = want === 'vhf' ? '' : 'none';
   fit.classList.toggle('on', !!p.range.fit);
@@ -304,7 +309,7 @@ function drawStatus(p) {
   const z = p.el.querySelector('.unzoom');
   z.style.display = p.range.zoom ? '' : 'none';
   if (p.range.zoom) z.textContent = `zoom ${pfmt(p.range.zoom[0])}–${pfmt(p.range.zoom[1])} ✕`;
-  if (p.range.fit && want === 'vhf' && !p.range.zoom) txt += p.v && p.v.window ? ` · window ${pfmt(p.v.lo)}–${pfmt(p.v.hi)}` : ' · Fit: no window seen in this range yet';
+  if (p.range.fit && want === 'vhf' && !p.range.zoom) txt += p.v && p.v.window ? ` · window ${pfmt(p.v.lo)}–${pfmt(p.v.hi)}` : ' · Fit zooms in once the tuner has been here';
   st.textContent = txt; st.className = 'pnl-st ' + cls;
   st.title = want === 'vhf' ? 'VHF tuner panel: live only inside the tuner\'s 8.4 MHz window' : 'HF input panel';
 }

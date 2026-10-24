@@ -733,3 +733,20 @@ def test_ssb_channels_and_passband():
     db[(f >= 8992.8e3) & (f <= 8994.0e3)] = -90.0
     assert ssb.passband_snr(f, db, 8992e3, "usb") > 15
     assert ssb.passband_snr(f, db, 8992e3, "lsb") < 3
+
+
+# ---- panels: last pictures survive a restart -------------------------------------------------
+def test_panel_history_round_trip(tmp_path, monkeypatch):
+    from rxapp import panels
+    monkeypatch.setattr(panels, "HISTORY_FILE", tmp_path / "h.npz")
+    def hub():
+        h = panels.PanelHub.__new__(panels.PanelHub)
+        h.hf, h.vhf_history, h._next = {}, {}, 1
+        return h
+    a = hub()
+    a.vhf_history[135656] = (131.4e6, 4101.5, np.arange(2048, dtype=np.float32), 1.0)
+    a.feed_for(2e6, 30e6).latest = (2e6, 13672.0, np.ones(2048, np.float32), 2.0)
+    a.save()
+    b = hub(); b.load()
+    assert list(b.vhf_history) == [135656] and b.vhf_history[135656][2][5] == 5
+    assert b.hf[(2e6, 30e6)].latest[3] == 2.0

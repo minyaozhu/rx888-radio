@@ -27,6 +27,8 @@ BINS = 2048
 SEND_EVERY = 0.2          # seconds between frames per feed (5 fps)
 HISTORY = 60              # VHF tuner positions remembered
 VHF_ID = 0
+SAVE_EVERY = 60.0         # seconds: the last pictures survive an rxapp restart
+HISTORY_FILE = CONFIG.data_dir / "panels_history.npz"
 
 
 def frame_bytes(fid: int, first_hz: float, bin_hz: float, db: np.ndarray, t: float) -> bytes:
@@ -58,6 +60,42 @@ class PanelHub:
         self._task: Optional[asyncio.Task] = None
         self._state = None        # (band, tuner centre, coverage) the streams were built for
         self._lock = asyncio.Lock()
+        self._saved = 0.0
+        self.load()
+
+    # -- last pictures on disk ----------------------------------------------------------------------
+    def snapshot(self):
+        return [("v", k, fr) for k, fr in list(self.vhf_history.items())] + \
+               [("h", f"{lo:.0f}:{hi:.0f}", f.latest) for (lo, hi), f in list(self.hf.items()) if f.latest]
+
+    def save(self, frames=None):
+        arrays, meta = {}, []
+        frames = self.snapshot() if frames is None else frames
+        for i, (kind, key, (first, bin_hz, db, t)) in enumerate(frames):
+            arrays[f"db{i}"] = np.asarray(db, np.float32)
+            meta.append((kind, str(key), first, bin_hz, t))
+        if not meta:
+            return
+        tmp = HISTORY_FILE.with_suffix(".tmp.npz")
+        np.savez_compressed(tmp, meta=np.array(meta, dtype=object), **arrays)
+        tmp.replace(HISTORY_FILE)
+
+    def load(self):
+        try:
+            with np.load(HISTORY_FILE, allow_pickle=True) as z:
+                for i, (kind, key, first, bin_hz, t) in enumerate(z["meta"]):
+                    fr = (float(first), float(bin_hz), z[f"db{i}"], float(t))
+                    if kind == "v":
+                        self.vhf_history[int(key)] = fr
+                    else:
+                        lo, hi = (float(x) for x in key.split(":"))
+                        self.feed_for(lo, hi).latest = fr
+            log.info("panels: %d VHF windows and %d HF pictures from %s", len(self.vhf_history),
+                     sum(1 for f in self.hf.values() if f.latest), HISTORY_FILE.name)
+        except FileNotFoundError:
+            pass
+        except Exception as e:
+            log.warning("panels: could not read %s: %s", HISTORY_FILE, e)
 
     # -- clients -------------------------------------------------------------------------------------
     def wanted(self) -> Set[Tuple[float, float]]:
@@ -138,15 +176,15 @@ class PanelHub:
             state = (band, round(self.radio.vhf.center_hz or 0), CONFIG.max_freq_hz)
             wanted = {k for k in self.wanted() if k[1] <= CONFIG.max_freq_hz} if band == "hf" else set()
             if force or state != self._state:
-                for f in self.hf.values():
+                for f in list(self.hf.values()):
                     await self._close(f)
                 await self._close(self.vhf)
                 self._state = state
-            for key, f in self.hf.items():
+            for key, f in list(self.hf.items()):
                 if f.stream and key not in wanted:
                     await self._close(f)
             # zooming makes a feed per zoom level: forget the oldest idle ones
-            idle = sorted((k for k, f in self.hf.items() if not f.stream and k not in self.wanted()),
+            idle = sorted((k for k, f in list(self.hf.items()) if not f.stream and k not in self.wanted()),
                           key=lambda k: self.hf[k].latest[3] if self.hf[k].latest else 0)
             for k in idle[:max(0, len(self.hf) - 24)]:
                 del self.hf[k]
@@ -167,11 +205,14 @@ class PanelHub:
             try:
                 await self._sync()
                 now = time.time()
-                stalled = [f for f in [*self.hf.values(), self.vhf] if f.stream and now - f.got > 6
+                stalled = [f for f in [*list(self.hf.values()), self.vhf] if f.stream and now - f.got > 6
                            and not (f.kind == "vhf" and (self.radio.vhf_paused or self.spectrum.sweeping))]
                 if stalled:
                     log.info("panels: %d feed(s) stalled, reopening", len(stalled))
                     await self._sync(force=True)
+                if now - self._saved > SAVE_EVERY:
+                    self._saved = now
+                    await asyncio.to_thread(self.save, self.snapshot())
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -185,7 +226,11 @@ class PanelHub:
     async def stop(self):
         if self._task:
             self._task.cancel()
-        for f in [*self.hf.values(), self.vhf]:
+        try:
+            self.save()
+        except Exception as e:
+            log.warning("panels: could not save: %s", e)
+        for f in [*list(self.hf.values()), self.vhf]:
             await self._close(f)
 
     # -- one browser ---------------------------------------------------------------------------------

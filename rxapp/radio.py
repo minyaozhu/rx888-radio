@@ -222,7 +222,7 @@ class Radio:
         else:
             await self.vhf.disable()
         self.band = band
-        for ch in self.channels.values():
+        for ch in list(self.channels.values()):   # pages can add channels while this awaits
             if ch.band == band:
                 if band == "vhf" and not self.vhf.in_window(ch.freq_hz):
                     continue                      # outside the tuner window; stays parked
@@ -237,7 +237,7 @@ class Radio:
         if self.band == "vhf":
             await self.vhf.enable(self.vhf.center_hz)   # radiod's start-up resets the antenna switch
         n = 0
-        for ch in self.channels.values():
+        for ch in list(self.channels.values()):   # pages can add channels while this awaits
             if not ch.parked:
                 await self._open(ch)
                 n += 1
