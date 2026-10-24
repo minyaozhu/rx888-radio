@@ -429,6 +429,12 @@ function openStatus() {
       return;
     }
     state.channels = s.channels.map((c) => (sel && c.ssrc === sel.ssrc && pendingTune) ? {...c, ...pendingTune} : c);
+    // the selected channel may be retuned elsewhere (another page, the voice session): keep the box in step
+    const now = current();
+    if (now && document.activeElement !== $('freq') && !pendingTune && !tuneTimer) {
+      const txt = fmtTune(now.freq_hz);
+      if ($('freq').value !== txt) { $('freq').value = txt; drawSpectrumOverlay(); }
+    }
     renderHealth(s.health, s.scanning);
     renderMeter();
     renderChannels();
@@ -804,7 +810,8 @@ function wire() {
   // Capture phase, so a focused dropdown or slider doesn't swallow them.
   window.addEventListener('keydown', (e) => {
     if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
-    if (window.parent !== window && window.parent.rxCtrl) return;    // in the tab shell, its controller has the arrows
+    let shell = null; try { shell = window.parent !== window && window.parent.rxCtrl; } catch (err) { /* not ours */ }
+    if (shell && shell.bindings[(e.shiftKey ? 'Shift+' : '') + e.code]) return;   // the tab shell's controller has the arrows
     const t = e.target;
     if (t && (t.id === 'freq' || t.tagName === 'TEXTAREA' || (t.tagName === 'INPUT' && t.type === 'number'))) return;
     e.preventDefault(); e.stopPropagation();

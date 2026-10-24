@@ -965,4 +965,14 @@ async def ws_status(ws: WebSocket):
         pass
 
 
+@app.middleware("http")
+async def no_stale_pages(request, call_next):
+    """Pages are small and change with rxapp: have browsers re-check them (scripts are versioned with ?v=)."""
+    response = await call_next(request)
+    path = request.url.path
+    if path == "/" or path.endswith((".html", ".js", ".css")):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
 app.mount("/", StaticFiles(directory=WEB, html=True), name="web")
