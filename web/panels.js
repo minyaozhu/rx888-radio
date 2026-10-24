@@ -212,11 +212,12 @@ function drawPanel(p) {
   const {floor, ceil} = p.levels, lo = p.v.lo, hi = p.v.hi, span = hi - lo, tnow = Date.now() / 1000;
   ctx.fillStyle = '#05070a'; ctx.fillRect(0, 0, W, H);
   ctx.font = `${10 * d}px -apple-system, sans-serif`; ctx.strokeStyle = '#1b222b'; ctx.fillStyle = '#5b6573'; ctx.lineWidth = 1;
-  const step = niceStep(span / 6);
+  const step = niceStep(span / 6), ticks = [];
   for (let f = Math.ceil(lo / step) * step; f < hi; f += step) {
     const x = (f - lo) / span * W;
     ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
-    ctx.fillText(f >= 1e6 ? (f / 1e6).toFixed(step < 1e5 ? 3 : step < 1e6 ? 1 : 0) : (f / 1e3).toFixed(0) + 'k', x + 2, H - 3);
+    // one unit per panel: MHz once the range reaches 1 MHz, with as many decimals as the step needs
+    ticks.push([x, hi >= 1e6 ? (f / 1e6).toFixed(step < 1e4 ? 3 : step < 1e5 ? 2 : step < 1e6 ? 1 : 0) : (f / 1e3).toFixed(0) + 'k']);
   }
   for (let v = Math.ceil(floor / 10) * 10; v < ceil; v += 10) {
     const y = H - (v - floor) / (ceil - floor) * H;
@@ -250,6 +251,18 @@ function drawPanel(p) {
     ctx.fillStyle = sel ? 'rgba(255,184,76,0.18)' : 'rgba(76,194,255,0.10)'; ctx.fillRect(x0, 0, Math.max(1, x1 - x0), H);
     ctx.strokeStyle = sel ? '#ffb84c' : '#4cc2ff'; ctx.lineWidth = (sel ? 2 : 1) * d;
     ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+  }
+  // frequency marks last, so the trace never covers them: bright yellow on a dark backing
+  ctx.font = `600 ${11 * d}px ui-monospace, "SF Mono", Menlo, monospace`; ctx.textBaseline = 'alphabetic';
+  for (const [x, label] of ticks) {
+    const tw = ctx.measureText(label).width, pad = 3 * d, bh = 14 * d, y0 = H - bh - 2 * d;
+    const bx = Math.min(Math.max(0, x + 2 * d), W - tw - 2 * pad);
+    ctx.fillStyle = 'rgba(5,7,10,0.85)'; ctx.fillRect(bx, y0, tw + 2 * pad, bh);
+    ctx.strokeStyle = '#ffd84a'; ctx.lineWidth = d;
+    ctx.beginPath(); ctx.moveTo(x, H); ctx.lineTo(x, H - 6 * d); ctx.stroke();
+    ctx.fillStyle = '#ffd84a'; ctx.shadowColor = 'rgba(255,216,74,0.6)'; ctx.shadowBlur = 6 * d;
+    ctx.fillText(label, bx + pad, H - 6 * d);
+    ctx.shadowBlur = 0;
   }
   drawStatus(p);
 }
