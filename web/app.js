@@ -307,7 +307,8 @@ function wire() {
     if (t && (t.id === 'freq' || t.tagName === 'TEXTAREA' || (t.tagName === 'INPUT' && t.type === 'number'))) return;
     e.preventDefault(); e.stopPropagation();
     if (t && t.blur && t !== document.body) t.blur();
-    stepTune(e.key === 'ArrowRight' ? 1 : -1, e.shiftKey ? 10 : 1);
+    if (e.shiftKey) { panelZoomKey(e.key === 'ArrowRight' ? 1 : -1); return; }
+    stepTune(e.key === 'ArrowRight' ? 1 : -1, e.altKey ? 10 : 1);
   }, true);
   $('stepDown').addEventListener('click', (e) => stepTune(-1, e.shiftKey ? 10 : 1));
   $('stepUp').addEventListener('click', (e) => stepTune(1, e.shiftKey ? 10 : 1));
@@ -329,6 +330,8 @@ window.rxControl = (action) => {
   switch (action) {
     case 'tune_up': stepTune(1); return freqText();
     case 'tune_down': stepTune(-1); return freqText();
+    case 'zoom_in': return panelZoomKey(1);
+    case 'zoom_out': return panelZoomKey(-1);
     case 'tune_up_fast': stepTune(1, 10); return freqText();
     case 'tune_down_fast': stepTune(-1, 10); return freqText();
     case 'step_up': cycleSelect($('step'), 1); return 'step ' + $('step').selectedOptions[0].text;

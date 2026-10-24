@@ -7,6 +7,7 @@
 const CTRL_ACTIONS = [
   ['tune_up', 'Tune up one step'], ['tune_down', 'Tune down one step'],
   ['tune_up_fast', 'Tune up 10 steps'], ['tune_down_fast', 'Tune down 10 steps'],
+  ['zoom_in', 'Zoom the panel in (on the tuned frequency)'], ['zoom_out', 'Zoom the panel out'],
   ['step_up', 'Larger tuning step'], ['step_down', 'Smaller tuning step'], ['step_cycle', 'Next tuning step (wraps around)'],
   ['vol_up', 'Volume up'], ['vol_down', 'Volume down'], ['listen', 'Listen / stop'],
   ['mode_next', 'Next mode'], ['mode_prev', 'Previous mode'],
@@ -15,7 +16,8 @@ const CTRL_ACTIONS = [
   ['tab_next', 'Next tab'], ['tab_prev', 'Previous tab'], ['tab_radio', 'Go to the Radio tab'],
 ];
 const CTRL_DEFAULTS = {
-  ArrowRight: 'tune_up', ArrowLeft: 'tune_down', 'Shift+ArrowRight': 'tune_up_fast', 'Shift+ArrowLeft': 'tune_down_fast',
+  ArrowRight: 'tune_up', ArrowLeft: 'tune_down', 'Alt+ArrowRight': 'tune_up_fast', 'Alt+ArrowLeft': 'tune_down_fast',
+  'Shift+ArrowRight': 'zoom_in', 'Shift+ArrowLeft': 'zoom_out',     // Shift + the dial (sending ← / →) zooms
   BracketRight: 'tune_up', BracketLeft: 'tune_down', 'Shift+BracketRight': 'tune_up_fast', 'Shift+BracketLeft': 'tune_down_fast',
   Slash: 'step_cycle', Period: 'step_up', Comma: 'step_down', Equal: 'vol_up', Minus: 'vol_down', KeyL: 'listen',
   KeyM: 'mode_next', 'Shift+KeyM': 'mode_prev',

@@ -369,8 +369,20 @@ function zoomPanel(p, frac, factor) {
   p.range = {...p.range, zoom: full ? null : [lo, hi]};
   saveRanges(); drawPanel(p); subscribeSoon();
 }
+// Shift + ← / → (or the dial): zoom the panel last pointed at, else the one showing the tuned frequency,
+// around the tuned frequency when it is in view
+function panelZoomKey(dir) {
+  const ch = current();
+  const p = PG.panels[PG.active] || PG.panels.find((q) => ch && q.v && ch.freq_hz >= q.v.lo && ch.freq_hz <= q.v.hi && ch.band === pInput(q.range)) || PG.panels[0];
+  if (!p) return null;
+  ensureView(p);
+  const f = ch && ch.band === pInput(p.range) && ch.freq_hz >= p.v.lo && ch.freq_hz <= p.v.hi ? ch.freq_hz : (p.v.lo + p.v.hi) / 2;
+  zoomPanel(p, (f - p.v.lo) / (p.v.hi - p.v.lo), dir > 0 ? 0.8 : 1.25);
+  return `panel ${p.idx + 1}: ${pfmt(p.v.lo)} – ${pfmt(p.v.hi)}`;
+}
 function unzoom(p) { p.range = {...p.range, zoom: null}; saveRanges(); drawPanel(p); subscribeSoon(); }
 function wirePanelMouse(p) {
+  p.el.addEventListener('pointerenter', () => { PG.active = p.idx; });
   for (const c of [p.spec, p.wf]) {
     c.addEventListener('click', (e) => {
       const r = c.getBoundingClientRect();
