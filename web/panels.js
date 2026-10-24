@@ -44,6 +44,31 @@ const pfmt = (f) => f >= 1e6 ? (f / 1e6).toLocaleString(undefined, {maximumFract
 const pAgo = (t) => { const s = Date.now() / 1000 - t; return s < 90 ? `${Math.round(s)} s` : s < 5400 ? `${Math.round(s / 60)} min` : `${(s / 3600).toFixed(1)} h`; };
 const pInput = (r) => (r.hi <= (PG.info ? PG.info.coverage_hz : state.info.max_freq_hz) ? 'hf' : 'vhf');
 
+// What a panel shows: its range, or with Fit (VHF panels) the tuner's 8.4 MHz window: the live one when it is
+// in this panel's range, else the last window this panel saw.
+function viewOf(p) {
+  const r = p.range;
+  if (!r.fit || pInput(r) !== 'vhf' || !PG.info) return r;
+  const span = PG.info.vhf.span_hz, c0 = PG.info.vhf.center_hz;
+  let c = null;
+  if (PG.info.band === 'vhf' && c0 && c0 + span / 2 > r.lo && c0 - span / 2 < r.hi) c = c0;
+  else {
+    let newest = null;
+    for (const fr of p.frames.values()) if (fr.id === 0 && (!newest || fr.t > newest.t)) newest = fr;
+    if (newest) c = newest.first + newest.n * newest.bin / 2;
+  }
+  return c == null ? r : {lo: c - span / 2, hi: c + span / 2, window: true};
+}
+// a new view (Fit toggled, the tuner moved): redraw every column from the frames kept
+function ensureView(p) {
+  const v = viewOf(p), key = `${v.lo}:${v.hi}`;
+  if (key === p.viewKey) return;
+  p.viewKey = key; p.v = v;
+  p.cols.fill(NaN); p.colT.fill(0);
+  p.wctx.fillStyle = '#05070a'; p.wctx.fillRect(0, 0, p.wf.width, p.wf.height);
+  [...p.frames.values()].sort((a, b) => a.t - b.t).forEach((fr) => overlay(p, fr));
+}
+
 function loadRanges() {
   try { const v = JSON.parse(localStorage.getItem('rx.panels')); if (Array.isArray(v) && v.length === 4) return v; } catch (e) { /* defaults */ }
   return PANEL_DEFAULTS.map((p) => ({...p}));
@@ -65,6 +90,7 @@ function makePanel(grid, range, idx) {
   const opts = PANEL_PRESETS.map((p, i) => `<option value="${i}">${p.label}</option>`).join('') + '<option value="custom">Custom…</option>';
   el.innerHTML = `<div class="pnl-bar"><select aria-label="Panel ${idx + 1} range">${opts}</select>
       <span class="custom"><input class="lo" inputmode="decimal" aria-label="From (MHz)"> – <input class="hi" inputmode="decimal" aria-label="To (MHz)"> MHz <button type="button" class="go">Set</button></span>
+      <button type="button" class="fit" title="Zoom this panel to the VHF tuner's 8.4 MHz live window (it follows the tuner)">Fit 8.4 MHz</button>
       <span class="pnl-st"></span></div>
     <canvas class="spec"></canvas><canvas class="wf"></canvas>`;
   grid.appendChild(el);
@@ -89,6 +115,8 @@ function makePanel(grid, range, idx) {
     if (hi > 1700e6) return flash('the VHF tuner stops at 1700 MHz');
     setRange(p, {lo, hi, label: `${pfmt(lo)} – ${pfmt(hi)}`});
   });
+  const fit = el.querySelector('.fit');
+  fit.addEventListener('click', () => { p.range = {...p.range, fit: !p.range.fit}; saveRanges(); drawPanel(p); });
   wirePanelMouse(p);
   sizePanel(p);
   return p;
@@ -101,10 +129,11 @@ function sizePanel(p) {
   }
   p.cols = new Float32Array(p.spec.width).fill(NaN);
   p.colT = new Float64Array(p.spec.width);
+  p.viewKey = null; p.v = p.range;
   p.wctx.fillStyle = '#05070a'; p.wctx.fillRect(0, 0, p.wf.width, p.wf.height);
 }
 function setRange(p, range) {
-  p.range = range; p.frames.clear(); sizePanel(p); saveRanges(); subscribe(); drawPanel(p);
+  p.range = {...range, fit: !!p.range.fit}; p.frames.clear(); sizePanel(p); saveRanges(); subscribe(); drawPanel(p);
 }
 
 // ------------------------------------------------------------------ data
@@ -127,7 +156,8 @@ function connectPanels() {
       if (!mine || first + n * bin < p.range.lo || first > p.range.hi) continue;
       p.frames.set(id === 0 ? 'v' + Math.round(first / 1e3) : 'h' + id, fr);
       if (p.frames.size > 80) { const old = [...p.frames.entries()].sort((a, b) => a[1].t - b[1].t)[0][0]; p.frames.delete(old); }
-      overlay(p, fr);
+      const was = p.viewKey; ensureView(p);
+      if (p.viewKey === was) overlay(p, fr);
       if (Date.now() / 1000 - t < PANEL_LIVE_S) { waterfallRow(p); drawPanel(p); } else drawPanel(p);
     }
   };
@@ -140,7 +170,7 @@ function subscribe() {
 }
 // put a frame's bins onto the panel's pixel columns (max per column, so narrow carriers show)
 function overlay(p, fr) {
-  const W = p.cols.length, lo = p.range.lo, span = p.range.hi - p.range.lo;
+  const W = p.cols.length, lo = p.v.lo, span = p.v.hi - p.v.lo;
   for (let x = 0; x < W; x++) {
     const f0 = lo + x / W * span, f1 = lo + (x + 1) / W * span;
     let a = Math.floor((f0 - fr.first) / fr.bin), b = Math.ceil((f1 - fr.first) / fr.bin);
@@ -151,7 +181,7 @@ function overlay(p, fr) {
     p.cols[x] = v; p.colT[x] = fr.t;
   }
 }
-function rebuild(p) { [...p.frames.values()].sort((a, b) => a.t - b.t).forEach((fr) => overlay(p, fr)); drawPanel(p); }
+function rebuild(p) { p.viewKey = null; ensureView(p); drawPanel(p); }
 
 // ------------------------------------------------------------------ drawing
 function autoLevelsP(p) {
@@ -176,13 +206,14 @@ function waterfallRow(p) {
   ctx.putImageData(row, 0, 0);
 }
 function drawPanel(p) {
+  ensureView(p);
   if (document.getElementById('autoscale').checked) autoLevelsP(p);
   const ctx = p.sctx, W = p.spec.width, H = p.spec.height, d = devicePixelRatio || 1;
-  const {floor, ceil} = p.levels, lo = p.range.lo, span = p.range.hi - lo, tnow = Date.now() / 1000;
+  const {floor, ceil} = p.levels, lo = p.v.lo, hi = p.v.hi, span = hi - lo, tnow = Date.now() / 1000;
   ctx.fillStyle = '#05070a'; ctx.fillRect(0, 0, W, H);
   ctx.font = `${10 * d}px -apple-system, sans-serif`; ctx.strokeStyle = '#1b222b'; ctx.fillStyle = '#5b6573'; ctx.lineWidth = 1;
   const step = niceStep(span / 6);
-  for (let f = Math.ceil(lo / step) * step; f < p.range.hi; f += step) {
+  for (let f = Math.ceil(lo / step) * step; f < hi; f += step) {
     const x = (f - lo) / span * W;
     ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
     ctx.fillText(f >= 1e6 ? (f / 1e6).toFixed(step < 1e5 ? 3 : step < 1e6 ? 1 : 0) : (f / 1e3).toFixed(0) + 'k', x + 2, H - 3);
@@ -210,7 +241,7 @@ function drawPanel(p) {
   }
   // channels
   for (const ch of state.channels || []) {
-    if (ch.band !== pInput(p.range) || ch.freq_hz < lo || ch.freq_hz > p.range.hi) continue;
+    if (ch.band !== pInput(p.range) || ch.freq_hz < lo || ch.freq_hz > hi) continue;
     if (ch.kind !== 'listen' && ch.ssrc !== state.selected) continue;
     const sel = ch.ssrc === state.selected, x = (ch.freq_hz - lo) / span * W;
     const bw = ch.mode === 'wfm' ? 200000 : ch.mode === 'nfm' ? 12500 : ch.mode.startsWith('cw') ? 400 : ch.mode === 'usb' || ch.mode === 'lsb' ? 3000 : 10000;
@@ -235,6 +266,11 @@ function drawStatus(p) {
   else if (live) { txt = `● live in part${newest ? ' · rest ' + pAgo(newest) + ' ago' : ''}`; cls = 'part'; }
   else if (seen) { txt = `seen ${pAgo(newest)} ago${band !== want ? ` · receiver on ${band.toUpperCase()}` : ''}`; cls = 'old'; }
   else { txt = band !== want ? `not seen yet · receiver on ${band.toUpperCase()}` : 'waiting for the receiver…'; cls = 'old'; }
+  const fit = p.el.querySelector('.fit');
+  fit.style.display = want === 'vhf' ? '' : 'none';
+  fit.classList.toggle('on', !!p.range.fit);
+  fit.setAttribute('aria-pressed', !!p.range.fit);
+  if (p.range.fit && want === 'vhf') txt += p.v && p.v.window ? ` · window ${pfmt(p.v.lo)}–${pfmt(p.v.hi)}` : ' · Fit: no window seen in this range yet';
   st.textContent = txt; st.className = 'pnl-st ' + cls;
   st.title = want === 'vhf' ? 'VHF tuner panel: live only inside the tuner\'s 8.4 MHz window' : 'HF input panel';
 }
@@ -254,7 +290,7 @@ function snapPanel(p, x) {
 }
 async function tuneFromPanel(p, x) {
   const W = p.cols.length, xi = snapPanel(p, Math.round(x));
-  let f = p.range.lo + (xi + 0.5) / W * (p.range.hi - p.range.lo);
+  let f = p.v.lo + (xi + 0.5) / W * (p.v.hi - p.v.lo);
   const want = pInput(p.range), step = +$('step').value;
   const fresh = state.band !== want;
   const mode = fresh ? modeFor(f, want) : (want === 'vhf' ? modeFor(f, want) : current().mode);
