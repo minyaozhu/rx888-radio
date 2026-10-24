@@ -105,19 +105,6 @@ function attach(win) {
 attach(window);
 const hookFrame = (f) => { const go = () => { try { attach(f.contentWindow); } catch (e) { /* not same origin */ } }; f.addEventListener('load', go); };
 
-// ---- the Ulanzi Dial: rxapp remaps its knob to the arrow keys (see server.py), so it arrives as keys
-async function dialStatus() {
-  const el = document.getElementById('ctrlDial'); if (!el || document.getElementById('ctrlPanel').hidden) return;
-  try {
-    const d = await (await fetch('/api/controller/status')).json();
-    el.className = 'dialst ' + (d.remapped ? 'ok' : 'bad');
-    el.textContent = d.remapped ? 'Ulanzi Dial connected: the knob sends ← / → (tune). The browser needs to be in front.'
-      : d.connected ? 'Ulanzi Dial connected; mapping its knob to the arrow keys…'
-      : 'Ulanzi Dial not connected (turn it on, or press its Bluetooth button). Its knob is mapped to ← / → once it is.';
-  } catch (e) { el.textContent = 'rxapp not reachable'; }
-}
-setInterval(dialStatus, 2000);
-
 // ---- the panel
 function showLast() { const el = document.getElementById('ctrlLast'); if (el) el.textContent = ctrl.last ? pretty(ctrl.last) : '—'; }
 function drawPanel() {
@@ -151,7 +138,7 @@ async function loadBindings() {
 
 document.getElementById('ctrlBtn').addEventListener('click', () => {
   const p = document.getElementById('ctrlPanel');
-  p.hidden = !p.hidden; ctrl.learning = null; if (!p.hidden) { drawPanel(); dialStatus(); }
+  p.hidden = !p.hidden; ctrl.learning = null; if (!p.hidden) drawPanel();
 });
 document.getElementById('ctrlClose').addEventListener('click', () => { document.getElementById('ctrlPanel').hidden = true; ctrl.learning = null; });
 document.getElementById('ctrlReset').addEventListener('click', () => { ctrl.bindings = {...CTRL_DEFAULTS}; ctrl.learning = null; save(); drawPanel(); });

@@ -192,12 +192,11 @@ whatever it sends is recorded. Bindings are kept in `rxapp_data/controller.json`
 Defaults: → / ← and `]` / `[` tune (Shift: ×10), `.` / `,` step, `=` / `-` volume, `L` listen, `M` mode (Shift: back),
 `Z` zoom (Shift: out), `C` centre, `N` channel (Shift: back), `B` HF/VHF, `S` scan, Page Up/Down tabs.
 
-**Ulanzi Dial** (D100H, Bluetooth "Ulanzi Dial"): out of the box its knob sends volume down/up, which web pages
-never see. rxapp remaps them for that device only (`hidutil property --matching '{"VendorID":0xfff1,"ProductID":0x82}'`,
-`UserKeyMapping`) to ← / →, which tune on every tab (Shift: ×10). macOS drops the mapping when the dial reconnects
-or the Mac restarts, so rxapp checks every 20 s and re-applies it; the panel shows whether the dial is connected
-and mapped. The dial's other buttons send their factory keys (Ctrl+C/V/Z/Y, media keys); the Ctrl ones can be
-assigned in the panel. Keys reach rxapp only while its browser window is in front.
+**Ulanzi Dial** (D100H): its knob sends the Mac's volume keys, which web pages never see, and macOS's own
+per-device remapping (`hidutil` UserKeyMapping) does not apply to it. Have the knob send keys instead: in
+Ulanzi Studio (knob turn left/right -> `←` / `→`), or with Karabiner-Elements (a per-device rule from
+`volume_increment` / `volume_decrement` to `right_arrow` / `left_arrow`). Its buttons send Cmd+C/V/Z/Y and media
+keys. Keys reach rxapp only while its browser window is in front.
 
 ## Broadcast (AM / FM / shortwave)
 

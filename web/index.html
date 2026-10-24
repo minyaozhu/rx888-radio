@@ -58,9 +58,8 @@ iframe.on{display:block}
 </div>
 <div id="ctrlPanel" hidden>
   <h2>Controller</h2>
-  <p>Keys, a macro pad or the Ulanzi Dial (its knob sends ← / →) control the radio from any tab.
+  <p>Keys, a macro pad or a dial that sends keys control the radio from any tab.
   Click <b>Assign</b>, then press the dial button (or turn the knob) you want for that action. Plain-letter keys are ignored while you type in a text box.</p>
-  <div class="dialst" id="ctrlDial">…</div>
   <table><tbody id="ctrlRows"></tbody></table>
   <div id="ctrlWarn" style="display:none">A plain scroll-wheel binding takes over scrolling on every page; give it a modifier
   (e.g. set the dial to send Ctrl + wheel) or use keys instead.</div>
@@ -127,7 +126,7 @@ async function health() {
 }
 health(); setInterval(health, 5000);
 </script>
-<script src="controller.js?v=5"></script>
+<script src="controller.js?v=6"></script>
 <script>show(location.hash.slice(1));</script>
 </body>
 </html>
