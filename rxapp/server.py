@@ -20,6 +20,7 @@ from pydantic import BaseModel
 
 from .config import BAND_MODES, CONFIG, MODES, RADIOD_CONFS, RUNTIME, VHF_MAX_HZ, VHF_MIN_HZ
 from .adsb import AdsbFeed
+from .broadcast import Eibi, stations as broadcast_stations
 from .ft8 import FT4, Ft8, conversations
 from .places import HOME_CITY, Geocoder, locate
 from .wspr import WsprMonitor, grid_ll, km_between
@@ -613,6 +614,40 @@ async def set_focus(body: Focus):
     FOCUS_FILE.write_text(json.dumps({"focus": body.focus, "since": time.time()}))
     S.store.event("voice_focus", focus=body.focus)
     return await get_focus()
+
+
+# ---------------------------------------------------------------- broadcast (AM / FM / shortwave)
+_eibi: Optional[Eibi] = None
+
+
+async def _schedule() -> Eibi:
+    global _eibi
+    if _eibi is None:                    # loads (and if needed downloads) the season's schedule on first use
+        _eibi = await asyncio.to_thread(Eibi, CONFIG.data_dir / "eibi")
+    return _eibi
+
+
+@app.get("/api/broadcast/stations")
+async def broadcast_station_list():
+    """Bay Area AM and FM stations (call sign, city, format)."""
+    return broadcast_stations()
+
+
+@app.get("/api/broadcast/sw/now")
+async def broadcast_sw_now(band: Optional[str] = None):
+    """Shortwave broadcasts scheduled right now (EiBi), within one broadcast band or all of them."""
+    e = await _schedule()
+    sw = [b for b in BANDS.values() if b.band == "hf" and b.mode == "am" and b.step_hz == 5e3]
+    if band:
+        sw = [b for b in sw if b.name == band]
+        if not sw:
+            raise HTTPException(404, f"no shortwave band {band}")
+    out = []
+    for b in sw:
+        for x in e.on_air(b.start_hz / 1e3, b.stop_hz / 1e3):
+            out.append({**x, "band": b.name})
+    return {"file": e.file, "bands": [{"name": b.name, "start_hz": b.start_hz, "stop_hz": b.stop_hz} for b in sw],
+            "now": sorted(out, key=lambda x: x["khz"])}
 
 
 @app.get("/api/adsb")

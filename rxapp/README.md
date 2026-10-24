@@ -114,7 +114,7 @@ API: `GET/POST /api/sstv` (status / `{on}`), `GET /api/sstv/pictures`, `GET /api
 
 ## The web app
 
-http://127.0.0.1:8090 is a tab bar with one page per feature: **Radio** (`radio.html`: tuning, waterfall,
+http://127.0.0.1:8090 is a tab bar with one page per feature: **Radio**, **AM / FM / SW** (`broadcast.html`), (`radio.html`: tuning, waterfall,
 channels, scans, monitors, FT8/SSTV controls, recordings, dashboard), **FT8 map** (`ft8.html`), **FT4 map**
 (`ft4.html`), **WSPR** (`wspr.html`), **Airband**
 (`airband.html`), **Public safety** (`safety.html`), **Maritime** (`marine.html`), **APRS**
@@ -180,6 +180,17 @@ While the low-band window is on, the FT8 and SSTV monitors (HF) run too. Output 
 
 API: `GET /api/safety?session=`, `GET /api/safety/transmissions?session=&after=`, `GET /api/safety/places?session=`,
 `GET /api/safety/clip/{session}/{wav}`.
+
+## Broadcast (AM / FM / shortwave)
+
+`broadcast.html` (tab *AM / FM / SW*): Bay Area AM and FM stations (`rxapp/broadcast.py`, from Wikipedia's list
+of Bay Area stations) and shortwave broadcasters scheduled this hour in the 120 m-13 m bands, from the EiBi
+schedule (eibispace.de; downloaded for the current season, A = summer, B = winter, into `rxapp_data/eibi/`).
+*Scan* runs the band scanner and adds a signal column (stations heard but not listed show as unlisted /
+unscheduled); *Listen* creates the page's own channel (AM, or WFM on the VHF tuner) and plays it. AM and
+shortwave hold the receiver on the HF input, FM pauses the voice session and moves the tuner; *Resume rotation*
+gives the receiver back. API: `/api/broadcast/stations`, `/api/broadcast/sw/now?band=`, and the scanner's
+`/api/scan/{am|fm|49m|...}`.
 
 ## WSPR
 

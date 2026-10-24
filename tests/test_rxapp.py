@@ -683,3 +683,33 @@ def test_wspr_feed_keeps_a_whole_two_minute_slot(monkeypatch):
     short = ft8.Feed("20m", 14.0956e6)                      # the FT8 default keeps 40 s: not enough
     _packets(short, t_start - 2, 125, monkeypatch=monkeypatch)
     assert short.cut(t_start, wspr.SLOT_SEC) is None
+
+
+# ---- broadcast ----------------------------------------------------------------------------
+from rxapp import broadcast
+
+
+def test_eibi_season_days_and_on_air(tmp_path):
+    import datetime as _dt
+    assert broadcast.season(_dt.date(2026, 10, 23)) == "a26" and broadcast.season(_dt.date(2026, 10, 26)) == "b26"
+    assert broadcast.season(_dt.date(2027, 1, 5)) == "b26" and broadcast.season(_dt.date(2027, 4, 1)) == "a27"
+    assert broadcast._days("Mo-Fr") == {1, 2, 3, 4, 5} and broadcast._days("Sa,Su") == {6, 7} and broadcast._days("") is None
+    (tmp_path / "sked-a26.csv").write_text(
+        "kHz:75;Time(UTC):93;Days:59;ITU:49;Station:201;Lng:49;Target:62;Remarks:135;P:35;Start:60;Stop:60;\n"
+        "9410;0000-0100;;G;BBC;E;NAm;;1;;\n"
+        "9455;2300-0100;Sa,Su;USA;WRMI Radio Miami Int.;E;CNA;;1;;\n", encoding="latin-1")
+    e = broadcast.Eibi.__new__(broadcast.Eibi)
+    e.folder, e.entries, e.file = tmp_path, [], None
+    broadcast.Eibi.fetch = lambda self, s: False             # no network in tests
+    e.load()
+    sat_0030 = _dt.datetime(2026, 10, 24, 0, 30, tzinfo=_dt.timezone.utc).timestamp()
+    mon_0030 = _dt.datetime(2026, 10, 26, 0, 30, tzinfo=_dt.timezone.utc).timestamp()
+    assert [x["station"] for x in e.on_air(when=sat_0030)] == ["BBC", "WRMI Radio Miami Int."]   # past midnight
+    assert [x["station"] for x in e.on_air(when=mon_0030)] == ["BBC"]                             # weekends only
+    assert e.on_air(when=sat_0030)[0]["language"] == "English" and e.on_air(when=sat_0030)[0]["target_name"] == "North America"
+
+
+def test_broadcast_station_tables():
+    s = broadcast.stations()
+    assert {x["call"] for x in s["am"]} >= {"KCBS", "KNBR", "KQED-FM"} - {"KQED-FM"}
+    assert any(x["call"] == "KQED-FM" and x["freq_hz"] == 88_500_000 for x in s["fm"])
