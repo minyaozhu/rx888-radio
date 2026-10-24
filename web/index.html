@@ -27,6 +27,23 @@ main{position:relative;height:calc(100vh - 47px)}
 iframe{position:absolute;inset:0;width:100%;height:100%;border:0;display:none;background:var(--bg)}
 iframe.on{display:block}
 @media (max-width:640px){.health{display:none} nav a{padding:12px 9px 10px}}
+.ctrlbtn{background:none;border:1px solid var(--line);color:var(--ink);border-radius:6px;padding:4px 9px;font:inherit;cursor:pointer}
+.ctrlbtn:hover{border-color:var(--accent)}
+#ctrlPanel{position:fixed;top:54px;right:16px;z-index:20;width:min(560px,calc(100vw - 32px));max-height:calc(100vh - 80px);overflow:auto;background:var(--bar);border:1px solid var(--line);border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.25);padding:14px 16px}
+#ctrlPanel h2{margin:0 0 4px;font-size:16px}
+#ctrlPanel p{margin:4px 0 10px;color:var(--muted);font-size:13px}
+#ctrlPanel table{width:100%;border-collapse:collapse;font-size:13px}
+#ctrlPanel td{padding:5px 4px;border-top:1px solid var(--line);vertical-align:middle}
+#ctrlPanel td:last-child{text-align:right;white-space:nowrap}
+#ctrlPanel tr.learning td{background:color-mix(in srgb,var(--accent) 12%,transparent)}
+#ctrlPanel button{font:inherit;font-size:12px;padding:3px 9px;border-radius:5px;border:1px solid var(--line);background:var(--bg);color:var(--ink);cursor:pointer}
+.kbd{display:inline-flex;align-items:center;gap:4px;font:12px ui-monospace,"SF Mono",Menlo,monospace;border:1px solid var(--line);border-bottom-width:2px;border-radius:5px;padding:1px 2px 1px 6px;margin:1px 0}
+.kbd button{border:0!important;background:none!important;padding:0 4px!important;color:var(--muted)!important}
+.none{color:var(--muted)} .wait{color:var(--accent);font-weight:600}
+.ctrlfoot{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px;font-size:13px;color:var(--muted)}
+#ctrlWarn{color:var(--bad);font-size:13px;margin:6px 0 0}
+#ctrlHud{position:fixed;left:50%;bottom:28px;transform:translateX(-50%);z-index:30;background:rgba(20,28,36,.92);color:#fff;font:600 18px/1.3 -apple-system,system-ui,sans-serif;padding:10px 18px;border-radius:10px;opacity:0;transition:opacity .2s;pointer-events:none;white-space:nowrap}
+#ctrlHud.on{opacity:1}
 </style>
 </head>
 <body>
@@ -35,7 +52,19 @@ iframe.on{display:block}
   <nav id="tabs" aria-label="Features"></nav>
   <div class="spacer"></div>
   <div class="health" id="health"><i></i>…</div>
+  <button class="ctrlbtn" id="ctrlBtn" title="Controller: keys and the Ulanzi Dial">🎛 Controller</button>
 </div>
+<div id="ctrlPanel" hidden>
+  <h2>Controller</h2>
+  <p>Keys, a macro pad or the Ulanzi Dial control the radio from any tab. Click <b>Assign</b>, then press the dial button
+  (or turn the knob) you want for that action. Plain-letter keys are ignored while you type in a text box.</p>
+  <table><tbody id="ctrlRows"></tbody></table>
+  <div id="ctrlWarn" style="display:none">A plain scroll-wheel binding takes over scrolling on every page; give it a modifier
+  (e.g. set the dial to send Ctrl + wheel) or use keys instead.</div>
+  <div class="ctrlfoot">Last input: <span class="kbd" id="ctrlLast" style="padding-right:6px">—</span>
+    <span style="flex:1"></span><button id="ctrlReset">Defaults</button><button id="ctrlClear">Clear all</button><button id="ctrlClose">Close</button></div>
+</div>
+<div id="ctrlHud"></div>
 <main id="frames"></main>
 <script>
 'use strict';
@@ -60,14 +89,22 @@ for (const t of TABS) {
   a.href = '#' + t.id; a.textContent = t.label; a.dataset.id = t.id;
   nav.appendChild(a);
 }
-function show(id) {
+function ensureFrame(id) {
   const t = TABS.find((x) => x.id === id) || TABS[0];
   if (!made[t.id]) {
     const f = document.createElement('iframe');
     f.src = t.src; f.title = t.label; f.allow = 'autoplay';
+    if (typeof hookFrame === 'function') hookFrame(f);
     frames.appendChild(f);
     made[t.id] = f;
   }
+  return made[t.id];
+}
+let shown = null;
+const current = () => shown;
+function show(id) {
+  const t = TABS.find((x) => x.id === id) || TABS[0];
+  ensureFrame(t.id); shown = t.id;
   for (const [k, f] of Object.entries(made)) f.classList.toggle('on', k === t.id);
   for (const a of nav.querySelectorAll('a')) {
     if (a.dataset.id === t.id) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
@@ -75,7 +112,6 @@ function show(id) {
   document.title = `${t.label} · rxapp`;
 }
 window.addEventListener('hashchange', () => show(location.hash.slice(1)));
-show(location.hash.slice(1));
 
 async function health() {
   const el = document.getElementById('health');
@@ -88,5 +124,7 @@ async function health() {
 }
 health(); setInterval(health, 5000);
 </script>
+<script src="controller.js?v=1"></script>
+<script>show(location.hash.slice(1));</script>
 </body>
 </html>

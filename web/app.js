@@ -885,4 +885,50 @@ function wire() {
   $('dashHours').addEventListener('change', refreshDashboard);
 }
 
+// ------------------------------------------------------------------ remote control (controller.js in the tab shell)
+// One action from a key, the Ulanzi dial or any other controller; returns a line for the on-screen display.
+function cycleSelect(sel, dir) {
+  const i = Math.max(0, Math.min(sel.options.length - 1, sel.selectedIndex + dir));
+  if (i === sel.selectedIndex) return false;
+  sel.selectedIndex = i; sel.dispatchEvent(new Event('change')); return true;
+}
+window.rxControl = (action) => {
+  const ch = current();
+  const freqText = () => ch ? fmtHz(ch.freq_hz) + ' ' + ch.mode.toUpperCase() : '';
+  switch (action) {
+    case 'tune_up': stepTune(1); return freqText();
+    case 'tune_down': stepTune(-1); return freqText();
+    case 'tune_up_fast': stepTune(1, 10); return freqText();
+    case 'tune_down_fast': stepTune(-1, 10); return freqText();
+    case 'step_up': cycleSelect($('step'), 1); return 'step ' + $('step').selectedOptions[0].text;
+    case 'step_down': cycleSelect($('step'), -1); return 'step ' + $('step').selectedOptions[0].text;
+    case 'vol_up': case 'vol_down': {
+      const v = Math.max(0, Math.min(1, +$('volume').value + (action === 'vol_up' ? 0.05 : -0.05)));
+      $('volume').value = v; $('volume').dispatchEvent(new Event('input'));
+      return `volume ${Math.round(v * 100)}%${state.listening ? '' : ' (not listening)'}`;
+    }
+    case 'listen': $('listen').click(); return state.listening ? '▶ listening · ' + freqText() : '■ stopped';
+    case 'mode_next': case 'mode_prev': {
+      const sel = $('mode'), n = sel.options.length;
+      sel.selectedIndex = (sel.selectedIndex + (action === 'mode_next' ? 1 : n - 1)) % n;
+      sel.dispatchEvent(new Event('change')); return 'mode ' + sel.value.toUpperCase();
+    }
+    case 'zoom_in': cycleSelect($('zoom'), -1); return 'span ' + $('zoom').selectedOptions[0].text;
+    case 'zoom_out': cycleSelect($('zoom'), 1); return 'span ' + $('zoom').selectedOptions[0].text;
+    case 'center': $('center').click(); return 'centred on ' + freqText();
+    case 'band': (state.band === 'hf' ? $('bandVHF') : $('bandHF')).click(); return 'switching to ' + (state.band === 'hf' ? 'VHF' : 'HF');
+    case 'chan_next': case 'chan_prev': {
+      const list = state.channels.filter((c) => c.band === state.band && c.kind === 'listen');
+      if (list.length < 2) return 'only one channel';
+      const i = list.findIndex((c) => c.ssrc === state.selected);
+      const next = list[(i + (action === 'chan_next' ? 1 : list.length - 1)) % list.length];
+      select(next.ssrc, next); renderChannels(); return `channel ${list.indexOf(next) + 1}/${list.length} · ${fmtHz(next.freq_hz)}`;
+    }
+    case 'record': $('record').click(); return ch && !ch.recording ? '● recording' : 'recording stopped';
+    case 'scan': runScan(); return 'scanning…';
+    case 'add_channel': $('addChannel').click(); return 'channel added · ' + freqText();
+  }
+  return null;
+};
+
 init().catch((e) => { $('health').innerHTML = `<span class="bad">startup failed: ${e.message}</span>`; });

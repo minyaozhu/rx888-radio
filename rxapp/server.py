@@ -617,6 +617,29 @@ async def set_focus(body: Focus):
     return await get_focus()
 
 
+# ---------------------------------------------------------------- controller key bindings (web/controller.js)
+CONTROLLER_FILE = CONFIG.data_dir / "controller.json"
+
+
+@app.get("/api/controller")
+async def get_controller():
+    """Key / dial bindings for the tab shell: {"bindings": {"Shift+BracketRight": "tune_up_fast", ...}} or {} = defaults."""
+    try:
+        return json.loads(CONTROLLER_FILE.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+@app.put("/api/controller")
+async def put_controller(body: dict):
+    b = body.get("bindings")
+    if b is not None and not (isinstance(b, dict) and all(isinstance(k, str) and isinstance(v, str) for k, v in b.items())):
+        raise HTTPException(400, "bindings is an object of combo -> action")
+    CONTROLLER_FILE.parent.mkdir(parents=True, exist_ok=True)
+    CONTROLLER_FILE.write_text(json.dumps({"bindings": b} if b is not None else {}, indent=1))
+    return await get_controller()
+
+
 # ---------------------------------------------------------------- broadcast (AM / FM / shortwave)
 _eibi: Optional[Eibi] = None
 

@@ -181,6 +181,23 @@ While the low-band window is on, the FT8 and SSTV monitors (HF) run too. Output 
 API: `GET /api/safety?session=`, `GET /api/safety/transmissions?session=&after=`, `GET /api/safety/places?session=`,
 `GET /api/safety/clip/{session}/{wav}`.
 
+## Controller (keys, macro pads, the Ulanzi Dial)
+
+The **🎛 Controller** button in the tab bar maps keys to radio actions that work from every tab: tune up/down
+(one step or ten), step size, volume, listen/stop, mode, span, centre, next/previous channel, add channel,
+HF/VHF, scan, record, and switching tabs. A small display at the bottom of the window shows the result
+(e.g. *88.600 MHz WFM*). Click **Assign** next to an action, then press a key, a dial button or turn the knob:
+whatever it sends is recorded. Bindings are kept in `rxapp_data/controller.json` (`GET/PUT /api/controller`).
+
+Defaults: `]` / `[` tune (Shift: ×10), `.` / `,` step, `=` / `-` volume, `L` listen, `M` mode (Shift: back),
+`Z` zoom (Shift: out), `C` centre, `N` channel (Shift: back), `B` HF/VHF, `S` scan, Page Up/Down tabs.
+
+**Ulanzi Dial** (Bluetooth, shows up as a keyboard, mouse and media keys): in Ulanzi Studio set the knob to send
+`[` / `]` and the buttons to the keys above (or anything, then Assign). The knob's default *volume* action
+changes the Mac's volume, which also works. Plain scroll-wheel bindings would take over scrolling everywhere,
+so give the knob a modifier (Ctrl + wheel) if you use the wheel. The browser only sees the dial while its
+window is in front.
+
 ## Broadcast (AM / FM / shortwave)
 
 `broadcast.html` (tab *AM / FM / SW*): Bay Area AM and FM stations (`rxapp/broadcast.py`, from Wikipedia's list
