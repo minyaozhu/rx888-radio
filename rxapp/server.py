@@ -683,6 +683,7 @@ async def _schedule() -> Eibi:
 # FM stereo: which stations send the 19 kHz pilot. Probed by opening a stereo WFM channel on every station in
 # a tuner window at once and counting the stereo packets radiod sends (it sends stereo only with the pilot).
 FM_STEREO_FILE = CONFIG.data_dir / "fm_stereo.json"
+FM_PACKETS_PER_S = 150          # radiod's WFM output: 48 kHz in 320-frame packets
 
 
 def _fm_stereo() -> Dict:
@@ -730,12 +731,17 @@ async def fm_stereo_probe(body: StereoProbe):
                 await asyncio.sleep(0.5)                          # let the stereo decoders settle
                 for ch in chans:
                     base[ch.ssrc] = (S.rtp.packets[ch.ssrc], S.rtp.stereo_packets[ch.ssrc])
-                await asyncio.sleep(max(1.0, min(body.seconds, 6.0)))
+                wait = max(1.0, min(body.seconds, 6.0))
+                await asyncio.sleep(wait)
                 for ch in chans:
                     total = S.rtp.packets[ch.ssrc] - base[ch.ssrc][0]
                     st = S.rtp.stereo_packets[ch.ssrc] - base[ch.ssrc][1]
-                    verdict = None if total < 20 else st >= 0.3 * total     # the pilot detector flickers on weak stations
-                    out[f"{ch.freq_hz / 1e3:.0f}"] = {"stereo": verdict, "t": time.time(), "packets": total}
+                    # audio flows at ~150 packets/s; much less means the squelch keeps closing: a weak signal,
+                    # too weak for the stereo decoder whatever the station sends
+                    weak = total < 0.8 * FM_PACKETS_PER_S * wait
+                    verdict = None if total < 20 else True if st >= 0.3 * total else None if weak else False
+                    out[f"{ch.freq_hz / 1e3:.0f}"] = {"stereo": verdict, "weak": weak and total >= 20, "t": time.time(),
+                                                      "packets": total, "heard": total > 0}
                     S.rtp.unsubscribe(ch.ssrc, _noop_pcm)
                     await S.radio.remove(ch.ssrc)
         finally:
@@ -744,9 +750,8 @@ async def fm_stereo_probe(body: StereoProbe):
                 await S.radio.remove(ch.ssrc)
             if home and abs((S.radio.vhf.center_hz or 0) - home) > 1:
                 await S.radio.move_tuner(home)
-    for k, v in out.items():                       # keep an earlier yes/no over a squelched "don't know"
-        if v["stereo"] is not None or k not in known:
-            known[k] = v
+    for k, v in out.items():                       # the latest says how it is now
+        known[k] = v
     FM_STEREO_FILE.write_text(json.dumps(known))
     return {"results": out, "known": known}
 

@@ -158,10 +158,12 @@ function hitFor(sec, f) {
 function stereoOf(f) {
   if (S.sec !== 'fm') return undefined;
   const v = S.stereo[String(Math.round(f / 1e5) * 100)];
-  return v ? v.stereo : undefined;
+  return !v ? undefined : v.stereo === true ? true : v.weak ? 'weak' : v.stereo === false ? false : v.heard === false ? 'none' : undefined;
 }
-const stSign = (st) => st === true ? ' <span class="st" title="Broadcasting in stereo (pilot heard)">ST</span>'
-  : st === false ? ' <span class="st mono" title="Heard in mono: no stereo pilot strong enough here">mono</span>' : '';
+const stSign = (st) => st === true ? ' <span class="st" title="Stereo: the pilot is decoded here">ST</span>'
+  : st === 'weak' ? ' <span class="st mono" title="Too weak here for stereo: the audio keeps dropping below the squelch">weak</span>'
+  : st === false ? ' <span class="st mono" title="Comes in clearly, but without a stereo pilot">mono</span>'
+  : st === 'none' ? ' <span class="st mono" title="Not heard here at the last check">–</span>' : '';
 function rowsFor() {
   const q = $('find').value.trim().toLowerCase(), only = $('heardOnly').checked;
   const rows = [];
