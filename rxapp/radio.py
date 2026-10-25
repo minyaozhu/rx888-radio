@@ -175,19 +175,20 @@ class Radio:
             ch.stereo = stereo
         if label is not None:
             ch.label = label
+        if ch.parked and ch.kind == "listen" and ch.band == "vhf" == self.band and not self.vhf_paused:
+            # someone is listening on a channel the tuner's window has left: bring the tuner to it
+            # (move_tuner opens it, with its mode, filter and stereo)
+            if self.vhf.in_window(freq_hz):
+                await self._open(ch)                   # already inside: just open it
+            else:
+                await self._bring_into_window(freq_hz)
+            return ch
         if ch.parked:
             return ch
         if ch.band == "vhf" and self.vhf_paused:
             return ch
         if ch.band == "vhf" and not self.vhf.in_window(freq_hz):
-            # Tuning on past the edge slides the window along (the new range comes in a step at a time);
-            # a jump further away centres it on the new frequency.
-            c0 = self.vhf.center_hz or freq_hz
-            if abs(freq_hz - c0) < 2 * WINDOW_HZ:
-                side = 1 if freq_hz > c0 else -1
-                await self.move_tuner(freq_hz - side * (WINDOW_HZ - SLIDE_MARGIN_HZ))
-            else:
-                await self.move_tuner(freq_hz)   # re-maps every VHF channel, this one included
+            await self._bring_into_window(freq_hz)   # re-maps every VHF channel, this one included
         else:
             freq, preset, rate = self._radiod_params(ch)
             await asyncio.to_thread(self.ctl.set_frequency, ssrc, freq)
@@ -216,9 +217,22 @@ class Radio:
         self.vhf_paused = False
         await self.move_tuner(center_hz)
 
+    async def _bring_into_window(self, freq_hz: float):
+        """Tuning on past the edge slides the window along (the new range comes in a step at a time);
+        a jump further away centres it on the new frequency."""
+        c0 = self.vhf.center_hz or freq_hz
+        if abs(freq_hz - c0) < 2 * WINDOW_HZ:
+            side = 1 if freq_hz > c0 else -1
+            await self.move_tuner(freq_hz - side * (WINDOW_HZ - SLIDE_MARGIN_HZ))
+        else:
+            await self.move_tuner(freq_hz)
+
     async def move_tuner(self, center_hz: float):
         """Retune the VHF tuner so center_hz sits at the IF, and re-map the VHF channels."""
         await self.vhf.retune(center_hz)
+        if self.band == "vhf" and not self.vhf_paused:     # come back here after a restart, not where the input last switched
+            RUNTIME.vhf_center_hz = self.vhf.center_hz
+            RUNTIME.save()
         for ch in list(self.channels.values()):
             if ch.band != "vhf" or self.band != "vhf" or self.vhf_paused:
                 continue
