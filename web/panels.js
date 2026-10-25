@@ -290,7 +290,7 @@ function drawPanel(p) {
     const x = (f - lo) / span * W;
     ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
     // one unit per panel: MHz once the range reaches 1 MHz, with as many decimals as the step needs
-    ticks.push([x, hi >= 1e6 ? (f / 1e6).toFixed(step < 1e4 ? 3 : step < 1e5 ? 2 : step < 1e6 ? 1 : 0) : (f / 1e3).toFixed(0) + 'k']);
+    ticks.push([x, hi >= 1e6 ? (f / 1e6).toFixed(step < 1e3 ? 4 : step < 1e4 ? 3 : step < 1e5 ? 2 : step < 1e6 ? 1 : 0) + ' MHz' : (f / 1e3).toFixed(0) + ' kHz']);
   }
   for (let v = Math.ceil(floor / 10) * 10; v < ceil; v += 10) {
     const y = H - (v - floor) / (ceil - floor) * H;
