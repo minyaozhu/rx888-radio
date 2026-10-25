@@ -271,7 +271,7 @@ function openStatus() {
     if (sel && !s.channels.some((c) => c.ssrc === sel.ssrc) && !state.recreating) {
       // our channel is gone (rxapp restarted): make a new one where we were tuned
       state.recreating = true;
-      api('POST', '/api/channels', {freq_hz: sel.freq_hz, mode: sel.mode, label: 'main', band: sel.band})
+      api('POST', '/api/channels', {freq_hz: sel.freq_hz, mode: sel.mode, label: 'main', band: sel.band, keep_tuner: true})
         .then((c) => { state.channels.push(c); select(c.ssrc, c); })
         .finally(() => { state.recreating = false; });
       return;

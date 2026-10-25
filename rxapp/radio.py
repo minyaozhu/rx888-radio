@@ -142,16 +142,20 @@ class Radio:
         return [c for c in self.channels.values() if not c.parked]
 
     async def create(self, freq_hz: float, mode: str = "am", label: str = "", kind: str = "listen",
-                     band: Optional[str] = None, filter_hz: Optional[tuple] = None) -> Channel:
+                     band: Optional[str] = None, filter_hz: Optional[tuple] = None, move_tuner: bool = True) -> Channel:
         band = band or self.band
         self._check(freq_hz, mode, band)
         if band == "vhf" and band == self.band and not self.vhf_paused and not self.vhf.in_window(freq_hz):
-            await self.move_tuner(freq_hz)
+            if not move_tuner:
+                pass                             # e.g. a page re-making its channel after a restart: stay parked
+            else:
+                await self.move_tuner(freq_hz)
         ssrc = secrets.randbelow(0x7FFFFFFF - 1000) + 1000  # stay clear of radiod's static channels
         ch = Channel(ssrc=ssrc, freq_hz=freq_hz, mode=mode, label=label, kind=kind, band=band,
                      sample_rate=MODES[mode][1] or 48000, parked=True, filter_hz=filter_hz)
         self.channels[ssrc] = ch
-        if band == self.band and not (band == "vhf" and self.vhf_paused):
+        if band == self.band and not (band == "vhf" and self.vhf_paused) and \
+                not (band == "vhf" and not self.vhf.in_window(freq_hz)):
             await self._open(ch)
         log.info("created %s %s channel %d at %.3f kHz (%s)%s", band, kind, ssrc, freq_hz / 1e3, mode,
                  "" if band == self.band else " (parked)")

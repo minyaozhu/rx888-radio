@@ -161,6 +161,7 @@ class NewChannel(BaseModel):
     label: str = ""
     band: Optional[str] = None
     kind: str = "listen"                # listen (a page's own) | air | safety (voice_session.py's recorders)
+    keep_tuner: bool = False            # VHF outside the tuner window: stay parked rather than move the tuner
 
 
 class ChannelUpdate(BaseModel):
@@ -806,7 +807,8 @@ async def create_channel(body: NewChannel):
     try:
         if body.kind not in ("listen", "air", "safety", "marine"):
             raise ValueError("kind is listen, air, safety or marine")
-        ch = await S.radio.create(body.freq_hz, body.mode, body.label, kind=body.kind, band=body.band)
+        ch = await S.radio.create(body.freq_hz, body.mode, body.label, kind=body.kind, band=body.band,
+                                  move_tuner=not body.keep_tuner)
     except ValueError as e:
         raise HTTPException(400, str(e))
     return ch.to_dict()
