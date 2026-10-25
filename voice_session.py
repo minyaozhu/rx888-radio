@@ -597,6 +597,7 @@ class Session:
         self.ais = AisReceiver(self.outs["marine"]) if "marine" in self.outs else None
         self.aprs = AprsReceiver(self.outs["aprs"]) if "aprs" in self.outs else None
         self.weather = {}             # NOAA weather radio frequency -> rxapp channel (listen only)
+        self.healed = 0.0
 
     @property
     def win(self) -> Window:
@@ -791,6 +792,34 @@ class Session:
         self.audio.wanted.add(ch["ssrc"])
         log.info("new %s channel %.4f MHz (%d)", prof.service, f / 1e6, len(self.channels))
 
+    def heal(self, now):
+        """rxapp restarted (it forgets every channel) or moved the receiver: put back what this session needs.
+        Checked every 10 s; quietly skipped while rxapp itself is down."""
+        if now - self.healed < 10:
+            return
+        self.healed = now
+        try:
+            have = {c["ssrc"] for c in call("GET", "/channels")}
+            info = call("GET", "/info")
+        except Exception:
+            return                                         # rxapp restarting: try again in 10 s
+        lost = [f for f, c in self.channels.items() if c["ssrc"] not in have]
+        for f in lost:
+            ch = self.channels.pop(f)
+            self.audio.wanted.discard(ch["ssrc"])
+            self.keyed_since.pop(f, None)
+        for f in [f for f, ssrc in self.weather.items() if ssrc not in have]:
+            del self.weather[f]                            # reopened by the next marine window
+        win = self.win
+        moved = info["band"] != win.band or (win.band == "vhf" and abs((info["vhf"]["center_hz"] or 0) - self.tuner_hz) > 1e3)
+        moved, self.was_moved = moved and getattr(self, "was_moved", False), moved   # twice running: not a scan passing
+        if lost or (moved and not self.idle):
+            log.info("rxapp lost %d channel(s)%s: restoring", len(lost), " and moved the receiver" if moved else "")
+            if not self.idle:
+                self.set_window(self.w)                    # re-aims the input/tuner and preloads
+                for f in lost:
+                    self.ensure_channel(f)                 # the ones heard here before
+
     def drop_spur(self, f):
         self.spurs.add(f)
         ch = self.channels.pop(f, None)
@@ -857,6 +886,7 @@ class Session:
                 continue
             last_frame = t
             self.read_focus(t)
+            self.heal(t)
             self.maybe_switch(t)
             if self.idle or t < self.settle_until or not len(self.grid):
                 continue
