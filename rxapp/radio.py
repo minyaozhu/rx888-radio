@@ -18,7 +18,9 @@ from ka9q import RadiodControl
 
 from .addr import maddr
 from .config import BAND_MODES, CONFIG, MODES, RUNTIME, VHF_MAX_HZ, VHF_MIN_HZ
-from .vhf import Vhf
+from .vhf import WINDOW_HZ, Vhf
+
+SLIDE_MARGIN_HZ = 0.4e6     # tuning past the window's edge: keep the channel this far inside it
 
 log = logging.getLogger(__name__)
 
@@ -178,7 +180,14 @@ class Radio:
         if ch.band == "vhf" and self.vhf_paused:
             return ch
         if ch.band == "vhf" and not self.vhf.in_window(freq_hz):
-            await self.move_tuner(freq_hz)       # re-maps every VHF channel, this one included
+            # Tuning on past the edge slides the window along (the new range comes in a step at a time);
+            # a jump further away centres it on the new frequency.
+            c0 = self.vhf.center_hz or freq_hz
+            if abs(freq_hz - c0) < 2 * WINDOW_HZ:
+                side = 1 if freq_hz > c0 else -1
+                await self.move_tuner(freq_hz - side * (WINDOW_HZ - SLIDE_MARGIN_HZ))
+            else:
+                await self.move_tuner(freq_hz)   # re-maps every VHF channel, this one included
         else:
             freq, preset, rate = self._radiod_params(ch)
             await asyncio.to_thread(self.ctl.set_frequency, ssrc, freq)

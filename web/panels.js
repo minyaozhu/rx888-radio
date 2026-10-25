@@ -176,9 +176,15 @@ function connectPanels() {
   ws.onclose = () => { PG.ws = null; setTimeout(connectPanels, 1500); };
   PG.ws = ws;
 }
+// What an HF panel asks the server for: its range, or around a zoom a margin of a quarter span each side, so
+// scrolling a zoomed view (tuning past its edge) is served by the feed already running. A new feed only when
+// the view leaves that margin.
 function subRange(p) {
-  const v = p.range.zoom && pInput(p.range) === 'hf' ? p.range.zoom : [p.range.lo, p.range.hi];
-  return [Math.round(v[0]), Math.round(v[1])];
+  if (!(p.range.zoom && pInput(p.range) === 'hf')) return [Math.round(p.range.lo), Math.round(p.range.hi)];
+  const [lo, hi] = p.range.zoom, span = hi - lo, cov = PG.info ? PG.info.coverage_hz : state.info.max_freq_hz;
+  if (p.sub && p.sub[0] <= lo && p.sub[1] >= hi && p.sub[1] - p.sub[0] <= span * 1.6) return p.sub;   // still inside
+  p.sub = [Math.round(Math.max(0, lo - span / 4)), Math.round(Math.min(cov, hi + span / 4))];
+  return p.sub;
 }
 function subscribe() {
   if (!PG.ws || PG.ws.readyState !== 1) return;
@@ -325,7 +331,10 @@ function followTuning() {
     if (!p.following || p.lastF == null || Math.abs(f - p.lastF) > span * 2) { p.following = false; continue; }   // a jump, not tuning
     const hf = pInput(p.range) === 'hf', cov = PG.info ? PG.info.coverage_hz : state.info.max_freq_hz;
     const [minLo, maxHi] = hf ? [0, cov] : [VHF_LIMITS[0], VHF_LIMITS[1]];
-    let nlo = Math.min(Math.max(minLo, f - span / 2), maxHi - span);
+    // scroll just enough to keep the channel 8 % inside the edge it crossed: the new range comes in gradually
+    const edge = span * 0.08;
+    let nlo = f > hi - span * 0.02 ? f + edge - span : f - edge;
+    nlo = Math.min(Math.max(minLo, nlo), maxHi - span);
     p.range = {...p.range, zoom: [nlo, nlo + span]};
     saveRanges(); subscribeSoon();
   }
