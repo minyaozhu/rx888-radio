@@ -26,7 +26,7 @@ from typing import Dict, List, Optional
 log = logging.getLogger(__name__)
 
 NOMINATIM = "https://nominatim.openstreetmap.org/search"
-USER_AGENT = "rx888-toolkit public-safety map (personal, non-commercial)"
+USER_AGENT = "rx888-radio public-safety map (personal, non-commercial)"
 VIEWBOX = "-123.2,38.6,-121.2,36.8"          # lon/lat corners around the Bay Area and the South Bay
 
 # Town centres (approximate)

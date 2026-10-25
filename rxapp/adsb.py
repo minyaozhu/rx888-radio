@@ -22,7 +22,7 @@ POLL_SEC = 5.0
 IDLE_SEC = 120.0
 TRACK_SEC = 20 * 60          # history kept per aircraft
 FORGET_SEC = 5 * 60          # aircraft not reported for this long are dropped
-USER_AGENT = "rx888-toolkit airband map (personal, non-commercial)"
+USER_AGENT = "rx888-radio airband map (personal, non-commercial)"
 
 
 def _num(v):

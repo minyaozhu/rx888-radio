@@ -118,7 +118,7 @@ class Eibi:
     def fetch(self, s: str) -> bool:
         self.folder.mkdir(parents=True, exist_ok=True)
         try:
-            req = urllib.request.Request(EIBI_URL.format(season=s), headers={"User-Agent": "rx888-toolkit"})
+            req = urllib.request.Request(EIBI_URL.format(season=s), headers={"User-Agent": "rx888-radio"})
             with urllib.request.urlopen(req, timeout=30) as r:
                 data = r.read()
             if b"kHz" not in data[:200]:

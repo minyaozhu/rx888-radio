@@ -1,6 +1,6 @@
-# rx888-toolkit
+# rx888-radio
 
-Tools for driving an **RX-888 MkII** SDR from a Mac (Apple Silicon): **rxapp**, a browser SDR and monitoring app built on ka9q-radio's `radiod`; macOS ports of ka9q-radio and ka9q-web; SoapySDDC/SDR++ setup; and Python scripts that talk to the hardware directly. A companion to the [Malahit DSP2 toolkit](https://github.com/minyaozhu/malahit-dsp2-toolkit).
+Tools for driving an **RX-888 MkII** SDR from a Mac (Apple Silicon): **rxapp**, a browser SDR and monitoring app built on ka9q-radio's `radiod`; macOS ports of ka9q-radio and ka9q-web; SoapySDDC/SDR++ setup; and Python scripts that talk to the hardware directly.
 
 ![Bay Airband, Live: a map of the San Francisco Bay Area with its airports; SFO, Palo Alto, Moffett and San José arrivals labelled by call sign; the Listen panel following whichever tower or approach channel is on the air](docs/images/airband-map.webp)
 
@@ -106,6 +106,11 @@ SDR++ also has a built-in `sddc_source`, but it's an unfinished stub (hard-coded
   named fixes), with uncertainty circles.
 - Wider live VHF window (~10 MHz) by moving the tuner IF up and opening its widest filter.
 - Stereo and RDS for WFM.
+
+## Feedback
+
+Questions, bug reports and ideas are welcome as [GitHub issues](https://github.com/minyaozhu/rx888-radio/issues);
+pull requests too.
 
 ## License
 
