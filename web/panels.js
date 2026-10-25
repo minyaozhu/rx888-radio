@@ -66,7 +66,7 @@ function ensureView(p) {
   if (key === p.viewKey) return;
   const old = p.viewKey && p.v;
   p.viewKey = key; p.v = v;
-  p.cols.fill(NaN); p.colT.fill(0);
+  p.cols.fill(NaN); p.colT.fill(0); resetPersist(p);
   const W = p.wf.width, H = p.wf.height;
   if (old && old.hi > old.lo) {
     const tmp = document.createElement('canvas'); tmp.width = W; tmp.height = H;
@@ -142,6 +142,7 @@ function sizePanel(p) {
   p.cols = new Float32Array(p.spec.width).fill(NaN);
   p.colT = new Float64Array(p.spec.width);
   p.viewKey = null; p.v = p.range;
+  resetPersist(p);
   p.wctx.fillStyle = '#05070a'; p.wctx.fillRect(0, 0, p.wf.width, p.wf.height);
 }
 function setRange(p, range) {
@@ -170,7 +171,7 @@ function connectPanels() {
       if (p.frames.size > 80) { const old = [...p.frames.entries()].sort((a, b) => a[1].t - b[1].t)[0][0]; p.frames.delete(old); }
       const was = p.viewKey; ensureView(p);
       if (p.viewKey === was) overlay(p, fr);
-      if (Date.now() / 1000 - t < PANEL_LIVE_S) { waterfallRow(p); drawPanel(p); } else drawPanel(p);
+      if (Date.now() / 1000 - t < PANEL_LIVE_S) { addPersist(p); waterfallRow(p); drawPanel(p); } else drawPanel(p);
     }
   };
   ws.onclose = () => { PG.ws = null; setTimeout(connectPanels, 1500); };
@@ -206,6 +207,54 @@ function overlay(p, fr) {
   }
 }
 function rebuild(p) { p.viewKey = null; ensureView(p); drawPanel(p); }
+
+// ------------------------------------------------------------------ persistence (the spectrum's afterglow)
+// A hit count per pixel: each live frame fades it and adds the new trace (with the vertical run between
+// neighbouring columns, so steep edges stay solid). Drawn coloured by how often a pixel was hit lately: the
+// noise floor and steady carriers glow yellow, brief signals leave a blue / purple trail that fades in ~1-2 s.
+const PERSIST_DECAY = 0.88;                 // per live frame (5 fps): half-life about 1.1 s
+const PERSIST_LUT = (() => {                // dark blue -> purple -> magenta -> orange -> yellow -> white
+  const stops = [[10, 20, 80], [70, 30, 150], [170, 40, 150], [240, 90, 70], [255, 190, 40], [255, 250, 210]];
+  const lut = new Uint8ClampedArray(256 * 3);
+  for (let i = 0; i < 256; i++) {
+    const x = i / 255 * (stops.length - 1), k = Math.min(Math.floor(x), stops.length - 2), f = x - k;
+    for (let c = 0; c < 3; c++) lut[i * 3 + c] = stops[k][c] + (stops[k + 1][c] - stops[k][c]) * f;
+  }
+  return lut;
+})();
+function resetPersist(p) {
+  const W = p.spec.width, H = p.spec.height;
+  p.hits = new Float32Array(W * H);
+  if (!p.pc || p.pc.width !== W || p.pc.height !== H) {
+    p.pc = document.createElement('canvas'); p.pc.width = W; p.pc.height = H;
+    p.pimg = p.pc.getContext('2d').createImageData(W, H);
+  }
+}
+function addPersist(p) {
+  const W = p.spec.width, H = p.spec.height, h = p.hits, tnow = Date.now() / 1000;
+  if (!h || h.length !== W * H) resetPersist(p);
+  for (let i = 0; i < h.length; i++) h[i] *= PERSIST_DECAY;
+  const {floor, ceil} = p.levels, k = H / (ceil - floor);
+  let prev = null;
+  for (let x = 0; x < W; x++) {
+    const v = p.cols[x];
+    if (isNaN(v) || tnow - p.colT[x] >= PANEL_LIVE_S) { prev = null; continue; }
+    const y = Math.max(0, Math.min(H - 1, Math.round(H - (v - floor) * k)));
+    const a = prev == null ? y : Math.min(prev, y), b = prev == null ? y : Math.max(prev, y);
+    for (let yy = a; yy <= b; yy++) p.hits[yy * W + x] += yy === y ? 1 : 0.5;
+    prev = y;
+  }
+  // into the picture: colour by recent hits, transparent where there were none
+  const d = p.pimg.data;
+  for (let i = 0; i < h.length; i++) {
+    const v = h[i];
+    if (v < 0.03) { d[i * 4 + 3] = 0; continue; }
+    const c = Math.min(255, Math.round(Math.sqrt(v / 6) * 255)) * 3;
+    d[i * 4] = PERSIST_LUT[c]; d[i * 4 + 1] = PERSIST_LUT[c + 1]; d[i * 4 + 2] = PERSIST_LUT[c + 2];
+    d[i * 4 + 3] = Math.min(255, 60 + v * 120);
+  }
+  p.pc.getContext('2d').putImageData(p.pimg, 0, 0);
+}
 
 // ------------------------------------------------------------------ drawing
 function autoLevelsP(p) {
@@ -247,9 +296,13 @@ function drawPanel(p) {
     const y = H - (v - floor) / (ceil - floor) * H;
     ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
   }
-  // the trace: bright where live, grey where it is the last picture
+  // the afterglow, then the trace: coloured by level where live, grey where it is the last picture
+  if (p.pc) ctx.drawImage(p.pc, 0, 0);
+  const levelInk = ctx.createLinearGradient(0, H, 0, 0);            // weak -> strong, bottom -> top
+  levelInk.addColorStop(0, '#2f6bff'); levelInk.addColorStop(0.35, '#22d3ee'); levelInk.addColorStop(0.6, '#a3e635');
+  levelInk.addColorStop(0.8, '#facc15'); levelInk.addColorStop(1, '#ef4444');
   for (const live of [false, true]) {
-    ctx.strokeStyle = live ? '#4cc2ff' : '#55606c'; ctx.lineWidth = d; ctx.beginPath();
+    ctx.strokeStyle = live ? levelInk : '#55606c'; ctx.lineWidth = (live ? 1.3 : 1) * d; ctx.beginPath();
     let pen = false;
     for (let x = 0; x < W; x++) {
       const v = p.cols[x], isLive = tnow - p.colT[x] < PANEL_LIVE_S;
