@@ -57,6 +57,9 @@ spectrum is a persistence display: the live trace coloured by level over a trail
 
 ## Setup
 
+Using a coding agent (Codex, Claude Code, Antigravity…)? Point it at [AGENTS.md](AGENTS.md): the build order with
+checks, a code map, the project's conventions and what it must never do.
+
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
