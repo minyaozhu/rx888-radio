@@ -1,0 +1,174 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>rx888-radio · RX-888 MkII SDR on macOS: browser SDR, FT8 / WSPR maps, airband transcription</title>
+<meta name="description" content="rx888-radio runs an RX-888 MkII software-defined radio on an Apple-silicon Mac: a browser SDR on ka9q-radio's radiod (HF 0–64 MHz and VHF/UHF), FT8, FT4 and WSPR on every band at once with world maps, live Bay Area airband and public-safety transcription, SSB voice, AM / SW / FM with stereo, APRS, AIS and SSTV. Open source, GPL-3.0.">
+<meta name="keywords" content="RX-888, RX888 MkII, SDR, software defined radio, macOS, Apple silicon, ka9q-radio, radiod, FT8, FT4, WSPR, airband, ADS-B, APRS, AIS, SSTV, ham radio, Whisper transcription">
+<link rel="canonical" href="https://minyaozhu.github.io/rx888-radio/">
+<meta property="og:type" content="website">
+<meta property="og:title" content="rx888-radio: the RX-888 MkII SDR on macOS">
+<meta property="og:description" content="Browser SDR on ka9q-radio, FT8 / FT4 / WSPR on every HF band at once, live airband transcription, SSB, FM stereo, APRS, AIS, SSTV. Open source.">
+<meta property="og:url" content="https://minyaozhu.github.io/rx888-radio/">
+<meta property="og:image" content="https://minyaozhu.github.io/rx888-radio/images/radio-panels.webp">
+<meta name="twitter:card" content="summary_large_image">
+<script type="application/ld+json">
+{"@context": "https://schema.org", "@type": "SoftwareSourceCode", "name": "rx888-radio",
+ "description": "RX-888 MkII SDR toolkit for macOS: a browser SDR and monitoring app on ka9q-radio's radiod, with FT8 / FT4 / WSPR, airband transcription, SSB, broadcast, APRS, AIS and SSTV.",
+ "codeRepository": "https://github.com/minyaozhu/rx888-radio", "programmingLanguage": ["Python", "JavaScript"],
+ "license": "https://www.gnu.org/licenses/gpl-3.0.html", "operatingSystem": "macOS",
+ "keywords": "RX-888, SDR, software defined radio, ka9q-radio, FT8, WSPR, airband, ham radio"}
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Barlow:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root{--bg:#F2F4EE;--panel:#FFFFFF;--ink:#1D2833;--muted:#5A6774;--line:#CBD3D8;--accent:#A3316F;--accent2:#2A5A93;--code:#0E151B;--codeink:#E4EAEE;--shadow:0 1px 2px rgba(29,40,51,.08)}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){color-scheme:dark;--bg:#0E151B;--panel:#151F27;--ink:#E4EAEE;--muted:#93A2AE;--line:#2B3843;--accent:#E07BB2;--accent2:#7FAEE6;--code:#0A1015;--shadow:none}}
+:root[data-theme="dark"]{color-scheme:dark;--bg:#0E151B;--panel:#151F27;--ink:#E4EAEE;--muted:#93A2AE;--line:#2B3843;--accent:#E07BB2;--accent2:#7FAEE6;--code:#0A1015;--shadow:none}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 "Barlow",system-ui,-apple-system,"Segoe UI",sans-serif}
+a{color:var(--accent)}
+.wrap{max-width:1180px;margin:0 auto;padding:0 20px}
+header.top{padding:56px 0 28px}
+.eyebrow{font:600 13px/1 "Barlow Condensed",sans-serif;letter-spacing:.16em;text-transform:uppercase;color:var(--accent)}
+h1{font:700 clamp(40px,7vw,76px)/.98 "Barlow Condensed","Arial Narrow",sans-serif;margin:12px 0 14px;letter-spacing:.005em}
+.lede{font-size:clamp(17px,2.2vw,20px);max-width:62ch;color:var(--ink);margin:0 0 22px}
+.lede b{font-weight:600}
+.cta{display:flex;flex-wrap:wrap;gap:10px}
+.btn{display:inline-flex;align-items:center;gap:8px;font:600 15px/1 "Barlow Condensed",sans-serif;letter-spacing:.1em;text-transform:uppercase;text-decoration:none;padding:13px 18px;border-radius:5px;border:1px solid var(--ink);color:var(--ink)}
+.btn.primary{background:var(--ink);color:var(--bg)}
+.btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.tags{display:flex;flex-wrap:wrap;gap:6px;margin-top:18px;padding:0;list-style:none}
+.tags li{font:500 12px/1 "IBM Plex Mono",monospace;border:1px solid var(--line);border-radius:3px;padding:5px 8px;color:var(--muted)}
+figure{margin:0}
+.shot{background:var(--panel);border:1px solid var(--line);border-radius:8px;box-shadow:var(--shadow);overflow:hidden}
+.shot img{display:block;width:100%;height:auto}
+.shot figcaption{padding:12px 16px;color:var(--muted);font-size:15px}
+.hero-shot{margin:8px 0 48px}
+h2{font:700 clamp(28px,4vw,38px)/1.1 "Barlow Condensed",sans-serif;margin:0 0 6px}
+.sub{color:var(--muted);margin:0 0 22px;max-width:70ch}
+section{padding:36px 0}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:18px 18px 16px;box-shadow:var(--shadow)}
+.card h3{font:700 20px/1.15 "Barlow Condensed",sans-serif;letter-spacing:.02em;margin:0 0 6px}
+.card p{margin:0;color:var(--muted);font-size:15px}
+.pair{display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:16px}
+@media (max-width:520px){.pair{grid-template-columns:1fr}}
+.listen{display:flex;flex-wrap:wrap;align-items:center;gap:12px 18px;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:16px 18px;margin-top:16px}
+.listen p{margin:0;flex:1 1 320px}
+.listen q{font-style:italic}
+audio{max-width:100%}
+pre{background:var(--code);color:var(--codeink);border-radius:8px;padding:16px 18px;overflow-x:auto;font:400 14px/1.55 "IBM Plex Mono",ui-monospace,monospace;margin:0 0 14px}
+code{font-family:"IBM Plex Mono",ui-monospace,monospace;font-size:.92em}
+.steps{counter-reset:s;list-style:none;padding:0;margin:0 0 18px;display:grid;gap:8px}
+.steps li{counter-increment:s;padding-left:34px;position:relative}
+.steps li::before{content:counter(s);position:absolute;left:0;top:1px;width:24px;height:24px;border-radius:50%;background:var(--accent);color:#fff;font:700 13px/24px "Barlow Condensed",sans-serif;text-align:center}
+footer{border-top:1px solid var(--line);margin-top:28px;padding:26px 0 48px;color:var(--muted);font-size:14px}
+footer p{margin:6px 0}
+@media (prefers-reduced-motion: reduce){html{scroll-behavior:auto}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="eyebrow">Open source · GPL-3.0 · macOS on Apple silicon</div>
+    <h1>rx888-radio</h1>
+    <p class="lede">Your <b>RX-888 MkII</b> software-defined radio on a Mac. A browser SDR built on ka9q-radio's
+      <code>radiod</code> covers HF (0–64 MHz) and VHF/UHF. It decodes <b>FT8, FT4 and WSPR on every HF band at once</b>,
+      with world maps, and <b>records and transcribes airband and public-safety radio</b> on the Mac itself. It also does
+      SSB voice, AM / shortwave / FM with stereo, APRS, AIS and SSTV.</p>
+    <div class="cta">
+      <a class="btn primary" href="https://github.com/minyaozhu/rx888-radio">View on GitHub</a>
+      <a class="btn" href="#start">Get started</a>
+    </div>
+    <ul class="tags" aria-label="Topics">
+      <li>RX-888 MkII</li><li>SDR</li><li>ka9q-radio</li><li>FT8</li><li>FT4</li><li>WSPR</li><li>airband</li>
+      <li>SSB</li><li>FM stereo</li><li>APRS</li><li>AIS</li><li>SSTV</li><li>Whisper</li><li>macOS</li>
+    </ul>
+  </header>
+
+  <figure class="shot hero-shot">
+    <img src="images/radio-panels.webp" width="2000" height="1043" loading="eager"
+         alt="The Radio tab: four spectrum and waterfall panels: the AM broadcast band, 2–30 MHz HF, FM broadcast and airband, each spectrum a colour-coded persistence display">
+    <figcaption>The Radio tab: four panels, each on its own range. They are live where the receiver is listening and
+      show their last picture elsewhere. Click to tune, Shift + wheel (or a dial) to zoom. The spectrum is a persistence display.</figcaption>
+  </figure>
+
+  <section aria-labelledby="what">
+    <h2 id="what">One receiver, many radios</h2>
+    <p class="sub">Every feature is a tab in the browser. The monitors run on the server, so they keep going with the page closed.</p>
+    <div class="grid">
+      <div class="card"><h3>Radio</h3><p>A 2 × 2 grid of spectrum + waterfall panels on any ranges, with zoom, the VHF tuner's window,
+        a bandwidth menu, FM stereo, recording and keyboard / dial control.</p></div>
+      <div class="card"><h3>FT8 / FT4 / WSPR</h3><p>Decodes every HF band at once (ft8_lib, wsprd) and shows each station on a world map
+        and a per-station timeline, with band conditions from all three.</p></div>
+      <div class="card"><h3>Airband</h3><p>Records every channel in the VHF window and transcribes it with on-device Whisper. Shows a live
+        Bay Area map, flights from ADS-B (adsb.fi), and follows whichever channel is talking.</p></div>
+      <div class="card"><h3>Public safety</h3><p>Covers the CHP low band and VHF-high channels, recorded and transcribed, with incident
+        locations geocoded on a map. Kept for 7 days, and never published.</p></div>
+      <div class="card"><h3>SSB voice</h3><p>Lists amateur nets, Pacific oceanic aviation and VOLMET, USAF HFGCS and Coast Guard channels,
+        with a voice-band signal check and activity found in the ham bands.</p></div>
+      <div class="card"><h3>AM / SW / FM</h3><p>Bay Area AM and FM station lists, plus shortwave broadcasters from the EiBi schedule.
+        FM plays in stereo, with a stereo sign on each station.</p></div>
+      <div class="card"><h3>Maritime · APRS · SSTV</h3><p>AIS ships with AIS-catcher, marine VHF and NOAA weather, APRS stations
+        on a map with multimon-ng, and SSTV pictures decoded as they arrive.</p></div>
+      <div class="card"><h3>Built to keep running</h3><p>A supervisor restarts radiod after a USB drop. The voice session restores its
+        channels after a restart, and the panels keep their last pictures on disk.</p></div>
+    </div>
+  </section>
+
+  <section aria-labelledby="see">
+    <h2 id="see">See and hear it</h2>
+    <p class="sub">Screenshots and a clip recorded with this code.</p>
+    <div class="pair">
+      <figure class="shot">
+        <img src="images/ft8-skywatch.webp" width="2000" height="1295" loading="lazy"
+             alt="FT8 Skywatch: a world map of decoded FT8 stations with lines between stations in contact, and a per-station timeline">
+        <figcaption>FT8 Skywatch: every FT8 message on a world map and timeline, each one explained in plain words.</figcaption>
+      </figure>
+      <figure class="shot">
+        <img src="images/airband-map.webp" width="2000" height="1160" loading="lazy"
+             alt="Bay Airband, Live: a map of the San Francisco Bay Area airports with arrivals labelled by flight number, and the Listen panel">
+        <figcaption>Bay Airband, Live: airports light up when their tower is talking, and arrivals are placed from the controllers' instructions.</figcaption>
+      </figure>
+    </div>
+    <div class="listen">
+      <p><b>Hear one:</b> American 2105 on NorCal Approach, 135.650 MHz. Whisper's transcript:
+        <q>210 knots and cleared ILS to a right, American 2105</q>.</p>
+      <audio controls preload="none" src="audio/american2105-cleared-ils28r.m4a">
+        <a href="audio/american2105-cleared-ils28r.m4a">Download the clip (5 s, AAC)</a></audio>
+    </div>
+  </section>
+
+  <section aria-labelledby="start-h" id="start">
+    <h2 id="start-h">Get started</h2>
+    <p class="sub">You'll need an RX-888 MkII on a USB 3 port, an Apple-silicon Mac with Homebrew, and the
+      <code>SDDC_FX3.img</code> firmware from the ExtIO_sddc releases. The full steps are in the repository's READMEs
+      and in <a href="https://github.com/minyaozhu/rx888-radio/blob/main/AGENTS.md">AGENTS.md</a>, for coding agents.</p>
+    <ol class="steps">
+      <li>Build ka9q-radio with the macOS patch (<a href="https://github.com/minyaozhu/rx888-radio/blob/main/ka9q/README.md">ka9q/README.md</a>).</li>
+      <li>Create the Python environment and run the tests.</li>
+      <li>Optionally build the decoders (ft8_lib, wsprd, multimon-ng, AIS-catcher).</li>
+      <li>Start rxapp and open <code>http://127.0.0.1:8090</code>.</li>
+    </ol>
+<pre>git clone https://github.com/minyaozhu/rx888-radio.git && cd rx888-radio
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+./run_rxapp.sh          # starts and supervises radiod, then open http://127.0.0.1:8090</pre>
+  </section>
+
+  <footer>
+    <p><a href="https://github.com/minyaozhu/rx888-radio">github.com/minyaozhu/rx888-radio</a> · GPL-3.0-or-later ·
+      Built on <a href="https://github.com/ka9q/ka9q-radio">ka9q-radio</a> (KA9Q), with ft8_lib, WSJT-X's wsprd, AIS-catcher,
+      multimon-ng and mlx-whisper. Full credits and licences are in the
+      <a href="https://github.com/minyaozhu/rx888-radio#credits-and-third-party-licenses">README</a>.</p>
+    <p>Map in the airband screenshot © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors.
+      Aircraft data on the live page: <a href="https://adsb.fi">adsb.fi</a>. Feedback: <a href="https://github.com/minyaozhu/rx888-radio/issues">GitHub issues</a>.</p>
+    <p>Related: <a href="https://minyaozhu.github.io/malahit-airband-monitor/">Malahit airband monitor</a>, the same
+      airband idea for the Malahit DSP2 receiver.</p>
+  </footer>
+</div>
+</body>
+</html>
