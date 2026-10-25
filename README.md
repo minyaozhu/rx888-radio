@@ -140,7 +140,9 @@ corresponding source.
 | pyModeS | GPL-3.0 |
 | aprslib | GPL-2.0-or-later |
 
-**In the browser** (loaded from CDNs): [Leaflet](https://leafletjs.com) (BSD-2-Clause),
+**In the browser** (loaded from CDNs): fonts [Barlow, Barlow Condensed](https://fonts.google.com/specimen/Barlow) and
+[IBM Plex Mono](https://github.com/IBM/plex) (SIL Open Font License 1.1, served by Google Fonts, so pages that use them
+contact fonts.googleapis.com), [Leaflet](https://leafletjs.com) (BSD-2-Clause),
 [D3](https://d3js.org) and [topojson-client](https://github.com/topojson/topojson-client) (ISC),
 [world-atlas](https://github.com/topojson/world-atlas) (ISC, from public-domain Natural Earth data).
 
@@ -154,8 +156,15 @@ corresponding source.
 | [EiBi](http://www.eibispace.de) shortwave schedule | Free to use | Downloaded per season into `rxapp_data/eibi/` |
 | Wikipedia, *List of radio stations in the San Francisco Bay Area* | CC BY-SA 4.0 | Only call signs, frequencies, cities and formats (facts) in `rxapp/broadcast.py`, with the source named |
 | [AirNav](https://www.airnav.com) / FAA airport frequencies | Public facts | Frequencies only |
+| HF voice channels in `rxapp/ssb.py` (ICAO Pacific MWARA / VOLMET, USAF HFGCS, USCG, amateur band plans) | Public facts | Frequencies and names only, compiled for this repo |
 
-**Radio content.** The audio clip and screenshots in `docs/` are the author's own receptions. Recordings and
+**Optional tools mentioned** (not included): [Karabiner-Elements](https://karabiner-elements.pqrs.org) (public domain,
+The Unlicense) for the dial rule in `karabiner/` (our own JSON), and Ulanzi Studio (Ulanzi's own app, proprietary) for
+the Ulanzi Dial. Ulanzi is a trademark of its owner, named only to say which device this works with.
+
+**Radio content.** The audio clip and screenshots in `docs/` are the author's own receptions: the 5 s clip is air
+traffic control (NorCal Approach, 135.650 MHz); the screenshots show OpenStreetMap tiles with their attribution and
+airline flight numbers heard on the air (positions inferred from the controllers' instructions). Recordings and
 transcripts (`rxapp_data/`, `recordings/*.wav`) are git-ignored and stay local; in the US, 47 U.S.C. § 605
 limits divulging the contents of radio communications other than broadcast, amateur, CB and distress traffic, so
 check the rules before publishing recordings or transcripts, especially of public-safety channels.
