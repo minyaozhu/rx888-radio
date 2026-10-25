@@ -148,6 +148,7 @@ function connect(ssrc) {
 }
 function setOn(on) {
   audio.on = on;
+  if (on) audioFocus.claim(() => setOn(false)); else audioFocus.release();
   if (on) {
     if (!audio.ctx) { audio.ctx = new AudioContext(); audio.gain = audio.ctx.createGain(); audio.gain.connect(audio.ctx.destination); }
     audio.ctx.resume(); audio.gain.gain.value = +$('vol').value;

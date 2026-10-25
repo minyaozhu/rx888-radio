@@ -503,8 +503,14 @@ function connect(ssrc) {
   ws.onclose = () => { if (audio.ws === ws && audio.on) setTimeout(() => audio.on && connect(wantedSsrc()), 1000); };
   audio.ws = ws;
 }
+function listenOff() {                    // another page started playing
+  if (!audio.on) return;
+  audio.on = false; connect(null);
+  $('listen').textContent = 'Listen'; $('listen').classList.remove('on');
+}
 $('listen').addEventListener('click', () => {
   audio.on = !audio.on;
+  if (audio.on) audioFocus.claim(listenOff); else audioFocus.release();
   if (audio.on) {
     if (!audio.ctx) { audio.ctx = new AudioContext(); audio.gain = audio.ctx.createGain(); audio.gain.connect(audio.ctx.destination); }
     audio.ctx.resume(); audio.gain.gain.value = +$('vol').value;

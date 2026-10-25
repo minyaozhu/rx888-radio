@@ -79,6 +79,9 @@ permissions (Input Monitoring, LaunchServices).
 - Every source file starts with `SPDX-License-Identifier: GPL-3.0-or-later` (Python/shell `#`, JS `//`, HTML `<!-- -->`).
 - Pages load scripts as `name.js?v=N`: **bump N** in the HTML when you change the script. HTML and JS are
   served `Cache-Control: no-cache`, but long-open tabs still need a reload.
+- A page that plays audio calls `audioFocus.claim(stop)` when it starts and `audioFocus.release()` when it stops
+  (`web/audiofocus.js`): one page plays at a time. A page that needs the receiver takes it over (voice focus) only
+  when the receiver can't already hear what was picked.
 - Match the surrounding style: small functions, comments that say *why*, no new frameworks or build steps.
 - Run `.venv/bin/python -m pytest -q tests/` and `node --check web/<file>.js` after changes; add a test for new
   pure logic.

@@ -42,6 +42,7 @@ $('toggle').addEventListener('click', async () => {
 // ------------------------------------------------------------------ listen to one frequency (SSTV sounds like warbling tones)
 const audio = {ctx: null, gain: null, ws: null, next: 0};
 function stopListen() {
+  audioFocus.release();
   if (audio.ws) { const w = audio.ws; audio.ws = null; w.onmessage = w.onclose = null; w.close(); }
   S.listen = null; $('now').textContent = ''; $('listen').disabled = true; $('listen').textContent = 'Listen';
 }
@@ -62,6 +63,7 @@ function startListen(ssrc, f) {
     src.start(audio.next); audio.next += buf.duration;
   };
   audio.ws = ws; S.listen = ssrc;
+  audioFocus.claim(() => { stopListen(); drawRows(); });
   $('now').textContent = `playing ${mhz(f)} MHz`; $('listen').disabled = false; $('listen').textContent = 'Stop listening';
 }
 $('rows').addEventListener('click', (e) => {

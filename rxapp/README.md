@@ -128,6 +128,14 @@ being received (the capture is decoded every 5 s), and the picture gallery with 
 kept, so audio playing in one tab keeps playing in another; the address names the tab (`/#airband`). The bar
 shows radiod's health.
 
+**Sharing the receiver.** A page that needs the receiver only takes it over when the receiver can't hear what
+you picked: AM / SW / FM and SSB Voice play on whatever the receiver already hears (an FM station inside the
+current tuner window, AM / shortwave / SSB while it is on HF) and leave the hold of whichever page has it
+(Airband, FT8 …) alone; only if the voice session is rotating do they hold it in place. The Radio tab tunes freely
+inside the current input and window, and pauses the voice session when it switches input or tunes past the window.
+**One page plays audio at a time**: starting to listen on any page stops the audio on every other rxapp page
+(`web/audiofocus.js`, a BroadcastChannel shared by the tab frames and other browser tabs).
+
 **Switch receiver here.** Each page has a button that holds the voice session on that page's windows until
 released: Airband → approach and towers; Public safety → low band and VHF-high; FT8 / FT4 / WSPR, SSB Voice and SSTV → the HF window (FT8 and
 SSTV then run all the time); Radio → *pause* the session altogether, for manual tuning. It switches at once

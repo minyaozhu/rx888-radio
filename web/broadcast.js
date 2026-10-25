@@ -16,16 +16,30 @@ const mhzs = (f) => (f / 1e6).toFixed(1);
 const S = {stereo: {}, stereoAt: 0, sec: 'am', st: null, sw: null, hits: {am: {}, fm: {}, sw: {}}, scanned: {}, playing: null, chans: {}};
 
 // ------------------------------------------------------------------ receiver input
-// AM and shortwave need the HF input; FM the VHF tuner at the station's frequency. Either way the voice
-// session (airband / public-safety rotation) is held so it doesn't switch the input away mid-listen.
-async function ensureInput(sec, freq) {
-  const h = await api('/api/health');
-  if (sec === 'fm') {
+// AM and shortwave need the HF input; FM the VHF tuner at the station's frequency. If the receiver can
+// already hear it and another page holds the receiver there (Airband, FT8 ...), leave that hold alone and
+// just listen. If it can hear it but the voice session is rotating, hold it so it doesn't move away
+// mid-listen. Only when it can't hear it does this page take the receiver over.
+// scan: an FM scan steps the tuner across the band and puts it back, so being on VHF is enough.
+async function ensureInput(sec, freq, scan = false) {
+  const [h, f] = await Promise.all([api('/api/health'), api('/api/voice/focus')]);
+  const fm = sec === 'fm';
+  const canHear = fm ? h.band === 'vhf' && (scan || (h.vhf && h.vhf.center_hz && Math.abs(h.vhf.center_hz - freq) < 4.0e6))
+    : h.band === 'hf';
+  if (canHear && f.focus) {
+    note(`Listening on what the receiver already hears; it stays with ${f.label || f.focus}.`);
+    return;
+  }
+  if (canHear) {                                    // the rotation would move it: hold it here
+    await post('/api/voice/focus', {focus: fm ? 'pause' : 'hf'});
+    note(fm ? 'FM: the voice-session rotation is paused so the tuner stays here.' : 'AM / shortwave: the receiver is held on the HF input (FT8, WSPR and SSTV run too).');
+    return;
+  }
+  if (fm) {
     await post('/api/voice/focus', {focus: 'pause'});
     if (h.band !== 'vhf' || !h.vhf || Math.abs((h.vhf.center_hz || 0) - freq) > 3.5e6) await post('/api/band', {band: 'vhf', center_hz: freq});
     note('FM: the receiver is on the VHF tuner and the voice-session rotation is paused.');
   } else {
-    const f = await api('/api/voice/focus');
     if (f.focus !== 'hf') await post('/api/voice/focus', {focus: 'hf'});
     if (h.band !== 'hf') { await post('/api/band', {band: 'hf'}); await new Promise((r) => setTimeout(r, 1500)); }
     note('AM / shortwave: the receiver is held on the HF input (FT8, WSPR and SSTV run too); the VHF rotation is paused.');
@@ -55,6 +69,7 @@ async function play(item) {
     if (!audio.ctx) { audio.ctx = new AudioContext(); audio.gain = audio.ctx.createGain(); audio.gain.connect(audio.ctx.destination); }
     audio.ctx.resume(); audio.gain.gain.value = +$('vol').value;
     connect(ssrc);
+    audioFocus.claim(stop);
     S.playing = {sec, freq};
     $('nowName').textContent = item.title;
     $('nowMeta').textContent = `${sec === 'fm' ? mhzs(freq) + ' MHz' : khz(freq) + ' kHz'} · ${item.sub || ''}`;
@@ -97,6 +112,7 @@ $('stereo').addEventListener('change', () => {
   setStereo($('stereo').checked);
 });
 function stop() {
+  audioFocus.release();
   connect(null); S.playing = null; $('stereoWrap').style.display = 'none';
   $('nowName').textContent = 'Nothing playing'; $('nowMeta').textContent = 'pick a station below'; $('stop').disabled = true;
   draw();
@@ -124,7 +140,7 @@ $('scan').addEventListener('click', async () => {
         for (const h of r.hits) S.hits.sw[Math.round(h.freq_hz / 5000) * 5000] = h.snr_db;
       }
     } else {
-      await ensureInput(S.sec, 98e6);
+      await ensureInput(S.sec, 98e6, true);
       $('scanNote').textContent = S.sec === 'fm' ? 'scanning 88–108 MHz (the tuner steps across the band, ~25 s)…' : 'scanning 530–1700 kHz…';
       const r = await post(`/api/scan/${S.sec}`, {});
       S.hits[S.sec] = {};

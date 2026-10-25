@@ -432,8 +432,7 @@ async function tuneFromPanel(p, x) {
   try {
     const out = want === 'vhf' && PG.info && PG.info.vhf.center_hz && Math.abs(f - PG.info.vhf.center_hz) > PG.info.vhf.span_hz / 2;
     if (fresh || out) {                     // moving the receiver: hold the voice session off it
-      const fo = await api('GET', '/api/voice/focus');
-      if (fo.focus !== 'pause') { await api('POST', '/api/voice/focus', {focus: 'pause'}); flash('voice session paused for manual tuning (button at the top resumes it)'); }
+      await takeOver();
     }
     if (fresh) { state.switching = true; try { await switchBand(want); } finally { state.switching = false; } }
     $('mode').value = mode; $('step').value = defaultStep(mode, f);

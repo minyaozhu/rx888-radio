@@ -58,8 +58,18 @@ async function applyBand(band) {
   select(main.ssrc, main);
 }
 
+// Taking the receiver somewhere it isn't (the other input, or beyond the VHF window): pause the voice
+// session first, or its hold / rotation would move the receiver back. Tuning within what the receiver
+// hears leaves whoever holds it alone.
+async function takeOver() {
+  try {
+    const fo = await api('GET', '/api/voice/focus');
+    if (fo.focus !== 'pause') { await api('POST', '/api/voice/focus', {focus: 'pause'}); flash('voice session paused for manual tuning (button at the top resumes it)'); }
+  } catch (e) { /* rxapp restarting */ }
+}
 async function switchBand(band) {
   if (band === state.band) return;
+  await takeOver();
   for (const b of ['bandHF', 'bandVHF']) $(b).disabled = true;
   try {
     state.info = await api('POST', '/api/band', {band});
@@ -166,6 +176,8 @@ async function tune(freq_hz, mode) {
   if (freq_hz != null) {
     const [lo, hi] = state.band === 'vhf' ? state.info.vhf_range_hz : [1e3, state.info.max_freq_hz - 1e3];
     freq_hz = Math.max(lo, Math.min(freq_hz, hi));
+    const c = state.info.vhf && state.info.vhf.center_hz;
+    if (state.band === 'vhf' && c && Math.abs(freq_hz - c) > 4.2e6 && Math.abs(ch.freq_hz - c) <= 4.2e6) takeOver();   // leaving the window
     ch.freq_hz = freq_hz;
     $('freq').value = fmtTune(freq_hz);
   }
@@ -227,6 +239,7 @@ function startAudio() {
   };
   audio.ws = ws;
   state.listening = true;
+  audioFocus.claim(() => stopAudio());
   $('listen').textContent = '■ Stop';
   $('listen').classList.add('on');
 }
@@ -234,6 +247,7 @@ function startAudio() {
 function stopAudio(updateButton = true) {
   if (audio.ws) { const w = audio.ws; audio.ws = null; w.onmessage = null; w.onclose = null; w.close(); }
   if (updateButton) {
+    audioFocus.release();
     state.listening = false;
     $('listen').textContent = '▶ Listen';
     $('listen').classList.remove('on');

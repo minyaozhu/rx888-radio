@@ -18,8 +18,15 @@ const hms = (t) => new Date(t).toLocaleTimeString([], {hour12: false});
 const S = {sec: 'ham', data: null, snr: {}, activity: [], scanned: {}, playing: null, ssrc: null, rows: []};
 
 // ------------------------------------------------------------------ receiver input
+// On HF already and held by another page (FT8, AM / SW ...): just listen. On HF with the voice session
+// rotating: hold it on HF. On VHF: take the receiver over.
 async function ensureHF() {
   const [h, f] = await Promise.all([api('/api/health'), api('/api/voice/focus')]);
+  if (h.band === 'hf' && f.focus) {
+    $('noticeText').textContent = `Listening on the HF input; the receiver stays with ${f.label || f.focus}.`;
+    $('notice').style.display = '';
+    return;
+  }
   if (f.focus !== 'hf') await post('/api/voice/focus', {focus: 'hf'});
   if (h.band !== 'hf') { await post('/api/band', {band: 'hf'}); await new Promise((r) => setTimeout(r, 1500)); }
   $('noticeText').textContent = 'The receiver is held on the HF input (FT8, WSPR and SSTV keep running; the VHF rotation is paused).';
@@ -41,6 +48,7 @@ async function play(row) {
     if (!audio.ctx) { audio.ctx = new AudioContext(); audio.gain = audio.ctx.createGain(); audio.gain.connect(audio.ctx.destination); }
     audio.ctx.resume(); audio.gain.gain.value = +$('vol').value;
     connect(S.ssrc);
+    audioFocus.claim(stop);
     S.playing = {key: row.key, freq: row.freq_hz, mode: row.mode, title: row.title, sub: row.sub};
     $('stop').disabled = false; $('tune').style.visibility = '';
     showNow();
@@ -93,6 +101,7 @@ function connect(ssrc) {
   audio.ws = ws;
 }
 function stop() {
+  audioFocus.release();
   connect(null); S.playing = null;
   $('nowName').textContent = 'Nothing playing'; $('nowMeta').textContent = 'pick a channel below';
   $('stop').disabled = true; $('tune').style.visibility = 'hidden';
