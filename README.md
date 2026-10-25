@@ -5,9 +5,10 @@ Tools for driving an **RX-888 MkII** SDR from a Mac (Apple Silicon): **rxapp**, 
 ![Bay Airband, Live: a map of the San Francisco Bay Area with its airports; SFO, Palo Alto, Moffett and San José arrivals labelled by call sign; the Listen panel following whichever tower or approach channel is on the air](docs/images/airband-map.webp)
 
 *Bay Airband, Live (`/airband.html`): every airband channel in the RX-888's VHF window recorded and
-transcribed on the Mac at once. Airports light up when their tower is on the air; aircraft are real positions
-and tracks from the [adsb.fi](https://adsb.fi) ADS-B feed, and call signs picked out of the transcripts are
-matched to them. Listen follows whichever channel is talking.*
+transcribed on the Mac at once. Airports light up when their tower is on the air; the arrivals shown are
+placed along the SFO approach from the controllers' instructions. (The page can now also overlay real positions
+and tracks from the [adsb.fi](https://adsb.fi) ADS-B feed, matched to the call signs in the transcripts.) Listen
+follows whichever channel is talking.*
 
 ![The timeline: one lane per flight (United 1387, American 2331, Delta 2038, United 1905, Alaska 1369…) with each transmission as a dot coloured by phase: check-in, speed/altitude, vector, traffic, cleared, handoff](docs/images/airband-timeline.webp)
 
@@ -19,6 +20,12 @@ handoff to the tower. Scrub or Play to replay; click a dot to read the transcrip
 *"210 knots and cleared ILS to a right, American 2105"*, a read-back of a speed and an ILS approach
 clearance to SFO's runway 28R. Recorded by `voice_session.py` and cleaned the same way the transcriber
 sees it (carrier removed, 250–3200 Hz, normalised).
+
+![FT8 Skywatch: a world map with the stations decoded on 160, 80 and 40 m (N6DF, K0PJH, WU8T, TI2SD, 7P8GE), lines joining stations that are calling each other (one reaching 7P8GE in Lesotho), the selected message "TI2SD N6DF CM87" explained, and the per-station timeline below](docs/images/ft8-skywatch.webp)
+
+*FT8 Skywatch (`/#digital`, the FT8 / FT4 / WSPR tab): every FT8 message decoded on all HF bands at once, on a
+world map and one timeline lane per station. Click a message to read it in plain words: here N6DF answering
+TI2SD in Costa Rica with its grid. Stations that never send a grid are placed by call-sign prefix.*
 
 ## The hardware
 
