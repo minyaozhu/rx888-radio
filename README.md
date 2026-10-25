@@ -27,6 +27,13 @@ sees it (carrier removed, 250–3200 Hz, normalised).
 world map and one timeline lane per station. Click a message to read it in plain words: here N6DF answering
 TI2SD in Costa Rica with its grid. Stations that never send a grid are placed by call-sign prefix.*
 
+![The Radio tab: four spectrum + waterfall panels. 0–2 MHz zoomed to the AM broadcast band with its stations as bright peaks; the whole 2–30 MHz HF range; FM broadcast and airband from the VHF tuner, greyed because the receiver is on HF and they show their last picture. The spectra are colour-coded persistence displays: the trace coloured by level, a fading purple trail behind it](docs/images/radio-panels.webp)
+
+*The Radio tab (`/#radio`): four panels, each on its own range, live where the receiver is listening (here the
+HF input: the AM band and 2–30 MHz) and showing their last picture elsewhere (FM broadcast and airband, from the
+VHF tuner). Shift + wheel or Shift + dial zooms a panel; "Fit 8.4 MHz" follows the VHF tuner's window. The
+spectrum is a persistence display: the live trace coloured by level over a trail that fades in about a second.*
+
 ## The hardware
 
 - **HF direct sampling:** LTC2208 16-bit ADC, up to ~130 MSPS, covering roughly 0–64 MHz in one stream.
