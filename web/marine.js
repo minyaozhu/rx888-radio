@@ -123,7 +123,19 @@ $('clip').addEventListener('click', () => {
 
 // ------------------------------------------------------------------ listen: marine voice (follow activity) and weather radio
 const audio = {ctx: null, gain: null, ws: null, next: 0, ssrc: null, on: false, lastKey: 0, fixed: null};
-const SILENT_MS = 800;
+const HANG_MS = 3000;
+// Follow activity, tuned for FM dispatch: stay on the channel being heard through the pauses of a
+// conversation (HANG_MS after it goes quiet, so the reply comes through on it), and only move to a channel
+// that has been on the air for MIN_KEY_MS without a break, so short bursts don't pull the audio around.
+const MIN_KEY_MS = 800;
+const keyedSince = {};                      // frequency -> when it was first seen keyed in this run of key-ups
+function trackKeys() {
+  const keyed = S.status.keyed || {}, now = Date.now();
+  for (const f of Object.keys(keyedSince)) if (keyed[f] == null) delete keyedSince[f];
+  for (const f of Object.keys(keyed)) if (!(f in keyedSince)) keyedSince[f] = now;
+}
+const keyedLongEnough = (f) => f in keyedSince && Date.now() - keyedSince[f] >= MIN_KEY_MS;
+
 const freqOf = (ssrc) => Object.entries(S.status.channels || {}).find(([, s]) => s === ssrc)?.[0];
 function wantedSsrc() {
   if (audio.fixed) return audio.fixed;                    // a weather radio station
@@ -131,8 +143,8 @@ function wantedSsrc() {
   if (mode !== 'follow') return ch[mode];
   const keyed = S.status.keyed || {}, cur = freqOf(audio.ssrc);
   if (cur && keyed[cur] != null) { audio.lastKey = Date.now(); return audio.ssrc; }
-  if (cur && Date.now() - audio.lastKey < SILENT_MS) return audio.ssrc;
-  const on = Object.entries(keyed).filter(([f]) => ch[f]).sort((a, b) => b[1] - a[1]);
+  if (cur && Date.now() - audio.lastKey < HANG_MS) return audio.ssrc;
+  const on = Object.entries(keyed).filter(([f]) => ch[f] && keyedLongEnough(f)).sort((a, b) => b[1] - a[1]);
   if (on.length) { audio.lastKey = Date.now(); return ch[on[0][0]]; }
   return audio.ssrc && cur ? audio.ssrc : (ch['156800000'] || Object.values(ch)[0]);
 }
@@ -179,6 +191,7 @@ setInterval(async () => {
   if (!audio.on || audio.fixed || $('chan').value !== 'follow' || !S.session) return;
   try {
     S.status = (await api(`/api/marine?session=${S.session}`)).status || {};
+    trackKeys();
     const want = wantedSsrc(); if (want && want !== audio.ssrc) connect(want);
     drawChans();
   } catch (e) { /* main poll reports */ }
