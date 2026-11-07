@@ -2,6 +2,15 @@
 // Bay Maritime, Live: AIS ships on the Bay map, marine radio transcript and listen, NOAA weather radio.
 'use strict';
 
+// Refill a <select> only when its options change, and never while it is open (focused): the pages redraw
+// every few hundred ms, and replacing the options under an open menu closes it and loses the choice.
+function setOptions(sel, html) {
+  if (sel.dataset.opts === html || document.activeElement === sel) return;
+  const prev = sel.value;
+  sel.innerHTML = html; sel.dataset.opts = html;
+  if ([...sel.options].some((o) => o.value === prev)) sel.value = prev;
+}
+
 const $ = (id) => document.getElementById(id);
 const api = async (p) => { const r = await fetch(p); if (!r.ok) throw new Error(r.statusText); return r.json(); };
 const esc = (x) => String(x ?? '').replace(/[&<>"]/g, (c) => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'})[c]);
@@ -159,7 +168,7 @@ function setOn(on) {
 }
 $('listen').addEventListener('click', () => { audio.fixed = null; setOn(!audio.on); });
 $('vol').addEventListener('input', () => { if (audio.gain) audio.gain.gain.value = +$('vol').value; });
-$('chan').addEventListener('change', () => { audio.fixed = null; if (audio.on) connect(wantedSsrc()); drawChans(); });
+$('chan').addEventListener('change', () => { $('chan').blur(); audio.fixed = null; if (audio.on) connect(wantedSsrc()); drawChans(); });
 $('wx').addEventListener('click', (e) => {
   const b = e.target.closest('button[data-ssrc]'); if (!b) return;
   if (audio.on && audio.fixed === +b.dataset.ssrc) { setOn(false); return; }
@@ -180,9 +189,8 @@ function drawChans() {
   const counts = {};
   for (const r of S.recs) counts[Math.round(r.freq_hz)] = (counts[Math.round(r.freq_hz)] || 0) + 1;
   const freqs = Object.keys(ch).sort();
-  const prev = $('chan').value || 'follow';
-  $('chan').innerHTML = '<option value="follow">Follow activity</option>' + freqs.map((f) => `<option value="${f}">${mhz(+f)} ${esc(chLabel(+f))}</option>`).join('');
-  $('chan').value = [...$('chan').options].some((o) => o.value === prev) ? prev : 'follow';
+  setOptions($('chan'), '<option value="follow">Follow activity</option>' + freqs.map((f) => `<option value="${f}">${mhz(+f)} ${esc(chLabel(+f))}</option>`).join(''));
+  if (!$('chan').value) $('chan').value = 'follow';
   const cur = audio.ssrc;
   $('now').textContent = !audio.on ? '' : audio.fixed ? 'playing weather radio' : freqOf(cur) ? `playing ${mhz(+freqOf(cur))}` : '';
   $('chans').innerHTML = freqs.map((f) => `<li data-f="${f}" class="${keyed[f] != null ? 'on' : ''} ${ch[f] === cur && audio.on && !audio.fixed ? 'sel' : ''}">

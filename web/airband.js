@@ -3,6 +3,15 @@
 // timeline, updated as they arrive, plus live audio of the loudest (or the talking) channel.
 'use strict';
 
+// Refill a <select> only when its options change, and never while it is open (focused): the pages redraw
+// every few hundred ms, and replacing the options under an open menu closes it and loses the choice.
+function setOptions(sel, html) {
+  if (sel.dataset.opts === html || document.activeElement === sel) return;
+  const prev = sel.value;
+  sel.innerHTML = html; sel.dataset.opts = html;
+  if ([...sel.options].some((o) => o.value === prev)) sel.value = prev;
+}
+
 const $ = (id) => document.getElementById(id);
 const api = async (p) => { const r = await fetch(p); if (!r.ok) throw new Error(r.statusText); return r.json(); };
 const NS = 'http://www.w3.org/2000/svg';
@@ -520,7 +529,7 @@ $('listen').addEventListener('click', () => {
   $('listen').classList.toggle('on', audio.on);
 });
 $('vol').addEventListener('input', () => { if (audio.gain) audio.gain.gain.value = +$('vol').value; });
-$('chan').addEventListener('change', () => { if (audio.on) connect(wantedSsrc()); drawChans(); });
+$('chan').addEventListener('change', () => { $('chan').blur(); if (audio.on) connect(wantedSsrc()); drawChans(); });
 
 function drawChans() {
   const ch = S.status.channels || {};
@@ -528,11 +537,10 @@ function drawChans() {
   const counts = {};
   for (const r of S.recs) counts[Math.round(r.freq_hz)] = (counts[Math.round(r.freq_hz)] || 0) + 1;
   const freqs = Object.keys(ch).sort();
-  const prev = $('chan').value || 'follow';
   const lf = loudest();
-  $('chan').innerHTML = `<option value="follow">Follow activity</option><option value="loudest">Loudest${lf ? ' · ' + mhz(lf) : ''}</option>`
-    + freqs.map((f) => `<option value="${f}">${mhz(+f)}${freqInfo(+f) ? ' ' + freqInfo(+f).label : ''}</option>`).join('');
-  $('chan').value = [...$('chan').options].some((o) => o.value === prev) ? prev : 'follow';
+  setOptions($('chan'), `<option value="follow">Follow activity</option><option value="loudest">Loudest${lf ? ' · ' + mhz(lf) : ''}</option>`
+    + freqs.map((f) => `<option value="${f}">${mhz(+f)}${freqInfo(+f) ? ' ' + freqInfo(+f).label : ''}</option>`).join(''));
+  if (!$('chan').value) $('chan').value = 'follow';
   const cur = freqOf(audio.ssrc);
   $('now').textContent = audio.on && cur ? `playing ${mhz(+cur)}${keyed[cur] != null ? ' · on air' : ''}` : '';
   $('chans').innerHTML = freqs.map((f) => `<li data-f="${f}" class="${keyed[f] != null ? 'on' : ''} ${ch[f] === audio.ssrc && audio.on ? 'sel' : ''}"

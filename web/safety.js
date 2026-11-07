@@ -3,6 +3,15 @@
 // per-channel timeline and live audio (follow whoever is talking).
 'use strict';
 
+// Refill a <select> only when its options change, and never while it is open (focused): the pages redraw
+// every few hundred ms, and replacing the options under an open menu closes it and loses the choice.
+function setOptions(sel, html) {
+  if (sel.dataset.opts === html || document.activeElement === sel) return;
+  const prev = sel.value;
+  sel.innerHTML = html; sel.dataset.opts = html;
+  if ([...sel.options].some((o) => o.value === prev)) sel.value = prev;
+}
+
 const $ = (id) => document.getElementById(id);
 const api = async (p) => { const r = await fetch(p); if (!r.ok) throw new Error(r.statusText); return r.json(); };
 const NS = 'http://www.w3.org/2000/svg';
@@ -45,7 +54,7 @@ function drawLog() {
     || '<li><span class="t">—</span><span class="tx ns">Nothing yet. The receiver also spends time on the airband, so public-safety calls arrive in bursts.</span></li>';
 }
 $('log').addEventListener('click', (e) => { const li = e.target.closest('li[data-i]'); if (li) select(S.recs.find((r) => r.i === +li.dataset.i), true); });
-for (const id of ['fCh', 'fDigital', 'fEmpty']) $(id).addEventListener('change', drawLog);
+for (const id of ['fCh', 'fDigital', 'fEmpty']) $(id).addEventListener('change', () => { $(id).blur(); drawLog(); });
 $('fFind').addEventListener('input', drawLog);
 
 function select(r, pan) {
@@ -168,7 +177,7 @@ $('listen').addEventListener('click', () => {
   drawChans();
 });
 $('vol').addEventListener('input', () => { if (audio.gain) audio.gain.gain.value = +$('vol').value; });
-$('chan').addEventListener('change', () => { if (audio.on) connect(wantedSsrc()); drawChans(); });
+$('chan').addEventListener('change', () => { $('chan').blur(); if (audio.on) connect(wantedSsrc()); drawChans(); });
 function followTick() {
   if (!audio.on || $('chan').value !== 'follow') return;
   const want = wantedSsrc();
@@ -184,9 +193,8 @@ function drawChans() {
   const counts = {};
   for (const r of S.recs) counts[Math.round(r.freq_hz)] = (counts[Math.round(r.freq_hz)] || 0) + 1;
   const freqs = Object.keys(ch).sort();
-  const prev = $('chan').value || 'follow';
-  $('chan').innerHTML = '<option value="follow">Follow activity</option>' + freqs.map((f) => `<option value="${f}">${esc(chName(+f))}</option>`).join('');
-  $('chan').value = [...$('chan').options].some((o) => o.value === prev) ? prev : 'follow';
+  setOptions($('chan'), '<option value="follow">Follow activity</option>' + freqs.map((f) => `<option value="${f}">${esc(chName(+f))}</option>`).join(''));
+  if (!$('chan').value) $('chan').value = 'follow';
   const cur = freqOf(audio.ssrc);
   $('now').textContent = audio.on && cur ? `playing ${mhz(+cur)}${keyed[cur] != null ? ' · on air' : ''}` : '';
   $('chans').innerHTML = freqs.map((f) => `<li data-f="${f}" class="${keyed[f] != null ? 'on' : ''} ${ch[f] === audio.ssrc && audio.on ? 'sel' : ''}">
@@ -298,9 +306,7 @@ async function poll(full) {
       $('nTx').textContent = S.recs.length;
       const freqs = [...new Set(S.recs.map((r) => Math.round(r.freq_hz)))].sort((a, b) => a - b);
       $('nCh').textContent = freqs.length;
-      const prev = $('fCh').value;
-      $('fCh').innerHTML = '<option value="">all channels</option>' + freqs.map((f) => `<option value="${f}">${esc(chName(f))}</option>`).join('');
-      $('fCh').value = prev;
+      setOptions($('fCh'), '<option value="">all channels</option>' + freqs.map((f) => `<option value="${f}">${esc(chName(f))}</option>`).join(''));
       drawLog(); drawCodes(); drawActs();
     }
     followTick(); drawChans(); drawTimeline();
