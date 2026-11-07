@@ -160,10 +160,15 @@ While the low-band window is on, the FT8 and SSTV monitors (HF) run too. Output 
 
 ## Public safety
 
-*Follow activity* on this page (and Maritime) is tuned for FM dispatch: the audio stays on the channel it is
-playing for 4 s after it goes quiet (3 s on Maritime), so a unit's reply comes through on it, and moves only to a
-channel that has been on the air for 0.8 s without a break, so data bursts, kerchunks and noise on the low band
-don't pull it around. (Airband keeps its quicker 0.8 s hand-off.)
+*Follow activity* on this page is tuned for FM dispatch. It follows channels that **carry speech**: each channel's
+share of recent transmissions with words, from the page's own transcripts, counting neighbours within 12.5 kHz (a
+wide data signal shows up on several grid points). The low band has strong channels that key up all day with
+data, tones or carrier and no words (41.1 MHz here, ~85 % wordless): picking the strongest keyed signal kept
+landing on them. A channel needs a third of its recent transmissions with words to be followed (new channels
+earn their place after a couple of transmissions), the most talkative goes first, a key-up within 5 kHz of the
+channel playing counts as that channel, and a channel that usually has words (≥ 0.7) cuts in on one that rarely
+does (< 0.5). It stays on the channel playing for 4 s after it goes quiet, so a unit's reply comes through, and
+moves only to a channel keyed for 0.8 s. Maritime has the 3 s hang and 0.8 s minimum. (Airband keeps its quicker 0.8 s hand-off.)
 
 - **What's in reach.** Most Bay Area city police use trunked digital systems on UHF/700/800 MHz, many
   encrypted, and the antenna is weak there anyway. In the clear and in reach: **CHP's low band** (39–46 MHz,

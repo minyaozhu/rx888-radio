@@ -140,16 +140,45 @@ function trackKeys() {
 const keyedLongEnough = (f) => f in keyedSince && Date.now() - keyedSince[f] >= MIN_KEY_MS;
 
 const freqOf = (ssrc) => Object.entries(S.status.channels || {}).find(([, s]) => s === ssrc)?.[0];
+// How often a channel carries speech, from its recent transcripts on this page: the low band has strong
+// channels that key up all day with data, tones or carrier and no words (41.1 MHz here, ~80 % without
+// speech), and following the strongest keyed signal kept landing on them instead of dispatch.
+const SPEECH_MIN = 0.34;                    // share of recent transmissions with words, to be worth following
+const SAME_HZ = 5e3;                        // a key-up this close to a channel is that channel (grid neighbour)
+const NEAR_HZ = 12.5e3;                     // its speech record includes neighbours this close: a wide data
+                                            // signal shows up on several grid points, all of them wordless
+const CUT_IN = [0.5, 0.7];                  // a channel usually with words (>= 0.7) cuts in on one that rarely has them (< 0.5)
+function speechShare(f) {
+  const hz = +f; let n = 0, words = 0;
+  for (let i = S.recs.length - 1; i >= 0 && n < 40; i--) {
+    const r = S.recs[i];
+    if (Math.abs(r.freq_hz - hz) > NEAR_HZ) continue;
+    n++;
+    const t = (r.text || '').trim();
+    if (r.kind !== 'digital' && t && !t.startsWith('(')) words++;
+  }
+  return (words + 1) / (n + 3);             // a channel not heard yet starts below SPEECH_MIN: it earns its place
+}
+const keyedNear = (f, keyed) => Object.keys(keyed).some((k) => Math.abs(+k - +f) <= SAME_HZ);
 function wantedSsrc() {
   const ch = S.status.channels || {};
   const mode = $('chan').value;
   if (mode !== 'follow') return ch[mode];
   const keyed = S.status.keyed || {}, cur = freqOf(audio.ssrc);
-  if (cur && keyed[cur] != null) { audio.lastKey = Date.now(); return audio.ssrc; }
-  if (cur && Date.now() - audio.lastKey < HANG_MS) return audio.ssrc;
-  const on = Object.entries(keyed).filter(([f]) => ch[f] && keyedLongEnough(f)).sort((a, b) => b[1] - a[1]);
-  if (on.length) { audio.lastKey = Date.now(); return ch[on[0][0]]; }
-  return audio.ssrc && cur ? audio.ssrc : Object.values(ch)[0];
+  // someone else, on the air long enough and on a channel that usually carries words: the most talkative first
+  const on = Object.keys(keyed).filter((f) => ch[f] && keyedLongEnough(f) && speechShare(f) >= SPEECH_MIN
+    && !(cur && Math.abs(+f - +cur) <= SAME_HZ))
+    .sort((a, b) => speechShare(b) - speechShare(a) || keyed[b] - keyed[a]);
+  const curShare = cur ? speechShare(cur) : 0;
+  if (cur && on.length && curShare < CUT_IN[0] && speechShare(on[0]) >= CUT_IN[1]) {         // dispatch beats chatter
+    audio.lastKey = Date.now(); return ch[on[0]];
+  }
+  if (cur && keyedNear(cur, keyed)) { audio.lastKey = Date.now(); return audio.ssrc; }       // still talking
+  if (cur && Date.now() - audio.lastKey < HANG_MS) return audio.ssrc;                         // a pause in the exchange
+  if (on.length) { audio.lastKey = Date.now(); return ch[on[0]]; }
+  if (audio.ssrc && cur) return audio.ssrc;                                                   // nothing worth hearing: stay
+  const best = Object.keys(ch).sort((a, b) => speechShare(b) - speechShare(a))[0];          // starting: the most talkative
+  return best ? ch[best] : null;
 }
 function connect(ssrc) {
   if (audio.ws) { const w = audio.ws; audio.ws = null; w.onmessage = w.onclose = null; w.close(); }
