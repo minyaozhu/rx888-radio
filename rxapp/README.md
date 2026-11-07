@@ -160,6 +160,11 @@ While the low-band window is on, the FT8 and SSTV monitors (HF) run too. Output 
 
 ## Public safety
 
+**Band switch.** *Low band* / *VHF-high* / *Both* under the header holds the voice session on one public-safety
+window, or on both in turn (5 minutes each: the RX-888 hears one input at a time). Underneath it is the voice
+focus `window:<name>` (`POST /api/voice/focus {"focus": "window:lowband"}`), which holds the session on any one
+of the windows it was started with; *Both* is the `safety` focus, the same as *Switch receiver here*.
+
 *Follow activity* on this page is tuned for FM dispatch. It follows channels that **carry speech**: each channel's
 share of recent transmissions with words, from the page's own transcripts, counting neighbours within 12.5 kHz (a
 wide data signal shows up on several grid points). The low band has strong channels that key up all day with

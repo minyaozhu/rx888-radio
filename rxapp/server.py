@@ -603,7 +603,7 @@ FOCUS_VALUES = {"air": "airband windows", "safety": "public-safety windows", "ma
 
 
 class Focus(BaseModel):
-    focus: Optional[str] = None         # air | safety | marine | hf | pause | null (rotate through everything)
+    focus: Optional[str] = None         # air | safety | marine | hf | pause | window:<name> | null (rotate through everything)
 
 
 @app.get("/api/voice/focus")
@@ -612,14 +612,21 @@ async def get_focus():
         d = json.loads(FOCUS_FILE.read_text())
     except (OSError, ValueError):
         d = {"focus": None}
-    return {**d, "label": FOCUS_VALUES.get(d.get("focus"), "rotating through all windows")}
+    return {**d, "label": focus_label(d.get("focus"))}
+
+
+def focus_label(f):
+    if f and f.startswith("window:"):
+        return f"the {f[7:]} window"
+    return FOCUS_VALUES.get(f, "rotating through all windows")
 
 
 @app.post("/api/voice/focus")
 async def set_focus(body: Focus):
-    """Hold the voice session on one kind of window (the pages' "switch the receiver here" buttons)."""
-    if body.focus is not None and body.focus not in FOCUS_VALUES:
-        raise HTTPException(400, f"focus is one of {', '.join(FOCUS_VALUES)} or null")
+    """Hold the voice session on one kind of window (the pages' "switch the receiver here" buttons), or on one
+    window by name ("window:lowband", the names voice_session.py was started with)."""
+    if body.focus is not None and body.focus not in FOCUS_VALUES and not re.fullmatch(r"window:[A-Za-z0-9_-]{1,32}", body.focus):
+        raise HTTPException(400, f"focus is one of {', '.join(FOCUS_VALUES)}, window:<name> or null")
     FOCUS_FILE.parent.mkdir(parents=True, exist_ok=True)
     FOCUS_FILE.write_text(json.dumps({"focus": body.focus, "since": time.time()}))
     S.store.event("voice_focus", focus=body.focus)

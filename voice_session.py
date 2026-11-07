@@ -670,6 +670,8 @@ class Session:
 
     # -- focus: the pages' "switch the receiver here" buttons ---------------------------
     def allowed(self, w: Window) -> bool:
+        if self.focus and self.focus.startswith("window:"):
+            return w.name == self.focus[7:]               # held on one window (e.g. the safety page's low band)
         if w.on_demand and self.focus != w.profile.service:
             return False                                  # e.g. marine: only while held there
         if self.focus in (None, ""):

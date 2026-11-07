@@ -331,10 +331,39 @@ async function loadSession(name) {
   $('session').innerHTML = info.sessions.map((s) => `<option ${s === info.session ? 'selected' : ''}>${s}</option>`).join('');
   await poll(true);
 }
+// ------------------------------------------------------------------ band switch: low band / VHF-high / both
+// Holds the voice session on one public-safety window ("window:<name>"), or on both alternating ("safety").
+// The RX-888 hears one input at a time, so "both" means 5 minutes each, in turn.
+const fmtR = (lo, hi) => `${(lo / 1e6).toFixed(1)}–${(hi / 1e6).toFixed(1)} MHz`;
+let winFocus = null;
+async function drawWinSwitch() {
+  const wins = (S.status.windows || []).filter((w) => w.service === 'safety');
+  if (!wins.length) { $('winSeg').innerHTML = ''; return; }
+  try { winFocus = (await api('/api/voice/focus')).focus; } catch (e) { /* rxapp restarting */ }
+  const opts = [...wins.map((w) => ({focus: `window:${w.name}`, label: w.band === 'hf' ? 'Low band' : 'VHF-high',
+                                     sub: fmtR(w.lo, w.hi), also: w.band === 'hf' ? 'hf' : null})),
+                {focus: 'safety', label: 'Both', sub: 'alternate, 5 min each'}];
+  const html = opts.map((o) => `<button type="button" data-focus="${o.focus}" class="${winFocus === o.focus || (o.also && winFocus === o.also) ? 'on' : ''}"
+      aria-pressed="${winFocus === o.focus}">${o.label}<small>${o.sub}</small></button>`).join('');
+  if ($('winSeg').dataset.html !== html) { $('winSeg').innerHTML = html; $('winSeg').dataset.html = html; }
+  const held = opts.some((o) => winFocus === o.focus || (o.also && winFocus === o.also));
+  $('winNote').textContent = held ? '' : winFocus ? 'the receiver is held elsewhere; pick a band to bring it here' : 'the receiver is rotating through every page';
+}
+$('winSeg').addEventListener('click', async (e) => {
+  const b = e.target.closest('button[data-focus]'); if (!b) return;
+  for (const x of $('winSeg').querySelectorAll('button')) x.disabled = true;
+  try {
+    const r = await fetch('/api/voice/focus', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({focus: b.dataset.focus})});
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
+  } catch (err) { $('winNote').textContent = 'could not switch: ' + err.message; }
+  $('winSeg').dataset.html = ''; await drawWinSwitch();
+});
+
 async function poll(full) {
   try {
     const info = await api(`/api/safety?session=${S.session}`);
     S.status = info.status || {}; S.live = info.live;
+    drawWinSwitch();
     $('fLive').className = 'live' + (S.live ? '' : ' off');
     $('fLive').lastChild.textContent = S.live ? 'live' : 'recorded';
     const st = S.status, left = st.next_switch ? Math.max(0, st.next_switch - Date.now() / 1000) : null;

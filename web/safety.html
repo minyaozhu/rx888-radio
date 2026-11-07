@@ -43,6 +43,14 @@ h1{font:700 clamp(34px,5vw,54px)/1 "Barlow Condensed","Arial Narrow",sans-serif;
 .sub{color:var(--muted);max-width:70ch;margin:0}
 .facts{display:flex;flex-wrap:wrap;gap:8px 22px;margin-top:6px;font:500 14px/1.3 "IBM Plex Mono",ui-monospace,monospace;color:var(--ink)}
 .facts span b{font-weight:500;color:var(--muted);margin-right:6px}
+.winsw{display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px;margin-top:10px;font:500 13px "IBM Plex Mono",ui-monospace,monospace}
+.winsw > b{font-weight:500;color:var(--muted)}
+.winsw .seg{display:inline-flex;border:1px solid var(--line);border-radius:4px;overflow:hidden}
+.winsw .seg button{border:0;border-radius:0;background:transparent;color:var(--ink);min-width:0;padding:8px 14px;font:600 13px "Barlow Condensed",sans-serif;letter-spacing:.08em;text-transform:uppercase;cursor:pointer}
+.winsw .seg button + button{border-left:1px solid var(--line)}
+.winsw .seg button.on{background:var(--ink);color:var(--bg)}
+.winsw .seg button small{display:block;font:400 10.5px "IBM Plex Mono",monospace;letter-spacing:0;text-transform:none;opacity:.75}
+.winnote{color:var(--muted)}
 .main{display:grid;grid-template-columns:minmax(0,1.7fr) minmax(0,1fr);gap:18px;align-items:start}
 @media (max-width:860px){.main{grid-template-columns:1fr}}
 .panel{background:var(--panel);border:1px solid var(--line);border-radius:6px;box-shadow:var(--shadow)}
@@ -194,6 +202,9 @@ abbr.code{text-decoration:underline dotted var(--magenta);text-underline-offset:
       <span><b>SESSION</b><select id="session" style="font:500 13px 'IBM Plex Mono',monospace;background:transparent;color:var(--ink);border:1px solid var(--line);border-radius:3px"></select></span>
       <span id="focusBox"></span>
     </div>
+    <div class="winsw" role="group" aria-label="Which band to listen to">
+      <b>BAND</b><span class="seg" id="winSeg"></span><span class="winnote" id="winNote"></span>
+    </div>
   </header>
 
   <div class="main2">
@@ -248,7 +259,7 @@ abbr.code{text-decoration:underline dotted var(--magenta);text-underline-offset:
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="bayps.js?v=3"></script>
 <script src="audiofocus.js?v=1"></script>
-<script src="safety.js?v=8"></script>
+<script src="safety.js?v=9"></script>
 <script src="focus.js?v=1" data-focus="safety" data-what="public safety (low band and VHF-high)"></script>
 </body>
 </html>
