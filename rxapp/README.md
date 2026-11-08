@@ -118,9 +118,9 @@ API: `GET/POST /api/sstv` (status / `{on}`), `GET /api/sstv/pictures`, `GET /api
 ## The web app
 
 http://127.0.0.1:8090 is a tab bar with one page per feature: **Radio** (`radio.html`: tuning, waterfall, listen,
-record), **AM / SW / FM** (`broadcast.html`), **SSB Voice** (`ssb.html`), **FT8 / FT4 / WSPR** (one tab with a three-way
-switch: `ft8.html?proto=ft8`, `ft8.html?proto=ft4`, `wspr.html`; old `#ft8`, `#ft4` and `#wspr` links land on the
-right one), **Airband**
+record), **AM / SW / FM** (`broadcast.html`), **SSB Voice** (`ssb.html`), **FT8 / FT4 / WSPR / CW** (one tab with a four-way
+switch: `ft8.html?proto=ft8`, `ft8.html?proto=ft4`, `wspr.html`, `cw.html`; old `#ft8`, `#ft4`, `#wspr` and `#cw`
+links land on the right one), **Airband**
 (`airband.html`), **Public safety** (`safety.html`), **Maritime** (`marine.html`), **APRS**
 (`aprs.html`) and **SSTV** (`sstv.html`: the monitor's frequencies with a
 live detector meter and Listen, a *Receiving now* window where a picture builds up line by line while it's
@@ -274,6 +274,32 @@ clang -O3 -ffast-math -o wsprd wsprd.c wsprsim_utils.c wsprd_utils.c tab.c fano.
       -I/opt/homebrew/include -L/opt/homebrew/lib -lfftw3f -lm
 clang -O3 -o wsprsim wsprsim.c wsprsim_utils.c wsprd_utils.c tab.c fano.c nhash.c -lm      # test signals
 ```
+
+## CW skimmer
+
+`rxapp/cw.py`: every Morse signal in the bottom 24 kHz of each band at once (160 m 1.817, 80 m 3.515, 40 m 7.010,
+30 m 10.103, 20 m 14.010, 17 m 18.070, 15 m 21.010, 12 m 24.890, 10 m 28.010, 6 m 50.080 MHz and up). No external
+decoder: one USB channel per band at 48 kHz output (`Radio.create(..., rate=48000)`, filter 0.2-23.8 kHz), a
+short-time FFT (1024 points: 47 Hz bins, a frame every 5.3 ms), each frame divided by its own median so radiod's
+AGC and the noise floor cancel out. A bin keyed often enough, and the peak of its neighbours, gets a `Tone` (the
+last 4 s of spectra are replayed into it, so the first characters aren't lost). A `Tone` slices its bin's level
+into key-down / key-up runs (threshold half-way between its tracked mark and space levels, 2-frame debounce,
+key-downs shorter than half a dot merged back into the gap), learns the sender's dot length from the runs
+(two-means on log durations: dots and inner gaps against dashes and letter gaps) and decodes. Noise is kept out
+by `Tone.plausible`: SNR at least 6 dB, under 50 WPM, and text that isn't mostly E T I A M N. A key-down that
+never lifts for 8 s is a carrier and is dropped.
+
+Spots: a call after CQ (and contest / activity words: SS, WW, TEST, POTA...), DE or TEST, decoded at least twice
+(one decode is too often a bust, AL4A heard as AL4E); the same call on a band is spotted again after 10 min.
+Table `cw_spots`; a signal's whole text goes to `cw_text` when it has been quiet 15 s. `GET/POST /api/cw`
+(`{on, bands}`; persisted in settings.json `cw_bands`), `/api/cw/live` (signals now: frequency, WPM, SNR, text),
+`/api/cw/spots`, `/api/cw/text`; `/api/propagation` counts CW spots too. Page `cw.html`: signals by band with
+their text as it arrives, spots with the country from the call's prefix, the log; click any of them to listen
+(a `cwu` channel: 400 Hz filter, heard as a 500 Hz tone).
+
+Tested on synthetic bands (`tests/test_rxapp.py`: four stations 8-43 WPM, two of them 150 Hz apart, noise and a
+carrier) and on the air during the November 2026 Sweepstakes: strong stations decode cleanly ("AJ6V 370 B AJ6V
+59 SCV"); weak or crowded ones come out partly garbled, as with any skimmer.
 
 ## APRS
 

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// WSPR Propagation: beacons heard (great-circle lines from home), band conditions from WSPR + FT8 + FT4.
+// WSPR Propagation: beacons heard (great-circle lines from home), band conditions from WSPR + FT8 + FT4 + CW.
 'use strict';
 
 const $ = (id) => document.getElementById(id);
@@ -74,9 +74,9 @@ $('band').addEventListener('change', draw);
 async function conditions() {
   try {
     const p = await api('/api/propagation?minutes=30');
-    const rows = BANDS.map((b) => p.bands.find((x) => x.band === b) || {band: b, wspr: 0, ft8: 0, ft4: 0, stations: 0, far_km: 0});
-    $('cond').innerHTML = rows.map((x) => { const open = x.wspr + x.ft8 + x.ft4 > 0;
-      return `<tr><td class="${open ? 'open' : 'shut'}" style="color:${open ? bandColor(x.band) : ''}">${x.band}${open ? ' ●' : ''}</td><td>${x.wspr || ''}</td><td>${x.ft8 || ''}</td><td>${x.ft4 || ''}</td>
+    const rows = BANDS.map((b) => p.bands.find((x) => x.band === b) || {band: b, wspr: 0, ft8: 0, ft4: 0, cw: 0, stations: 0, far_km: 0});
+    $('cond').innerHTML = rows.map((x) => { const open = x.wspr + x.ft8 + x.ft4 + (x.cw || 0) > 0;
+      return `<tr><td class="${open ? 'open' : 'shut'}" style="color:${open ? bandColor(x.band) : ''}">${x.band}${open ? ' ●' : ''}</td><td>${x.wspr || ''}</td><td>${x.ft8 || ''}</td><td>${x.ft4 || ''}</td><td>${x.cw || ''}</td>
         <td>${x.stations || ''}</td><td>${x.far_km ? Math.round(x.far_km).toLocaleString() + ' km' + (x.far_call ? ' ' + esc(x.far_call) : '') : ''}</td></tr>`; }).join('');
   } catch (e) { /* rxapp restarting */ }
 }

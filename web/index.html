@@ -76,7 +76,7 @@ const TABS = [
   {id: 'radio', label: 'Radio', src: 'radio.html'},
   {id: 'broadcast', label: 'AM / SW / FM', src: 'broadcast.html'},
   {id: 'ssb', label: 'SSB Voice', src: 'ssb.html'},
-  {id: 'digital', label: 'FT8 / FT4 / WSPR', src: 'ft8.html'},
+  {id: 'digital', label: 'FT8 / FT4 / WSPR / CW', src: 'ft8.html'},
   {id: 'airband', label: 'Airband', src: 'airband.html'},
   {id: 'safety', label: 'Public safety', src: 'safety.html'},
   {id: 'marine', label: 'Maritime', src: 'marine.html'},
@@ -91,7 +91,7 @@ for (const t of TABS) {
   nav.appendChild(a);
 }
 // tabs that were merged: old links still land, on the right page of the merged tab
-const ALIASES = {ft8: ['digital', 'ft8.html?proto=ft8'], ft4: ['digital', 'ft8.html?proto=ft4'], wspr: ['digital', 'wspr.html']};
+const ALIASES = {ft8: ['digital', 'ft8.html?proto=ft8'], ft4: ['digital', 'ft8.html?proto=ft4'], wspr: ['digital', 'wspr.html'], cw: ['digital', 'cw.html']};
 function ensureFrame(id) {
   id = ALIASES[id] ? ALIASES[id][0] : id;
   const t = TABS.find((x) => x.id === id) || TABS[0];

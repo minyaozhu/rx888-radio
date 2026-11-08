@@ -765,3 +765,72 @@ def test_rtp_learns_stereo_payload_types():
     assert h.pt_channels[121] == 2 and h.channels(7) == 2 and h.stereo_packets[7] == 2
     h.learn(7, 120, 6, ts, 480)                # and back to mono, already known
     assert h.channels(7) == 1
+
+
+# ---- CW skimmer -------------------------------------------------------------------------------------------
+def _morse_audio(signals, seconds, rate=48000, noise=0.05, seed=1):
+    """Synthetic band: (audio Hz, wpm, amplitude, text, start s) keyed with 5 ms soft edges, in white noise."""
+    from rxapp.cw import TO_MORSE
+    rng = np.random.default_rng(seed)
+    n = int(seconds * rate)
+    t = np.arange(n) / rate
+    x = rng.normal(0, noise, n)
+    for hz, wpm, amp, text, start in signals:
+        u, runs = 1.2 / wpm, []
+        for w, word in enumerate(text.split(" ")):
+            if w:
+                runs.append((0, 7 * u))
+            for c, ch in enumerate(word):
+                if c:
+                    runs.append((0, 3 * u))
+                for e, el in enumerate(TO_MORSE[ch]):
+                    if e:
+                        runs.append((0, u))
+                    runs.append((1, (u if el == "." else 3 * u) * (1 + rng.normal(0, 0.08))))
+        env = np.concatenate([np.full(int(d * rate), k, float) for k, d in runs])
+        k = np.hanning(int(0.01 * rate)); env = np.convolve(env, k / k.sum(), "same")
+        i0 = int(start * rate); env = env[:n - i0]
+        x[i0:i0 + len(env)] += amp * env * np.sin(2 * np.pi * hz * t[i0:i0 + len(env)])
+    return (x / np.abs(x).max() * 20000).astype(np.int16)
+
+
+def _skim(x, rate=48000):
+    from rxapp.cw import Skimmer
+    sk = Skimmer(rate, 200, rate / 2 - 200)
+    for i in range(0, len(x), rate):
+        sk.feed(x[i:i + rate], i / rate + 1)
+    return {round(sk.hz(t.bin + t.frac)): t for t in list(sk.tones.values()) + sk.ended}
+
+
+def test_cw_skimmer_decodes_several_signals_at_once():
+    x = _morse_audio([(3000, 22, 0.2, "CQ CQ DE K6ABC K6ABC K", 1.0),
+                      (3150, 15, 0.05, "CQ TEST W1AW W1AW TEST", 0.5),       # 150 Hz away, weaker, slower
+                      (9000, 32, 0.02, "VVV DE DL1XYZ TNX FER QSO 73 TU", 2.0)], 26)
+    tones = _skim(x)
+    texts = {hz: t.text for hz, t in tones.items()}
+    near = lambda f: next(t for hz, t in tones.items() if abs(hz - f) < 25)
+    assert "CQ CQ DE K6ABC K6ABC K" in near(3000).text, texts
+    assert "W1AW W1AW TEST" in near(3150).text, texts
+    assert "DL1XYZ TNX FER QSO 73 TU" in near(9000).text, texts
+    assert abs(near(3000).wpm - 22) < 3 and abs(near(3150).wpm - 15) < 2 and abs(near(9000).wpm - 32) < 4
+
+
+def test_cw_skimmer_ignores_noise_and_carriers():
+    x = _morse_audio([], 40, seed=3).astype(float)
+    x += 3000 * np.sin(2 * np.pi * 5000 * np.arange(len(x)) / 48000)
+    tones = _skim(x.astype(np.int16))
+    assert not [t for t in tones.values() if t.chars >= 3], {hz: t.text for hz, t in tones.items()}
+
+
+def test_cw_unit_estimate_and_spots():
+    from rxapp.cw import spots_in, unit_estimate
+    # dots, inner gaps (1), dashes and letter gaps (3), a word gap (7): the unit is 10
+    assert abs(unit_estimate([10, 11, 9, 30, 31, 29, 10, 70, 10, 30]) - 10) < 1.5
+    assert unit_estimate([10, 10]) is None
+    assert spots_in("CQ CQ DE K6ABC K6ABC K") == ["K6ABC"]
+    assert spots_in("TEST W1AW W1AW") == ["W1AW"]
+    assert spots_in("CQ POTA DE VE3/W1XYZ VE3/W1XYZ") == ["VE3/W1XYZ"]
+    assert spots_in("CQ SS N9RV CQ SS N9RV") == ["N9RV"]
+    assert spots_in("CQ AL4A CQ AL4E CQ AL4A") == ["AL4A"]          # AL4E: decoded once, a bust
+    assert spots_in("5NN TU DE 73 EE") == []
+    assert spots_in("GE OM DE DL1XYZ/P DL1XYZ/P") == ["DL1XYZ/P"]

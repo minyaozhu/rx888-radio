@@ -41,6 +41,7 @@ class Channel:
     parked: bool = False            # True: not in radiod (other band selected)
     filter_hz: Optional[tuple] = None  # (low, high) audio passband instead of the preset's
     stereo: bool = False            # WFM: decode FM stereo (two interleaved channels at 48 kHz)
+    fixed_rate: Optional[int] = None  # output sample rate instead of the mode's (CW skimmer: 48 kHz wide USB)
     packets: Optional[int] = None   # radiod's output packet count, for stall detection
     packets_t: Optional[float] = None
     reopens: int = 0
@@ -116,7 +117,7 @@ class Radio:
         preset, rate = MODES[ch.mode]
         if ch.band == "vhf":
             return self.vhf.to_if(ch.freq_hz), MODES[self.vhf.radiod_mode(ch.mode)][0], rate
-        return ch.freq_hz, preset, rate
+        return ch.freq_hz, preset, ch.fixed_rate or rate
 
     async def _open(self, ch):
         freq, preset, rate = self._radiod_params(ch)
@@ -142,7 +143,8 @@ class Radio:
         return [c for c in self.channels.values() if not c.parked]
 
     async def create(self, freq_hz: float, mode: str = "am", label: str = "", kind: str = "listen",
-                     band: Optional[str] = None, filter_hz: Optional[tuple] = None, move_tuner: bool = True) -> Channel:
+                     band: Optional[str] = None, filter_hz: Optional[tuple] = None, move_tuner: bool = True,
+                     rate: Optional[int] = None) -> Channel:
         band = band or self.band
         self._check(freq_hz, mode, band)
         if band == "vhf" and band == self.band and not self.vhf_paused and not self.vhf.in_window(freq_hz):
@@ -152,7 +154,8 @@ class Radio:
                 await self.move_tuner(freq_hz)
         ssrc = secrets.randbelow(0x7FFFFFFF - 1000) + 1000  # stay clear of radiod's static channels
         ch = Channel(ssrc=ssrc, freq_hz=freq_hz, mode=mode, label=label, kind=kind, band=band,
-                     sample_rate=MODES[mode][1] or 48000, parked=True, filter_hz=filter_hz)
+                     sample_rate=rate or MODES[mode][1] or 48000, parked=True, filter_hz=filter_hz,
+                     fixed_rate=rate if band == "hf" else None)
         self.channels[ssrc] = ch
         if band == self.band and not (band == "vhf" and self.vhf_paused) and \
                 not (band == "vhf" and not self.vhf.in_window(freq_hz)):

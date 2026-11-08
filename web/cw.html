@@ -1,0 +1,160 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CW Skimmer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+:root{
+  --bg:#F2F4EE; --panel:#FFFFFF; --ink:#1D2833; --muted:#5A6774; --line:#CBD3D8;
+  --magenta:#A3316F; --green:#2E7B57; --amber:#B26E12; --key:#C2410C;
+  --shadow:0 1px 2px rgba(29,40,51,.08);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme:dark;
+    --bg:#0E151B; --panel:#151F27; --ink:#E4EAEE; --muted:#93A2AE; --line:#2B3843;
+    --magenta:#E07BB2; --green:#6CC99A; --amber:#E3A54B; --key:#FB923C;
+    --shadow:none;
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --bg:#0E151B; --panel:#151F27; --ink:#E4EAEE; --muted:#93A2AE; --line:#2B3843;
+  --magenta:#E07BB2; --green:#6CC99A; --amber:#E3A54B; --key:#FB923C;
+  --shadow:none;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg)}
+body{color:var(--ink);font:15px/1.5 "Barlow",system-ui,-apple-system,"Segoe UI",sans-serif;padding:0 16px}
+.wrap{max-width:1475px;margin:0 auto;padding-block:28px 48px;display:grid;gap:20px}
+header{display:grid;gap:6px}
+.eyebrow{font:600 13px/1 "Barlow Condensed",sans-serif;letter-spacing:.14em;text-transform:uppercase;color:var(--magenta)}
+.eyebrow a{color:inherit}
+h1{font:700 clamp(34px,5vw,54px)/1 "Barlow Condensed","Arial Narrow",sans-serif;letter-spacing:.01em;margin:0}
+.sub{color:var(--muted);max-width:78ch;margin:0}
+.facts{display:flex;flex-wrap:wrap;align-items:center;gap:8px 22px;margin-top:6px;font:500 14px/1.3 "IBM Plex Mono",ui-monospace,monospace}
+.facts span b{font-weight:500;color:var(--muted);margin-right:6px}
+.titlerow{display:flex;flex-wrap:wrap;align-items:center;gap:10px 18px}
+.seg.modes{display:inline-flex;border:1px solid var(--line);border-radius:4px;overflow:hidden}
+.seg.modes a{display:inline-block;padding:9px 18px;color:var(--ink);text-decoration:none;font:600 14px/1 "Barlow Condensed",sans-serif;letter-spacing:.1em;text-transform:uppercase}
+.seg.modes a:hover{background:var(--bg)}
+.seg.modes a.on{background:var(--ink);color:var(--bg)}
+.seg.modes a:focus-visible{outline:2px solid var(--magenta);outline-offset:-2px}
+.live{display:inline-flex;align-items:center;gap:6px;color:var(--green)}
+.live i{width:9px;height:9px;border-radius:50%;background:currentColor;display:inline-block;animation:pulse 1.4s infinite}
+.live.off{color:var(--muted)} .live.off i{animation:none}
+@keyframes pulse{50%{opacity:.25}}
+button{font:600 13px/1 "Barlow Condensed",sans-serif;letter-spacing:.1em;text-transform:uppercase;background:var(--ink);color:var(--bg);border:0;border-radius:4px;padding:8px 12px;cursor:pointer}
+button:disabled{opacity:.45;cursor:default}
+button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid var(--magenta);outline-offset:2px}
+.notice{border-left:3px solid var(--amber);background:var(--panel);padding:8px 12px;margin:0;font-size:14px}
+.main{display:grid;grid-template-columns:minmax(0,1.75fr) minmax(0,1fr);gap:18px;align-items:start}
+@media (max-width:960px){.main{grid-template-columns:1fr}}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:6px;box-shadow:var(--shadow);min-width:0;padding:14px 16px;display:grid;gap:10px}
+h2{font:700 13px/1 "Barlow Condensed",sans-serif;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin:0}
+h2 small{font:400 12px "IBM Plex Mono",monospace;letter-spacing:0;text-transform:none}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chips button{background:transparent;color:var(--ink);border:1px solid var(--line);font:500 12px/1 "IBM Plex Mono",monospace;letter-spacing:0;text-transform:none;padding:6px 8px}
+.chips button b{font-weight:600;color:var(--green);margin-left:5px}
+.chips button.on{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.chips button.on b{color:var(--bg)}
+.chips button.idle{color:var(--muted)}
+/* the signal list: one row per keyed signal, its text growing at the right */
+.sigs{display:grid;gap:0;max-height:640px;overflow:auto;border-top:1px solid var(--line)}
+.sig{display:grid;grid-template-columns:14px 10ch 5ch 5ch minmax(0,1fr);align-items:center;gap:10px;padding:5px 4px;border-bottom:1px solid var(--line);cursor:pointer;font:500 13px/1.35 "IBM Plex Mono",monospace}
+.sig:hover{background:var(--bg)}
+.sig.sel{background:var(--bg);box-shadow:inset 3px 0 0 var(--magenta)}
+.sig .k{width:9px;height:9px;border-radius:50%;background:var(--line)}
+.sig .k.on{background:var(--key);box-shadow:0 0 6px var(--key)}
+.sig .f{font-weight:600;color:#C9A400}
+:root[data-theme="dark"] .sig .f{color:#FFD84A}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .sig .f{color:#FFD84A}}
+.sig .w,.sig .s{color:var(--muted);text-align:right}
+.sig .x{white-space:nowrap;overflow:hidden;direction:rtl;text-align:left}
+.sig .x span{direction:ltr;unicode-bidi:bidi-override}
+.sig.stale{opacity:.55}
+.call{color:var(--magenta);font-weight:600}
+.colhead{display:grid;grid-template-columns:14px 10ch 5ch 5ch minmax(0,1fr);gap:10px;padding:0 4px;font:600 11px "Barlow Condensed",sans-serif;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+.colhead span:nth-child(3),.colhead span:nth-child(4){text-align:right}
+.empty{color:var(--muted);font-size:14px;padding:12px 4px}
+.player{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;font:500 13px "IBM Plex Mono",monospace}
+.player .now{font:600 20px/1 "IBM Plex Mono",monospace;color:#C9A400}
+:root[data-theme="dark"] .player .now{color:#FFD84A}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .player .now{color:#FFD84A}}
+.player input[type=range]{width:110px;accent-color:var(--magenta)}
+.player .meta{color:var(--muted)}
+.tbl{width:100%;border-collapse:collapse;font:500 12px "IBM Plex Mono",monospace}
+.tbl th{font:600 11px "Barlow Condensed",sans-serif;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);text-align:left;padding:4px 6px;border-bottom:1px solid var(--line)}
+.tbl td{padding:4px 6px;border-bottom:1px solid var(--line)}
+.tbl tbody tr{cursor:pointer} .tbl tbody tr:hover td{background:var(--bg)}
+.tbl td.c{color:var(--magenta);font-weight:600}
+.tbl td.m{color:var(--muted)}
+.scroll{max-height:380px;overflow:auto}
+.log{list-style:none;margin:0;padding:0;max-height:420px;overflow:auto;font:400 12.5px/1.45 "IBM Plex Mono",monospace}
+.log li{border-top:1px solid var(--line);padding:5px 2px;cursor:pointer;overflow-wrap:anywhere}
+.log li:hover{background:var(--bg)}
+.log .h{color:var(--muted);margin-right:8px}
+.caveat{color:var(--muted);font-size:13.5px;max-width:110ch;margin:0}
+@media (prefers-reduced-motion: reduce){*{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="eyebrow"><a href="/" target="_top">rxapp</a> · CW · every HF band at once · RX-888</div>
+    <div class="titlerow"><h1>CW Skimmer</h1>
+      <nav class="seg modes" aria-label="Mode"><a href="ft8.html?proto=ft8" data-mode="ft8">FT8</a><a href="ft8.html?proto=ft4" data-mode="ft4">FT4</a><a href="wspr.html" data-mode="wspr">WSPR</a><a href="cw.html" data-mode="cw" class="on" aria-current="page">CW</a></nav></div>
+    <p class="sub">Every Morse signal in the busy bottom 24 kHz of each band, decoded at once: each line is one station, with its speed and its text as it sends. Calls heard after CQ, DE or TEST become spots. Click a line to listen.</p>
+    <div class="facts">
+      <span><b>SKIMMER</b><em id="fMon" class="live off" style="font-style:normal"><i></i>–</em></span>
+      <span><b>ON THE AIR</b><em id="fNow" style="font-style:normal">–</em></span>
+      <span><b>SPOTS (1 H)</b><em id="fSpots" style="font-style:normal">–</em></span>
+      <span><b>STATIONS</b><em id="fSt" style="font-style:normal">–</em></span>
+      <span><button id="monBtn" type="button">…</button></span>
+      <span id="focusBox"></span>
+    </div>
+  </header>
+  <p class="notice" id="notice" style="display:none"></p>
+
+  <div class="main">
+    <section class="panel" aria-label="Signals being decoded">
+      <h2>On the air <small id="bandRange"></small></h2>
+      <div class="chips" id="bands" role="group" aria-label="Band"></div>
+      <div class="colhead"><span></span><span>kHz</span><span>WPM</span><span>SNR</span><span>Text (newest at the right)</span></div>
+      <div class="sigs" id="sigs"></div>
+    </section>
+
+    <div style="display:grid;gap:18px;min-width:0">
+      <section class="panel" aria-label="Listen">
+        <h2>Listen</h2>
+        <div class="player">
+          <span class="now" id="nowFreq">–</span>
+          <span class="meta" id="nowMeta">click a signal</span>
+          <button id="stop" type="button" disabled>Stop</button>
+          <label class="meta">Vol <input id="vol" type="range" min="0" max="2" step="0.05" value="1"></label>
+        </div>
+      </section>
+      <section class="panel" aria-label="Spots">
+        <h2>Spots <small>(calls after CQ / DE / TEST)</small></h2>
+        <div class="scroll"><table class="tbl"><thead><tr><th>UTC</th><th>Band</th><th>kHz</th><th>Call</th><th>Where</th><th>WPM</th><th>SNR</th></tr></thead>
+          <tbody id="spots"></tbody></table></div>
+      </section>
+      <section class="panel" aria-label="Finished transmissions">
+        <h2>Log <small>(finished transmissions)</small></h2>
+        <ul class="log" id="log"></ul>
+      </section>
+    </div>
+  </div>
+
+  <p class="caveat">Each band is one 48 kHz-wide USB channel covering 160 m 1.817–1.841, 80 m 3.515–3.539, 40 m 7.010–7.034, 30 m 10.103–10.127, 20 m 14.010–14.034, 17 m 18.070–18.094, 15 m 21.010–21.034, 12 m 24.890–24.914, 10 m 28.010–28.034 and 6 m 50.080–50.104 MHz (6 m with the 0–64 MHz coverage). Signals closer than about 100 Hz blur into one. The decoder learns each sender's speed from its dots and dashes, so the first few characters can be wrong; machine-sent CW decodes best. The skimmer runs only while the receiver is on its HF input. SNR is the key-down level over the noise in a 47 Hz bin.</p>
+</div>
+<script src="prefixes.js?v=1"></script>
+<script src="audiofocus.js?v=1"></script>
+<script src="cw.js?v=1"></script>
+<script src="focus.js?v=1" data-focus="hf" data-what="the HF input, so CW, FT8, FT4 and WSPR run all the time"></script>
+</body>
+</html>

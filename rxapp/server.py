@@ -28,6 +28,7 @@ from .vhf import WINDOW_HZ
 from .ft8 import FT4, Ft8, conversations
 from .places import HOME_CITY, Geocoder, locate
 from .wspr import WsprMonitor, grid_ll, km_between
+from .cw import CwMonitor
 from .hfgain import GAIN_MAX, SLIDER_MIN, HfGain
 from .jobs import BANDS, Recorder, Scanner
 from .monitor import Monitor
@@ -54,6 +55,7 @@ class State:
     ft8: Ft8
     ft4: Ft8
     wspr: WsprMonitor
+    cw: CwMonitor
     sstv: SstvMonitor
     adsb: AdsbFeed
     geo: Geocoder
@@ -99,6 +101,12 @@ async def lifespan(app):
             await S.wspr.start(RUNTIME.wspr_bands)
         except Exception as e:
             log.warning("could not restart WSPR: %s", e)
+    S.cw = CwMonitor(S.radio, S.rtp, S.store)
+    if RUNTIME.cw_bands:
+        try:
+            await S.cw.start(RUNTIME.cw_bands)
+        except Exception as e:
+            log.warning("could not restart the CW skimmer: %s", e)
     for mon in (S.ft8, S.ft4):           # a monitor that was on: carry on
         if mon.saved_bands:
             try:
@@ -131,6 +139,7 @@ async def lifespan(app):
     await S.ft8.stop(save=False)
     await S.ft4.stop(save=False)
     await S.wspr.stop(save=False)
+    await S.cw.stop(save=False)
     await S.sstv.stop(save=False)
     await S.adsb.stop()
     await S.panels.stop()
@@ -240,6 +249,8 @@ async def set_coverage(body: Coverage):
     for mon in (S.ft8, S.ft4):           # 6 m comes and goes with the coverage
         if mon.running:
             await mon.start(mon.saved_bands)
+    if S.cw.running:
+        await S.cw.start(RUNTIME.cw_bands)
     return await info()
 
 
@@ -350,6 +361,45 @@ async def wspr_spots(since: float = 0, after_id: int = 0, limit: int = 5000):
                          (since, after_id, min(limit, 50000)))
 
 
+@app.get("/api/cw")
+async def cw_info():
+    return S.cw.info()
+
+
+@app.post("/api/cw")
+async def cw_set(body: Ft8Set):
+    try:
+        if body.on:
+            await S.cw.start(body.bands)
+        else:
+            await S.cw.stop()
+    except (ValueError, RuntimeError) as e:
+        raise HTTPException(400, str(e))
+    return S.cw.info()
+
+
+@app.get("/api/cw/live")
+async def cw_live(band: Optional[str] = None):
+    """Signals being decoded now: frequency, speed, SNR and their latest text."""
+    return S.cw.live(band)
+
+
+@app.get("/api/cw/spots")
+async def cw_spots(since: float = 0, after_id: int = 0, limit: int = 2000):
+    """Calls heard after CQ / DE / TEST, newest first."""
+    return S.store.query("SELECT * FROM cw_spots WHERE t > ? AND id > ? ORDER BY t DESC LIMIT ?",
+                         (since, after_id, min(limit, 20000)))
+
+
+@app.get("/api/cw/text")
+async def cw_text(since: float = 0, band: Optional[str] = None, limit: int = 200):
+    """Finished transmissions (a signal's text from its first to its last character), newest first."""
+    sql, args = "SELECT * FROM cw_text WHERE t_end > ?", [since]
+    if band:
+        sql, args = sql + " AND band = ?", args + [band]
+    return S.store.query(sql + " ORDER BY t_end DESC LIMIT ?", args + [min(limit, 5000)])
+
+
 @app.get("/api/propagation")
 async def propagation(minutes: float = 30):
     """Which bands are open now: per band, WSPR spots and FT8/FT4 decodes in the last `minutes`, distinct
@@ -358,7 +408,7 @@ async def propagation(minutes: float = 30):
     me = grid_ll(RUNTIME.qth)
     bands = {}
     def row(b):
-        return bands.setdefault(b, {"band": b, "wspr": 0, "ft8": 0, "ft4": 0, "stations": set(), "far_km": 0, "far_call": None})
+        return bands.setdefault(b, {"band": b, "wspr": 0, "ft8": 0, "ft4": 0, "cw": 0, "stations": set(), "far_km": 0, "far_call": None})
     for r in S.store.query("SELECT band, call, grid, km FROM wspr WHERE t > ?", (t0,)):
         x = row(r["band"]); x["wspr"] += 1; x["stations"].add(r["call"])
         if r["km"] and r["km"] > x["far_km"]:
@@ -373,6 +423,8 @@ async def propagation(minutes: float = 30):
                 d = km_between(me, grid_ll(g))
                 if d and d > x["far_km"]:
                     x["far_km"], x["far_call"] = round(d, 1), r["from_call"]
+    for r in S.store.query("SELECT band, call FROM cw_spots WHERE t > ?", (t0,)):
+        x = row(r["band"]); x["cw"] += 1; x["stations"].add(r["call"])
     out = []
     for x in bands.values():
         x["stations"] = len(x["stations"])
@@ -844,7 +896,7 @@ async def update_channel(ssrc: int, body: ChannelUpdate):
 async def delete_channel(ssrc: int):
     if _channel(ssrc).kind == "watch":
         raise HTTPException(409, "this channel belongs to a watch; delete the watch instead")
-    if _channel(ssrc).kind in ("ft8", "ft4", "wspr"):
+    if _channel(ssrc).kind in ("ft8", "ft4", "wspr", "cw"):
         raise HTTPException(409, f"this channel belongs to the {_channel(ssrc).kind.upper()} monitor; stop it on its tab")
     if _channel(ssrc).kind == "sstv":
         raise HTTPException(409, "this channel belongs to the SSTV monitor; stop it on the SSTV tab")
