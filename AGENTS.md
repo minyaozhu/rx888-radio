@@ -80,6 +80,9 @@ permissions (Input Monitoring, LaunchServices).
 - Every source file starts with `SPDX-License-Identifier: GPL-3.0-or-later` (Python/shell `#`, JS `//`, HTML `<!-- -->`).
 - Pages load scripts as `name.js?v=N`: **bump N** in the HTML when you change the script. HTML and JS are
   served `Cache-Control: no-cache`, but long-open tabs still need a reload.
+- A long operation that finds things one step at a time (scans, checks) streams them: wrap it with `_ndjson(run)` in
+  `server.py` (a `/stream` route; `run(emit)` calls `emit(partial)` per step and returns the final result) and read
+  it with `postStream(url, body, onPartial)` from `web/ndjson.js`, redrawing as partials arrive.
 - A page that plays audio calls `audioFocus.claim(stop)` when it starts and `audioFocus.release()` when it stops
   (`web/audiofocus.js`): one page plays at a time. A page that needs the receiver takes it over (voice focus) only
   when the receiver can't already hear what was picked.

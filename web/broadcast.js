@@ -128,30 +128,44 @@ $('vol').addEventListener('input', () => { if (audio.gain) audio.gain.gain.value
 // ------------------------------------------------------------------ scanning
 const SW_BANDS = () => (S.sw ? S.sw.bands : []);
 function selectedBands() { return [...document.querySelectorAll('#bands input:checked')].map((x) => x.value); }
+// Stations show up as the scan finds them (postStream: ndjson.js), not all at the end: SW band by band, FM
+// tuner window by tuner window (and its stereo check the same way).
 $('scan').addEventListener('click', async () => {
   $('scan').disabled = true;
+  const sec = S.sec;                       // the section being scanned, even if you switch while it runs
   try {
-    if (S.sec === 'sw') {
+    if (sec === 'sw') {
       const bands = selectedBands().length ? selectedBands() : SW_BANDS().map((b) => b.name);
       await ensureInput('sw');
+      let found = 0;
       for (const [k, b] of bands.entries()) {
-        $('scanNote').textContent = `scanning ${b} (${k + 1}/${bands.length})…`;
-        const r = await post(`/api/scan/${b}`, {});
-        for (const h of r.hits) S.hits.sw[Math.round(h.freq_hz / 5000) * 5000] = h.snr_db;
+        $('scanNote').textContent = `scanning ${b} (${k + 1}/${bands.length})… ${found} stations so far`;
+        const add = (hits) => { for (const h of hits) S.hits.sw[Math.round(h.freq_hz / 5000) * 5000] = h.snr_db; draw(); };
+        const r = await postStream(`/api/scan/${b}/stream`, {}, add);
+        add(r.hits); found += r.hits.length;
       }
     } else {
-      await ensureInput(S.sec, 98e6, true);
-      $('scanNote').textContent = S.sec === 'fm' ? 'scanning 88–108 MHz (the tuner steps across the band, ~25 s)…' : 'scanning 530–1700 kHz…';
-      const r = await post(`/api/scan/${S.sec}`, {});
-      S.hits[S.sec] = {};
-      for (const h of r.hits) S.hits[S.sec][Math.round(h.freq_hz)] = h.snr_db;
-      if (S.sec === 'fm' && r.hits.length) {
+      await ensureInput(sec, 98e6, true);
+      const what = sec === 'fm' ? 'scanning 88–108 MHz (the tuner steps across the band, ~25 s)' : 'scanning 530–1700 kHz';
+      const H = S.hits[sec] = {};
+      $('scanNote').textContent = what + '…'; draw();
+      const r = await postStream(`/api/scan/${sec}/stream`, {}, (hits) => {
+        for (const h of hits) { const k = Math.round(h.freq_hz); H[k] = Math.max(H[k] ?? -99, h.snr_db); }
+        $('scanNote').textContent = `${what}… ${Object.keys(H).length} stations so far`;
+        draw();
+      });
+      S.hits[sec] = {};                  // the final list: measured against the whole band's noise floor
+      for (const h of r.hits) S.hits[sec][Math.round(h.freq_hz)] = h.snr_db;
+      draw();
+      if (sec === 'fm' && r.hits.length) {
         $('scanNote').textContent = `checking ${r.hits.length} stations for stereo…`;
-        try { S.stereo = (await post('/api/broadcast/fm/stereo', {freqs_hz: r.hits.map((h) => h.freq_hz)})).known; }
-        catch (e) { /* the scan result stands */ }
+        try {
+          S.stereo = (await postStream('/api/broadcast/fm/stereo/stream', {freqs_hz: r.hits.map((h) => h.freq_hz)},
+            (part) => { S.stereo = {...S.stereo, ...part}; draw(); })).known;
+        } catch (e) { /* the scan result stands */ }
       }
     }
-    S.scanned[S.sec] = Date.now();
+    S.scanned[sec] = Date.now();
     $('scanNote').textContent = `scanned ${new Date().toLocaleTimeString([], {hour12: false})}`;
   } catch (e) { $('scanNote').textContent = 'scan failed: ' + e.message; }
   $('scan').disabled = false;

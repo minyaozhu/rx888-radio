@@ -15,7 +15,7 @@ from typing import Dict, List, Optional
 
 import numpy as np
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -718,6 +718,17 @@ class SsbCheck(BaseModel):
     group: Optional[str] = None          # one group (ham | air | mil | marine), or every listed channel
 
 
+@app.post("/api/ssb/check/stream")
+async def ssb_check_stream(body: SsbCheck):
+    """The channel check as NDJSON: {"partial": [{freq_hz, snr_db}]} per spectrum window, then {"done": result}."""
+    items = [c for c in ssb.channels(CONFIG.max_freq_hz)["channels"]
+             if c["reachable"] and (body.group is None or c["group"] == body.group)]
+
+    async def run(emit):
+        return {"t": time.time(), "results": await ssb.check(S.scanner, items, on_results=emit)}
+    return _ndjson(run)
+
+
 @app.post("/api/ssb/check")
 async def ssb_check(body: SsbCheck):
     """Signal in each listed channel's voice band right now (one spectrum capture per ~430 kHz of channels)."""
@@ -766,6 +777,16 @@ async def fm_stereo_known():
 
 @app.post("/api/broadcast/fm/stereo")
 async def fm_stereo_probe(body: StereoProbe):
+    return await _fm_stereo_run(body)
+
+
+@app.post("/api/broadcast/fm/stereo/stream")
+async def fm_stereo_probe_stream(body: StereoProbe):
+    """The stereo probe as NDJSON: {"partial": {"<kHz>": verdict}} per tuner window, then {"done": result}."""
+    return _ndjson(lambda emit: _fm_stereo_run(body, emit))
+
+
+async def _fm_stereo_run(body: StereoProbe, emit=None):
     if S.radio.band != "vhf":
         raise HTTPException(409, "FM is on the VHF tuner; switch the input to VHF first")
     freqs = sorted({round(f / 1e5) * 1e5 for f in body.freqs_hz if 87.5e6 <= f <= 108.1e6})[:60]
@@ -804,6 +825,8 @@ async def fm_stereo_probe(body: StereoProbe):
                                                       "packets": total, "heard": total > 0}
                     S.rtp.unsubscribe(ch.ssrc, _noop_pcm)
                     await S.radio.remove(ch.ssrc)
+                if emit:
+                    emit({f"{ch.freq_hz / 1e3:.0f}": out[f"{ch.freq_hz / 1e3:.0f}"] for ch in chans})
         finally:
             for ch in [c for c in list(S.radio.channels.values()) if c.kind == "probe"]:
                 S.rtp.unsubscribe(ch.ssrc, _noop_pcm)
@@ -951,6 +974,44 @@ async def scan(band: str, frames: int = 20, min_snr: float = 8.0):
         return await S.scanner.scan(band, frames, min_snr)
     except ValueError as e:
         raise HTTPException(409, str(e))
+
+
+@app.post("/api/scan/{band}/stream")
+async def scan_stream(band: str, frames: int = 20, min_snr: float = 8.0):
+    """The scan as NDJSON: {"partial": [{freq_hz, snr_db}]} as stations are found, then {"done": <the scan result>}
+    (whose hits replace the partial ones: they are measured against the whole band's floor)."""
+    if band not in BANDS:
+        raise HTTPException(404, f"unknown band {band}")
+    return _ndjson(lambda emit: S.scanner.scan(band, frames, min_snr, on_hits=emit))
+
+
+def _ndjson(run):
+    """Stream a long operation: run(emit) is a coroutine that calls emit(x) with each partial result and returns
+    the final one. Lines: {"partial": x} ..., then {"done": result} or {"error": message}. The operation finishes
+    even if the page goes away (a scan stores its result, a tuner sweep puts the tuner back)."""
+    q: asyncio.Queue = asyncio.Queue()
+
+    async def work():
+        try:
+            q.put_nowait({"done": await run(lambda x: q.put_nowait({"partial": x}))})
+        except HTTPException as e:
+            q.put_nowait({"error": e.detail})
+        except (ValueError, RuntimeError, TimeoutError) as e:
+            q.put_nowait({"error": str(e) or type(e).__name__})
+        except Exception as e:
+            log.exception("streamed operation")
+            q.put_nowait({"error": f"internal error: {e}"})
+        finally:
+            q.put_nowait(None)
+
+    task = asyncio.create_task(work())
+
+    async def lines():
+        while (m := await q.get()) is not None:
+            yield json.dumps(m) + "\n"
+        await task
+
+    return StreamingResponse(lines(), media_type="application/x-ndjson", headers={"Cache-Control": "no-cache"})
 
 
 @app.get("/api/scans")

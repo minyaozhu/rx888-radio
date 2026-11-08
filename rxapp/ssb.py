@@ -91,8 +91,9 @@ def passband_snr(freqs: np.ndarray, db: np.ndarray, f: float, mode: str) -> floa
     return float(np.mean(top) - floor)
 
 
-async def check(scanner, items: List[dict], frames: int = 12, bin_hz: float = 250.0) -> List[dict]:
-    """Measure each channel's voice band, capturing as few spectrum windows as cover them all."""
+async def check(scanner, items: List[dict], frames: int = 12, bin_hz: float = 250.0, on_results=None) -> List[dict]:
+    """Measure each channel's voice band, capturing as few spectrum windows as cover them all.
+    on_results(list): each window's channels as soon as they are measured."""
     radio = scanner.spectrum.radio
     if radio.band != "hf":
         raise ValueError("SSB channels are on HF; switch the input to HF first")
@@ -106,8 +107,12 @@ async def check(scanner, items: List[dict], frames: int = 12, bin_hz: float = 25
             group = [x for x in todo[i:] if x["freq_hz"] + 45e3 <= start + span]
             i += len(group)
             freqs, db, _ = await scanner._capture(start + span / 2, bin_hz, frames)
+            new = []
             for x in group:
                 s = passband_snr(freqs, db, x["freq_hz"], x["mode"])
-                out.append({"freq_hz": x["freq_hz"], "snr_db": None if np.isnan(s) else round(s, 1)})
+                new.append({"freq_hz": x["freq_hz"], "snr_db": None if np.isnan(s) else round(s, 1)})
+            out += new
+            if on_results and new:
+                on_results(new)
             await asyncio.sleep(0)
     return out

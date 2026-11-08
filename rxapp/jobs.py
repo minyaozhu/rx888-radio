@@ -105,20 +105,30 @@ class Scanner:
         freqs = center_hz + (np.arange(len(acc)) - len(acc) // 2) * bin_hz
         return freqs, 10 * np.log10(acc / n), n
 
-    async def scan(self, name: str, frames: int = 20, min_snr: float = 8.0):
+    async def scan(self, name: str, frames: int = 20, min_snr: float = 8.0, on_hits=None):
+        """on_hits([{freq_hz, snr_db}]): called as stations are found, window by window (a VHF scan steps the tuner
+        across the band; WWV checks one frequency at a time; an HF band is one capture, so its hits come at once).
+        The returned result is the final word: its floor is the whole band's."""
         band = BANDS[name]
+        emit = (lambda hits: on_hits([{"freq_hz": f, "snr_db": round(s, 1)} for f, s in hits])) if on_hits else None
         radio = self.spectrum.radio
         if band.band != radio.band:
             raise ValueError(f"{name} is a {band.band.upper()} band; switch the input to {band.band.upper()} first")
         async with self.lock:
             if name == "wwv":
-                return await self._scan_wwv(frames)
+                return await self._scan_wwv(frames, emit)
             width = band.stop_hz - band.start_hz
             if band.band == "vhf":
                 if self.spectrum.sweeping:          # the scan needs the tuner
                     await self.spectrum.ensure_live(radio.vhf.center_hz)
                 bin_hz = 2500.0 if band.step_hz >= 100e3 else 500.0
-                freqs, db, n = await self._capture_vhf(band.start_hz, band.stop_hz, bin_hz, frames)
+                def window(f, d):                      # stations in this tuner window, against its own floor
+                    inb = (f >= band.start_hz) & (f <= band.stop_hz)
+                    if emit and inb.any():
+                        fl = float(np.percentile(d[inb], 30))
+                        emit(self._grid_hits(band, f, d, fl, min_snr) if band.step_hz
+                             else self._peak_hits(f, d, inb, fl, min_snr, bin_hz))
+                freqs, db, n = await self._capture_vhf(band.start_hz, band.stop_hz, bin_hz, frames, window)
             else:
                 bin_hz = next(b for b in NICE_BINS if b * self.bins >= width * 1.1)
                 if band.step_hz:
@@ -130,12 +140,14 @@ class Scanner:
             floor = float(np.percentile(db[inband], 30))
             hits = self._grid_hits(band, freqs, db, floor, min_snr) if band.step_hz \
                 else self._peak_hits(freqs, db, inband, floor, min_snr, bin_hz)
+            if emit and band.band == "hf":
+                emit(hits)
             sid = self.store.add_scan(name, band.start_hz, band.stop_hz, band.step_hz, bin_hz, n, floor, hits)
             self.store.event("scan", band=name, stations=len(hits))
             return {"scan_id": sid, "band": name, "mode": band.mode, "floor_db": floor, "bin_hz": bin_hz,
                     "frames": n, "hits": [{"freq_hz": f, "snr_db": round(s, 1)} for f, s in hits]}
 
-    async def _capture_vhf(self, start_hz, stop_hz, bin_hz, frames):
+    async def _capture_vhf(self, start_hz, stop_hz, bin_hz, frames, on_window=None):
         """Step the tuner across [start, stop] and stitch the (un-inverted) IF spectra.
 
         This moves the tuner for every VHF channel, so listening is interrupted for the
@@ -158,6 +170,8 @@ class Scanner:
                 all_f.append(rf[keep][order])
                 all_db.append(db[keep][order])
                 n_min = min(n_min, n)
+                if on_window:
+                    on_window(all_f[-1], all_db[-1])
         finally:
             await radio.move_tuner(home)
         return np.concatenate(all_f), np.concatenate(all_db), n_min
@@ -189,7 +203,7 @@ class Scanner:
                 hits.append((float(round(freqs[i] / 100) * 100), float(db[i] - floor)))
         return sorted(hits, key=lambda h: -h[1])[:60]
 
-    async def _scan_wwv(self, frames):
+    async def _scan_wwv(self, frames, emit=None):
         hits = []
         floors = []
         for f0 in WWV_HZ:
@@ -200,6 +214,8 @@ class Scanner:
             snr = float(db[np.abs(freqs - f0) <= 150].max() - floor)
             floors.append(floor)
             hits.append((f0, snr))
+            if emit:
+                emit([(f0, snr)])
         sid = self.store.add_scan("wwv", WWV_HZ[0], WWV_HZ[-1], 0, 50, frames, float(np.mean(floors)), hits)
         return {"scan_id": sid, "band": "wwv", "mode": "am", "bin_hz": 50, "frames": frames,
                 "hits": [{"freq_hz": f, "snr_db": round(s, 1)} for f, s in hits]}

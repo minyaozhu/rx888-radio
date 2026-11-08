@@ -834,3 +834,30 @@ def test_cw_unit_estimate_and_spots():
     assert spots_in("CQ AL4A CQ AL4E CQ AL4A") == ["AL4A"]          # AL4E: decoded once, a bust
     assert spots_in("5NN TU DE 73 EE") == []
     assert spots_in("GE OM DE DL1XYZ/P DL1XYZ/P") == ["DL1XYZ/P"]
+
+
+def test_ndjson_streams_partials_then_the_result():
+    """Streaming endpoints (scans): one JSON line per partial result, then {"done": ...} or {"error": ...}."""
+    import asyncio
+    import json as _json
+    from rxapp.server import _ndjson
+
+    async def good(emit):
+        for i in range(3):
+            emit([{"freq_hz": 1e6 + i}])
+            await asyncio.sleep(0)
+        return {"hits": 3}
+
+    async def bad(emit):
+        emit([1])
+        raise ValueError("switch the input to HF first")
+
+    async def lines(run):
+        out = []
+        async for chunk in _ndjson(run).body_iterator:
+            out += [_json.loads(x) for x in (chunk if isinstance(chunk, str) else chunk.decode()).splitlines()]
+        return out
+
+    assert asyncio.run(lines(good)) == [{"partial": [{"freq_hz": 1e6}]}, {"partial": [{"freq_hz": 1e6 + 1}]},
+                                        {"partial": [{"freq_hz": 1e6 + 2}]}, {"done": {"hits": 3}}]
+    assert asyncio.run(lines(bad)) == [{"partial": [1]}, {"error": "switch the input to HF first"}]

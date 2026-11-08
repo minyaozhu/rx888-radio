@@ -112,33 +112,43 @@ $('vol').addEventListener('input', () => { if (audio.gain) audio.gain.gain.value
 
 // ------------------------------------------------------------------ scanning
 const selectedBands = () => [...document.querySelectorAll('#bands input:checked')].map((x) => x.value);
+// Results show up as they come in (postStream: ndjson.js): conversations band by band, then the listed
+// channels one spectrum window (~430 kHz of channels) at a time.
 $('scan').addEventListener('click', async () => {
   $('scan').disabled = true;
+  const sec = S.sec;                       // the section being scanned, even if you switch while it runs
   try {
     await ensureHF();
-    if (S.sec === 'ham') {
+    if (sec === 'ham') {
       const all = S.data.ham_bands.map((b) => b.band);
       const bands = (selectedBands().length ? selectedBands() : all).filter((b) => all.includes(b));   // 60 m: channels only
-      const found = [];
+      S.activity = [];
+      draw();
       for (const [k, b] of bands.entries()) {
-        $('scanNote').textContent = `searching ${S.data.ham_bands.find((x) => x.band === b).label} for conversations (${k + 1}/${bands.length})…`;
+        $('scanNote').textContent = `searching ${S.data.ham_bands.find((x) => x.band === b).label} for conversations (${k + 1}/${bands.length})… ${S.activity.length} found so far`;
         try {
-          const r = await post(`/api/scan/${b}?min_snr=8`, {});
+          const r = await postStream(`/api/scan/${b}/stream`, {}, () => {});
           const side = r.mode;
           for (const h of r.hits) {
             // speech energy peaks a few hundred Hz into the voice band: put the dial ~600 Hz the other way
             const dial = Math.round((h.freq_hz + (side === 'usb' ? -600 : 600)) / 100) * 100;
-            found.push({band: b, freq_hz: dial, mode: side, snr: h.snr_db});
+            S.activity.push({band: b, freq_hz: dial, mode: side, snr: h.snr_db});
           }
+          draw();
         } catch (e) { /* a band beyond the coverage */ }
       }
-      S.activity = found;
     }
     $('scanNote').textContent = 'checking the listed channels…';
-    const r = await post('/api/ssb/check', {group: S.sec});
+    let n = 0;
+    const r = await postStream('/api/ssb/check/stream', {group: sec}, (part) => {
+      for (const x of part) S.snr[x.freq_hz] = x.snr_db;
+      n += part.length;
+      $('scanNote').textContent = `checking the listed channels… ${n} measured`;
+      draw();
+    });
     for (const x of r.results) S.snr[x.freq_hz] = x.snr_db;
-    S.scanned[S.sec] = Date.now();
-    $('scanNote').textContent = `scanned ${hms(S.scanned[S.sec])}` + (S.sec === 'ham' ? ` · ${S.activity.length} conversations found` : '');
+    S.scanned[sec] = Date.now();
+    $('scanNote').textContent = `scanned ${hms(S.scanned[sec])}` + (sec === 'ham' ? ` · ${S.activity.length} conversations found` : '');
   } catch (e) { $('scanNote').textContent = 'scan failed: ' + e.message; }
   $('scan').disabled = false;
   draw();
