@@ -173,7 +173,7 @@ contact fonts.googleapis.com), [Leaflet](https://leafletjs.com) (BSD-2-Clause),
 | Source | Terms | How rxapp complies |
 |---|---|---|
 | [OpenStreetMap](https://www.openstreetmap.org/copyright) map tiles | ODbL data; [tile usage policy](https://operations.osmfoundation.org/policies/tiles/) | Attribution on every map; light, interactive use only |
-| [Nominatim](https://nominatim.org) geocoding | [Usage policy](https://operations.osmfoundation.org/policies/nominatim/) | ≤ 1 request/s, identifying User-Agent, results cached, no house numbers |
+| [OpenStreetMap](https://www.openstreetmap.org/copyright) data via a [Geofabrik](https://download.geofabrik.de) extract | ODbL 1.0 | Only to build `rxapp/data/junctions.json` (which streets meet which highway, and where): a derived table kept in the repo with the attribution in its `source` field and `rxapp/junctions.py` |
 | [adsb.fi](https://adsb.fi) open data | Personal, non-commercial use; attribution | Credited on the airband map; ≤ 1 request/s |
 | [EiBi](http://www.eibispace.de) shortwave schedule | Free to use | Downloaded per season into `rxapp_data/eibi/` |
 | Wikipedia, *List of radio stations in the San Francisco Bay Area* | CC BY-SA 4.0 | Only call signs, frequencies, cities and formats (facts) in `rxapp/broadcast.py`, with the source named |

@@ -186,27 +186,49 @@ moves only to a channel keyed for 0.8 s. Maritime has the 3 s hang and 0.8 s min
 - **Digital** (P25/DMR/NXDN) transmissions are recognised by a steady level and a flat spectrum, logged as
   digital and not transcribed. Nothing is decoded.
 - **Transcription** as for airband, with a police/CHP vocabulary hint (10-codes, 11-codes, highways).
-- **Map.** Places named in calls are pinned (last 6 hours, coloured by age): towns from a built-in list of ~80
-  Bay Area towns (shown as a wide circle, since only the town is known), and *highway + cross street* ("southbound
-  680, just north of Capitol Expressway") looked up on OpenStreetMap's Nominatim inside the Bay Area, near the
-  town mentioned or the channel's home city (`rxapp/places.py`). Lookups are cached
-  (`rxapp_data/geocache.json`) and run at most once a second, as Nominatim's policy asks; only road and place
-  names are sent, never house numbers. Approximate: a cross street can be miles long. A small table fixes
-  Whisper's usual misspellings ("capital expressway").
-- **Annotations.** Each call's activity is read from its codes and words (collision and injuries from the
-  11-79…11-83 codes, fatality, pursuit, DUI, fire, BOLO / broadcast, traffic hazard, disabled vehicle, tow, medical,
-  record check, traffic control) and shown as a label on its pin for 2 hours, and in an Activity list that also
-  has the calls without a location (`web/bayps.js`).
+- **Incidents** (`rxapp/incidents.py`, `GET /api/safety/incidents`). Transmissions are grouped into incidents,
+  each with a type, a place, the units on it, a state and a timeline:
+  - *Type* from the radio codes and words: CHP 11-codes (11-79…11-83 collisions by severity, 11-25 hazard,
+    11-26 disabled), vehicle and penal code sections (23152 DUI, 23103 reckless, 23109 speed contest, 20001/20002
+    hit and run, 211, 245, 459, 10851, 5150…) and words ("mattress", "swerving", "all-around fire"). The most
+    serious type seen names the incident. Only the plain transcript is read for this: the reading with the
+    police vocabulary hint invents calls ("Oh." → "BOLO, ambulance, fire.").
+  - *Place*: "southbound 880 just north of Brokaw" is placed where Brokaw Road meets I-880, from a table of every
+    named street meeting each Bay Area highway (`rxapp/junctions.py`, `rxapp/data/junctions.json`, 6,900
+    junctions built from OpenStreetMap). The lookup forgives transcription: a highway number that doesn't meet that
+    street is corrected ("80" → 880, "North 911" → 101, "Northbound Navy" → 880), street names match loosely
+    ("Doherty" → Dougherty Road, "Auto Mall" → Auto Mall Parkway, "Brokaw" → East Brokaw Road), "south of the 101"
+    finds the interchange, and a few highways are known by their street name (CA 262 = Mission Boulevard). A
+    circle shows how sure the place is (about 0.4 km for "at", 1 km for "north of", more for a loose match).
+    Failing that, a town named in the call (town centre, 3 km). House numbers are never used.
+  - *Grouping*: a transmission joins an open incident on the same dispatch system within 2 km of it, or the
+    incident of the unit it starts with ("12-3-45, I'm 97"); a highway number that could be 280 or 880 is read
+    near that unit's incident. A unit sent somewhere new starts a new incident.
+  - *State and timeline*: en route, on scene (97), tow (11-85), ambulance, clear (98), cancelled (10-22); an
+    incident closes when a unit clears it, when it is cancelled, or after 90 minutes without a mention.
+  - *Privacy*: the incident view takes out plates (also spelled phonetically), phone numbers, addresses and names
+    after words like "booked" or "Officer", and does not show a records check's reply at all (name, date of birth,
+    licence, probation). It is rule-based, so a stray surname can still get through; everything stays local.
+  - Measured on a week of recordings (425 transcribed calls): 90 typed, 52 placed at a highway junction (about
+    48 of them right), 82 placed in all.
+- **Map.** Incidents as dots coloured by type, with the confidence circle, a track when the place moves, and a
+  label while open; closed ones fade. Click one (or pick it from the Incidents list) for its timeline: every
+  transmission with its unit, status, type and place, and a play button.
 - **The page** (`safety.html`): live transcript with radio codes explained on hover (common meanings; agencies
-  differ), filters by channel and text, Listen with Follow activity, a per-channel timeline (voice / digital /
-  no speech), and the codes heard. It says when the receiver is away on another window.
+  differ), filters by channel and text, a play button on every line (and *play on* to carry on through the
+  next transmissions), Listen with Follow activity, a per-channel timeline (voice / digital / no speech), the
+  incidents, and the codes heard. It says when the receiver is away on another window.
 - **Retention: 7 days.** The session deletes public-safety recordings and transcript lines older than 7 days
   every hour. They stay in `rxapp_data/` (not in git).
 - Listening to unencrypted public-safety radio is generally legal in the US; publishing or acting on what you
   hear is restricted. Keep it on this machine.
 
-API: `GET /api/safety?session=`, `GET /api/safety/transmissions?session=&after=`, `GET /api/safety/places?session=`,
+API: `GET /api/safety?session=`, `GET /api/safety/transmissions?session=&after=`, `GET /api/safety/incidents?session=`,
 `GET /api/safety/clip/{session}/{wav}`.
+
+The junction table is rebuilt from an OpenStreetMap extract (a minute, no server involved):
+`curl -LO https://download.geofabrik.de/north-america/us/california/norcal-latest.osm.pbf` (655 MB; keep it in
+`rxapp_data/osm/`), `pip install osmium`, then `python -m rxapp.junctions --pbf rxapp_data/osm/norcal-latest.osm.pbf`.
 
 ## Controller (keys, macro pads, the Ulanzi Dial)
 
@@ -385,8 +407,8 @@ stream; the page's view is untouched):
   it), ringed and labelled, and the transmission's detail shows where it really was when it talked.
 - **Listen**: *Follow activity* (default) stays on a channel while it is active and jumps to whoever is on
   the air once it has been quiet for 0.8 s; or *Loudest*, or one frequency.
-- Timeline with one lane per flight, scrub/Play, and the transcript log; click a call to read it (both
-  readings) and play its clip. Earlier sessions are in the *Session* menu.
+- Timeline with one lane per flight, scrub/Play, and the transcript log with a play button on every line
+  (*play on* carries on through the next transmissions); click a call to read it (both readings). Earlier sessions are in the *Session* menu.
 
 API: `GET /api/adsb?since=` (aircraft and track points newer than `since`), `GET /api/airband?session=` (status, sessions), `GET /api/airband/transmissions?session=&after=`,
 `GET /api/airband/clip/{session}/{wav}`.

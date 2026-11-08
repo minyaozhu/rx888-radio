@@ -26,7 +26,8 @@ from . import ssb
 from .panels import PanelHub
 from .vhf import WINDOW_HZ
 from .ft8 import FT4, Ft8, conversations
-from .places import HOME_CITY, Geocoder, locate
+from .incidents import build as build_incidents
+from .junctions import Junctions
 from .wspr import WsprMonitor, grid_ll, km_between
 from .cw import CwMonitor
 from .hfgain import GAIN_MAX, SLIDER_MIN, HfGain
@@ -58,7 +59,7 @@ class State:
     cw: CwMonitor
     sstv: SstvMonitor
     adsb: AdsbFeed
-    geo: Geocoder
+    jx: Junctions
     recorders: Dict[int, Recorder] = {}
 
 
@@ -113,7 +114,7 @@ async def lifespan(app):
                 await mon.start(mon.saved_bands)
             except Exception as e:
                 log.warning("could not restart %s: %s", mon.proto.name, e)
-    S.geo = Geocoder(CONFIG.data_dir / "geocache.json")
+    S.jx = Junctions()                  # highway junctions for placing public-safety calls (offline table)
     S.adsb = AdsbFeed()
     S.adsb.start()                      # fetches only while a page is asking for aircraft
     S.sstv = SstvMonitor(S.radio, S.rtp, S.store)
@@ -634,16 +635,21 @@ async def aprs_packets(session: Optional[str] = None, limit: int = 300):
     return list(reversed(_jsonl(d / "packets.jsonl")[-min(limit, 5000):]))
 
 
-@app.get("/api/safety/places")
-async def safety_places(session: Optional[str] = None, after: int = -1):
-    """Places mentioned in public-safety transmissions (towns; highway + cross street via OpenStreetMap),
-    with coordinates once looked up. Transmissions without a place are left out."""
-    out = []
-    for r in _session_transmissions(SAFETY_DIR, session, after):
-        places = locate(r, S.geo, HOME_CITY.get(round((r["freq_hz"] or 0) / 1000) * 1000))
-        if places:
-            out.append({"i": r["i"], "t0": r["t0"], "freq_hz": r["freq_hz"], "text": r["text"], "places": places})
-    return out
+_INCIDENTS: Dict[tuple, list] = {}
+
+
+@app.get("/api/safety/incidents")
+async def safety_incidents(session: Optional[str] = None):
+    """Public-safety incidents in a session: transmissions grouped by place, unit and type, each with its type,
+    place (a highway junction or a town), track, units, state (open / closed: cleared, cancelled, quiet) and a
+    timeline of its transmissions (plates, phone numbers, addresses and names taken out). See rxapp/incidents.py."""
+    info = _session_info(SAFETY_DIR, session)
+    recs = _session_transmissions(SAFETY_DIR, info["session"], -1)
+    key = (info["session"], len(recs), recs[-1].get("text") if recs else None, int(time.time() // 60) if info["live"] else 0)
+    if key not in _INCIDENTS:
+        _INCIDENTS.clear()
+        _INCIDENTS[key] = await asyncio.to_thread(build_incidents, recs, S.jx, time.time() if info["live"] else None)
+    return {"session": info["session"], "junctions": bool(S.jx), "incidents": _INCIDENTS[key]}
 
 
 # ---------------------------------------------------------------- receiver focus (voice_session.py reads this)

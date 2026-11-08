@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Bay Public Safety, Live: voice_session.py's public-safety transmissions as a live transcript, a
-// per-channel timeline and live audio (follow whoever is talking).
+// per-channel timeline, live audio (follow whoever is talking) and incidents on a map, each with its timeline.
 'use strict';
 
 // Refill a <select> only when its options change, and never while it is open (focused): the pages redraw
@@ -26,7 +26,14 @@ const mhz = (f) => (f / 1e6).toFixed(4);
 const esc = (x) => String(x ?? '').replace(/[&<>"]/g, (c) => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'})[c]);
 const chName = (f) => `${mhz(f)}${psLabel(f) ? ' ' + psLabel(f) : ''}`;
 
-const S = {session: null, recs: [], after: -1, status: {}, live: false, sel: null, playing: null};
+const S = {session: null, recs: [], after: -1, status: {}, live: false, sel: null};
+const clips = clipPlayer({
+  url: (r) => `/api/safety/clip/${S.session}/${r.clip}`,
+  next: (r) => S.recs.find((x) => x.t0 > r.t0 && visible(x)) || null,      // play on: the next one in time
+  onStart: () => listenOff(),
+  list: '#log, #incTl',
+  onState: (r) => { $('clip').textContent = r && S.sel && r.i === S.sel.i ? 'Stop' : 'Play clip'; },
+});
 
 // text with radio codes marked and explained on hover
 function marked(text) {
@@ -47,13 +54,20 @@ function visible(r) {
 }
 function drawLog() {
   const items = S.recs.filter(visible).slice(-400).reverse();
-  $('log').innerHTML = items.map((r) => `<li data-i="${r.i}" class="${S.sel === r ? 'sel' : ''}">
+  $('log').innerHTML = items.map((r) => `<li data-i="${r.i}" class="${S.sel === r ? 'sel' : ''}">${clips.button(r)}
       <span class="t">${hms(r.t0)}</span>
       <span class="tx">${r.kind === 'digital' ? '<span class="dig">digital transmission (not decoded)</span>' : r.text ? marked(r.text) : '<span class="ns">no speech recognised</span>'}</span>
       <span class="ch">${esc(chName(r.freq_hz))} · ${(r.t1 - r.t0).toFixed(1)} s</span></li>`).join('')
     || '<li><span class="t">—</span><span class="tx ns">Nothing yet. The receiver also spends time on the airband, so public-safety calls arrive in bursts.</span></li>';
 }
-$('log').addEventListener('click', (e) => { const li = e.target.closest('li[data-i]'); if (li) select(S.recs.find((r) => r.i === +li.dataset.i), true); });
+$('log').addEventListener('click', (e) => {
+  const li = e.target.closest('li[data-i]');
+  if (!li) return;
+  const r = S.recs.find((x) => x.i === +li.dataset.i);
+  if (e.target.closest('.clipplay')) { clips.toggle(r); if (S.sel !== r) select(r, false); return; }
+  select(r, true);
+});
+$('playOn').addEventListener('change', (e) => { clips.playOn = e.target.checked; });
 for (const id of ['fCh', 'fDigital', 'fEmpty']) $(id).addEventListener('change', () => { $(id).blur(); drawLog(); });
 $('fFind').addEventListener('input', drawLog);
 
@@ -68,20 +82,16 @@ function select(r, pan) {
   const codes = [...new Map([...psCodes(r.text), ...psCodes(r.text_atc)].map((c) => [c[1], c])).values()];
   $('dMeta').textContent = `${(r.t1 - r.t0).toFixed(1)} s · carrier +${r.peak_db} dB over the floor`
     + (codes.length ? ' · ' + codes.map(([, k, m]) => `${k} = ${m}`).join(', ') : '');
-  const pl = (P.byI.get(r.i) || {places: []}).places;
-  if (pl.length) $('dMeta').textContent += ` · places: ${pl.map((p) => placeText(p) + (p.lat == null ? (p.pending ? ' (looking up)' : ' (not found)') : '')).join('; ')}`;
-  const pts = pl.filter((p) => p.lat != null).map((p) => [p.lat, p.lon]);
-  if (pan && pts.length) map.setView(pts[0], Math.max(map.getZoom(), 11));
+  const inc = I.byI.get(r.i);
+  if (inc) {
+    $('dMeta').textContent += ` · incident: ${inc.label}${inc.place ? ' at ' + inc.place.label : ''}`;
+    if (I.sel !== inc.id) selectIncident(inc.id, pan);
+  }
   $('clip').disabled = false;
-  document.querySelectorAll('#log li').forEach((li) => li.classList.toggle('sel', +li.dataset.i === r.i));
-  drawPins();
+  $('clip').textContent = clips.playing && clips.playing.i === r.i ? 'Stop' : 'Play clip';
+  document.querySelectorAll('#log li, #incTl li').forEach((li) => li.classList.toggle('sel', +li.dataset.i === r.i));
 }
-$('clip').addEventListener('click', () => {
-  if (!S.sel) return;
-  if (S.playing) S.playing.pause();
-  S.playing = new Audio(`/api/safety/clip/${S.session}/${S.sel.clip}`);
-  S.playing.play();
-});
+$('clip').addEventListener('click', () => { if (S.sel) clips.toggle(S.sel); });
 
 function drawCodes() {
   const seen = new Map();
@@ -208,7 +218,7 @@ function listenOff() {                    // another page started playing
 }
 $('listen').addEventListener('click', () => {
   audio.on = !audio.on;
-  if (audio.on) audioFocus.claim(listenOff); else audioFocus.release();
+  if (audio.on) { clips.stop(); audioFocus.claim(listenOff); } else audioFocus.release();
   if (audio.on) {
     if (!audio.ctx) { audio.ctx = new AudioContext(); audio.gain = audio.ctx.createGain(); audio.gain.connect(audio.ctx.destination); }
     audio.ctx.resume(); audio.gain.gain.value = +$('vol').value;
@@ -251,78 +261,133 @@ $('chans').addEventListener('click', (e) => {
   drawChans();
 });
 
-// ------------------------------------------------------------------ map: places named in calls
-// Towns from a built-in list (wide circles: only the town is known); highway + cross street looked up on
-// OpenStreetMap by rxapp (small dots, still approximate). Colour = age; click a pin to read the call.
+// ------------------------------------------------------------------ incidents (rxapp/incidents.py)
+// Transmissions grouped into incidents: a type from the radio codes and words, a place (the highway junction the
+// call names, from OpenStreetMap, or a town), a track when it moves, the units on it, and a timeline. Open
+// incidents are bright and labelled; closed ones (cleared, cancelled, or quiet for 90 minutes) are faded.
 const map = L.map('map', {zoomSnap: 0.25}).setView([37.42, -121.98], 9.5);
-L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom: 16,
+L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom: 17,
   attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'}).addTo(map);
 for (const ms of [200, 800, 2000]) setTimeout(() => map.invalidateSize(), ms);
 new ResizeObserver(() => map.invalidateSize()).observe($('map'));
-const pinLayer = L.layerGroup().addTo(map);
-const P = {items: [], byI: new Map()};
-const ageColor = (t) => { const a = Date.now() / 1000 - t; return a < 600 ? '#D64545' : a < 3600 ? '#E0A030' : '#8A8F98'; };
-const placeText = (p) => p.kind === 'city' ? p.name.replace(/\b\w/g, (c) => c.toUpperCase())
-  : `${p.dir ? p.dir + 'bound ' : ''}${p.hwy} ${p.rel} ${p.cross}`.replace(/\b\w/g, (c) => c.toUpperCase());
+const incLayer = L.layerGroup().addTo(map);
 
-async function pollPlaces() {
+const CAT = {
+  help: ['#B3261E', 'Officer needs help'], collision: ['#D64545', 'Collision'], fire: ['#E8701A', 'Fire'],
+  pursuit: ['#7A1F5C', 'Pursuit'], crime: ['#2E5FA8', 'Crime'], dui: ['#8E44AD', 'DUI / reckless'],
+  medical: ['#2E8B57', 'Medical'], pedestrian: ['#C2185B', 'Pedestrian'], hazard: ['#B8941F', 'Road hazard'],
+  disabled: ['#6F7782', 'Disabled vehicle'], stop: ['#4F7CAC', 'Traffic stop'], other: ['#8A8F98', 'Other call'],
+};
+const STATUS = {enroute: 'en route', onscene: 'on scene', tow: 'tow', ambulance: 'ambulance', clear: 'clear',
+                cancel: 'cancelled', fire_dept: 'fire notified'};
+const CLOSED = {cleared: 'cleared', cancelled: 'cancelled', quiet: 'quiet 90 min'};
+const I = {list: [], byId: new Map(), byI: new Map(), sel: null, junctions: true};
+const hm = (t) => hms(t).slice(0, 5);
+const catColor = (c) => (CAT[c] || CAT.other)[0];
+
+async function pollIncidents() {
   if (!S.session) return;
   try {
-    P.items = await api(`/api/safety/places?session=${S.session}`);
-    P.byI = new Map(P.items.map((x) => [x.i, x]));
-    drawPins(); drawActs();
-    const n = P.items.reduce((a, x) => a + x.places.filter((p) => p.lat != null).length, 0);
-    const pend = P.items.reduce((a, x) => a + x.places.filter((p) => p.pending).length, 0);
-    $('mapStatus').textContent = `${n} places${pend ? ` · ${pend} being looked up` : ''}`;
-  } catch (e) { $('mapStatus').textContent = 'places: ' + e.message; }
+    const res = await api(`/api/safety/incidents?session=${S.session}`);
+    if (res.session !== S.session) return;
+    I.list = res.incidents; I.junctions = res.junctions;
+    I.byId = new Map(I.list.map((x) => [x.id, x]));
+    I.byI = new Map(I.list.flatMap((x) => x.entries.map((e) => [e.i, x])));
+    drawIncidents();
+    if (I.sel) drawIncident();
+  } catch (e) { $('mapStatus').textContent = 'incidents: ' + e.message; }
 }
 
-function drawPins() {
-  pinLayer.clearLayers();
-  const cut = Date.now() / 1000 - 6 * 3600;                       // the last 6 hours
-  const selI = S.sel ? S.sel.i : null;
-  for (const x of [...P.items].sort((a, b) => a.t0 - b.t0)) {
-    if (x.t0 < cut) continue;
-    for (const p of x.places) {
-      if (p.lat == null) continue;
-      const col = ageColor(x.t0), sel = x.i === selI;
-      const tip = `<b>${hms(x.t0)}</b> · ${esc(chName(x.freq_hz))}<br><b>${esc(placeText(p))}</b><br>${x.text ? '“' + marked(x.text) + '”' : ''}`;
-      const m = p.kind === 'city'
-        ? L.circle([p.lat, p.lon], {radius: 2500, color: col, weight: sel ? 3 : 1.5, fillOpacity: sel ? 0.25 : 0.08, opacity: sel ? 1 : 0.7})
-        : L.circleMarker([p.lat, p.lon], {radius: sel ? 9 : 6, color: sel ? '#A3316F' : '#fff', weight: 2, fillColor: col, fillOpacity: 0.95});
-      m.bindTooltip(tip, {className: 'pin-tip', direction: 'top', sticky: p.kind === 'city'})
-        .on('click', () => { const r = S.recs.find((y) => y.i === x.i); if (r) select(r, true); })
-        .addTo(pinLayer);
-      // annotation: what happened there, kept on screen for the last 2 hours
-      if (Date.now() / 1000 - x.t0 < 2 * 3600 || sel) {
-        const act = psActivity(x.text, (S.recs.find((y) => y.i === x.i) || {}).text_atc);
-        const lab = L.tooltip({permanent: true, direction: 'right', offset: p.kind === 'city' ? [0, 0] : [8, 0],
-                               className: 'pin-lab' + (Date.now() / 1000 - x.t0 > 3600 ? ' old' : '')})
-          .setLatLng([p.lat, p.lon])
-          .setContent(`<b>${hms(x.t0).slice(0, 5)}</b> ${esc(act || 'Call')}${p.kind === 'road' ? '<br>' + esc(placeText(p)) : ''}`);
-        pinLayer.addLayer(lab);
-      }
+function shown() {
+  const h = $('incWin').value;
+  const ref = S.live ? Date.now() / 1000 : Math.max(0, ...I.list.map((x) => x.t1));
+  return I.list.filter((x) => h === 'all' || x.t1 >= ref - +h * 3600 || x.id === I.sel);
+}
+
+function drawIncidents() {
+  const xs = shown();
+  incLayer.clearLayers();
+  for (const x of [...xs].sort((a, b) => (a.state === 'open') - (b.state === 'open') || a.t1 - b.t1)) {
+    if (!x.place) continue;
+    const col = catColor(x.cat), open = x.state === 'open', sel = x.id === I.sel;
+    const ll = [x.place.lat, x.place.lon];
+    L.circle(ll, {radius: x.place.radius_km * 1000, color: col, weight: sel ? 2 : 1, opacity: open ? 0.8 : 0.4,
+                  fillOpacity: open ? 0.12 : 0.04, dashArray: open ? null : '4 4', interactive: false}).addTo(incLayer);
+    if (x.track.length > 1) {
+      L.polyline(x.track.map((p) => [p.lat, p.lon]), {color: col, weight: sel ? 3 : 2, opacity: open ? 0.8 : 0.4, dashArray: '2 6'}).addTo(incLayer);
+      for (const p of x.track.slice(0, -1)) L.circleMarker([p.lat, p.lon], {radius: 3, color: col, weight: 1, fillColor: col, fillOpacity: 0.6, interactive: false}).addTo(incLayer);
+    }
+    const m = L.circleMarker(ll, {radius: sel ? 10 : 7, color: sel ? 'var(--ink)' : '#fff', weight: sel ? 3 : 2,
+                                  fillColor: col, fillOpacity: open ? 0.95 : 0.45, opacity: open || sel ? 1 : 0.6});
+    m.bindTooltip(`<b>${esc(x.label)}</b><br>${esc(x.place.label)}<br>${hm(x.t0)}–${hm(x.t1)} · ${x.n} transmission${x.n > 1 ? 's' : ''} · ${open ? 'open' : 'closed (' + (CLOSED[x.closed_by] || x.closed_by) + ')'}`,
+                  {className: 'pin-tip', direction: 'top'})
+      .on('click', () => selectIncident(x.id, false)).addTo(incLayer);
+    if (open || sel) {
+      L.tooltip({permanent: true, direction: 'right', offset: [9, 0], className: 'pin-lab' + (open ? '' : ' old')})
+        .setLatLng(ll).setContent(`<b style="color:${col}">${hm(x.t0)}</b> ${esc(x.label)}<br>${esc(x.place.label)}`).addTo(incLayer);
     }
   }
+  const nOpen = xs.filter((x) => x.state === 'open').length, nMap = xs.filter((x) => x.place).length;
+  $('mapStatus').textContent = I.junctions ? `${xs.length} incidents · ${nOpen} open · ${nMap} on the map`
+    : 'no junction table: run python -m rxapp.junctions --pbf <extract>';
+  const cats = [...new Set(I.list.map((x) => x.cat))];
+  $('incLegend').innerHTML = Object.entries(CAT).filter(([k]) => cats.includes(k))
+    .map(([, [c, n]]) => `<span><i style="background:${c}"></i>${esc(n)}</span>`).join('');
+  const rows = [...xs].sort((a, b) => b.t1 - a.t1).slice(0, 80);
+  setHTML($('incs'), rows.map((x) => `<li data-id="${esc(x.id)}" class="${x.id === I.sel ? 'sel' : ''} ${x.state}">
+      <span class="t">${hm(x.t0)}</span>
+      <span class="a"><i style="background:${catColor(x.cat)}"></i>${esc(x.label)}</span>
+      <span class="s">${x.state === 'open' ? 'open' : esc(CLOSED[x.closed_by] || 'closed')}</span>
+      <span class="w">${esc(x.place ? x.place.label : 'no location heard')} · ${x.n} tx${x.units.length ? ' · ' + x.units.length + ' unit' + (x.units.length > 1 ? 's' : '') : ''}</span></li>`).join('')
+    || '<li><span class="t">—</span><span class="w">No incidents recognised in this window yet.</span></li>');
+  $('incCount').textContent = xs.length ? `· ${xs.length}` : '';
+}
+function setHTML(node, html) { if (node.dataset.html !== html) { node.innerHTML = html; node.dataset.html = html; } }
+
+function selectIncident(id, pan) {
+  I.sel = id;
+  drawIncidents(); drawIncident();
+  const x = I.byId.get(id);
+  if (pan && x && x.place) {
+    const pts = x.track.length > 1 ? x.track.map((p) => [p.lat, p.lon]) : [[x.place.lat, x.place.lon]];
+    if (pts.length > 1) map.fitBounds(pts, {padding: [40, 40], maxZoom: 14});
+    else map.setView(pts[0], Math.max(map.getZoom(), 12));
+  }
 }
 
-// ------------------------------------------------------------------ activity list (with or without a location)
-function drawActs() {
-  const cut = Date.now() / 1000 - 2 * 3600;
-  const items = [];
-  for (const r of S.recs) {
-    if (r.t0 < cut || r.kind === 'digital' || !r.text) continue;
-    const act = psActivity(r.text, r.text_atc);
-    const pl = (P.byI.get(r.i) || {places: []}).places;
-    if (!act && !pl.length) continue;
-    items.push({r, act, where: pl.length ? pl.map(placeText).join('; ') : 'no location given'});
-  }
-  $('actCount').textContent = items.length ? `· ${items.length} in the last 2 h` : '';
-  $('acts').innerHTML = items.reverse().slice(0, 60).map((x) => `<li data-i="${x.r.i}"><span class="t">${hms(x.r.t0).slice(0, 5)}</span>
-      <span class="a">${esc(x.act || 'Call')}</span><span class="w">${esc(x.where)} · ${esc(chName(x.r.freq_hz))}</span></li>`).join('')
-    || '<li><span class="t">—</span><span class="w">Nothing recognisable in the last 2 hours.</span></li>';
+function drawIncident() {
+  const x = I.byId.get(I.sel);
+  $('incBox').hidden = !x;
+  if (!x) return;
+  const col = catColor(x.cat);
+  $('incHead').innerHTML = `<span class="dtime">${hm(x.t0)}–${hm(x.t1)}</span>
+    <span class="dflight" style="color:${col}">${esc(x.label)}</span>
+    <span class="chip" style="color:${x.state === 'open' ? col : 'var(--muted)'}">${x.state === 'open' ? 'open' : 'closed · ' + esc(CLOSED[x.closed_by] || '')}</span>`;
+  const other = x.kinds.filter((k) => k !== x.label);
+  $('incMeta').textContent = [x.place ? x.place.label + (x.place.kind === 'city' ? ' (town only)' : ` (± ${x.place.radius_km} km)`) : 'no location heard',
+    x.units.length ? 'units ' + x.units.join(', ') : '', x.freqs.map((f) => chName(f)).join(', '),
+    other.length ? 'also: ' + other.join(', ') : ''].filter(Boolean).join(' · ');
+  const steps = x.status.filter((s) => STATUS[s]).map((s) => STATUS[s]);
+  $('incSteps').innerHTML = ['heard', ...steps].map((s) => `<span>${esc(s)}</span>`).join('<i>›</i>');
+  setHTML($('incTl'), x.entries.map((e) => {
+    const r = S.recs.find((y) => y.i === e.i);
+    return `<li data-i="${e.i}" class="${S.sel && S.sel.i === e.i ? 'sel' : ''}">${r ? clips.button(r) : '<span></span>'}
+      <span class="t">${hms(e.t0)}</span>
+      <span class="tx">${e.unit ? `<b>${esc(e.unit)}</b> ` : ''}${esc(e.text)}</span>
+      <span class="ch">${[...e.status.filter((s) => STATUS[s]).map((s) => `<em>${STATUS[s]}</em>`), ...e.kinds.map(esc),
+        e.place ? '📍 ' + esc(e.place) : ''].filter(Boolean).join(' · ')}</span></li>`;
+  }).join(''));
 }
-$('acts').addEventListener('click', (e) => { const li = e.target.closest('li[data-i]'); if (li) select(S.recs.find((r) => r.i === +li.dataset.i), true); });
+$('incs').addEventListener('click', (e) => { const li = e.target.closest('li[data-id]'); if (li) selectIncident(li.dataset.id, true); });
+$('incTl').addEventListener('click', (e) => {
+  const li = e.target.closest('li[data-i]');
+  const r = li && S.recs.find((x) => x.i === +li.dataset.i);
+  if (!r) return;
+  if (e.target.closest('.clipplay')) { clips.toggle(r); return; }
+  select(r, false);
+});
+$('incClose').addEventListener('click', () => { I.sel = null; drawIncidents(); drawIncident(); });
+$('incWin').addEventListener('change', () => { $('incWin').blur(); drawIncidents(); });
 
 // ------------------------------------------------------------------ data
 async function loadSession(name) {
@@ -379,12 +444,12 @@ async function poll(full) {
       const freqs = [...new Set(S.recs.map((r) => Math.round(r.freq_hz)))].sort((a, b) => a - b);
       $('nCh').textContent = freqs.length;
       setOptions($('fCh'), '<option value="">all channels</option>' + freqs.map((f) => `<option value="${f}">${esc(chName(f))}</option>`).join(''));
-      drawLog(); drawCodes(); drawActs();
+      drawLog(); drawCodes();
     }
     followTick(); drawChans(); drawTimeline();
   } catch (e) {
     $('log').innerHTML = `<li><span class="t">—</span><span class="tx ns">No public-safety session yet (${esc(e.message)}). Start voice_session.py with a safety window.</span></li>`;
   }
 }
-$('session').addEventListener('change', () => loadSession($('session').value).then(pollPlaces));
-loadSession().catch(() => poll(true)).finally(() => { setInterval(poll, 2000); pollPlaces(); setInterval(pollPlaces, 8000); });
+$('session').addEventListener('change', () => { I.sel = null; I.list = []; drawIncident(); loadSession($('session').value).then(pollIncidents); });
+loadSession().catch(() => poll(true)).finally(() => { setInterval(poll, 2000); pollIncidents(); setInterval(pollIncidents, 8000); });

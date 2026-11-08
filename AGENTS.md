@@ -65,12 +65,14 @@ permissions (Input Monitoring, LaunchServices).
 | `rxapp/spectrum.py`, `panels.py` | Display spectrum; the Radio tab's 2×2 panel feeds (`/ws/panels`) |
 | `rxapp/jobs.py`, `monitor.py` | Band scanner, recorder, scheduled scans and watches |
 | `rxapp/ft8.py`, `wspr.py`, `cw.py`, `sstvmon.py` | Server-side digital-mode monitors (cw.py: its own Morse skimmer) |
-| `rxapp/broadcast.py`, `ssb.py`, `places.py`, `adsb.py`, `ais.py`, `aprs.py` | Station lists, EiBi, geocoding, feeds |
+| `rxapp/broadcast.py`, `ssb.py`, `adsb.py`, `ais.py`, `aprs.py` | Station lists, EiBi, feeds |
+| `rxapp/incidents.py`, `junctions.py`, `places.py` | Public-safety incidents: type, place, grouping, redaction; highway-junction table (`rxapp/data/junctions.json`, from OpenStreetMap); towns |
 | `rxapp/supervisor.py` | Restarts radiod, recreates channels |
 | `voice_session.py` | Window rotation, carrier detection, transcription; heals after an rxapp restart |
 | `web/index.html` + `controller.js` | Tab shell; keyboard / dial controller |
 | `web/radio.html`, `app.js`, `panels.js` | Radio tab |
 | `web/worldmap.js` | The FT8 map style (d3 world map, band-coloured stations) shared by WSPR and CW |
+| `web/clips.js` | Play buttons on transcript lines (airband, public safety), one sound at a time with `audiofocus.js` |
 | `web/*.html` + `*.js` | One page per tab (broadcast, ssb, ft8 + ft8viz, wspr, cw, airband, safety, marine, aprs, sstv) |
 | `tests/test_rxapp.py` | Unit tests (pure functions, no radio) |
 | `ka9q/` | macOS patches, radiod configs (`@ROOT@` filled into `ka9q/state/` at run time) |

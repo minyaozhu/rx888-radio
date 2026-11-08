@@ -861,3 +861,96 @@ def test_ndjson_streams_partials_then_the_result():
     assert asyncio.run(lines(good)) == [{"partial": [{"freq_hz": 1e6}]}, {"partial": [{"freq_hz": 1e6 + 1}]},
                                         {"partial": [{"freq_hz": 1e6 + 2}]}, {"done": {"hits": 3}}]
     assert asyncio.run(lines(bad)) == [{"partial": [1]}, {"error": "switch the input to HF first"}]
+
+
+# ------------------------------------------------------------------ public-safety incidents
+
+def _jx(tmp_path):
+    from rxapp.junctions import Junctions
+    import json
+    p = tmp_path / "j.json"
+    p.write_text(json.dumps({"highways": {
+        "880": [{"name": "Brokaw Road", "pts": [[37.375, -121.905]]},
+                {"name": "Auto Mall Parkway", "pts": [[37.505, -121.965]]},
+                {"name": "Stevenson Boulevard", "pts": [[37.535, -121.985]]}],
+        "580": [{"name": "Dougherty Road", "pts": [[37.705, -121.925]]},
+                {"name": "1st Street", "pts": [[37.700, -121.760]]}],
+        "101": [{"name": "Oakland Road", "pts": [[37.370, -121.895]]},
+                {"name": "Poplar Avenue", "pts": [[37.575, -122.320]]}]}}))
+    return Junctions(p)
+
+
+def test_incident_kinds_from_codes_and_words():
+    from rxapp.incidents import kind
+    k = lambda t: [x["label"] for x in kind(t)]
+    assert k("all units, a 23152 heading south on 101 near Poplar") == ["DUI"]
+    assert k("new call, an 11-83 on southbound 880") == ["Collision"]
+    assert k("1180 northbound 680")[0] == "Collision, major injuries"
+    assert k("11-25 for debris on westbound 92") == ["Road hazard"]
+    assert k("12-345, that is for San Jose fire.") == []                  # the fire department, not a fire
+    assert k("a pickup with all-around fire damage")[0] == "Vehicle fire"
+    assert k("attention units, a 23-103 on northbound 880") == ["Reckless driver"]
+
+
+def test_incident_status_and_units():
+    from rxapp.incidents import status, units
+    assert status("12-345, I'm 97.") == ["onscene"]
+    assert "enroute" in status("1234, copy, show you en route")
+    assert "clear" in status("1234, I'll be 98.")
+    assert "tow" in status("requesting 1185 for the sedan")
+    assert units("12-3-45, I copy.") == ["12345"]
+    assert units("1234 27 booked") == ["1234"]
+    assert units("25 units broadcast for") == []
+
+
+def test_incident_locations_at_highway_junctions(tmp_path):
+    from rxapp.incidents import locate
+    jx = _jx(tmp_path)
+    p = locate("11-25, southbound 80 just north of Brokaw, a ladder", jx, 42500000)
+    assert p[0]["hwy"] == "880" and p[0]["street"] == "Brokaw Road" and p[0]["corrected"]
+    p = locate("a 23-103 westbound 580 east of Doherty", jx, 44942000)
+    assert p[0]["street"] == "Dougherty Road"
+    p = locate("a pedestrian near the Auto Mall Parkway on ramp to northbound 880", jx, 44942000)
+    assert p[0]["street"] == "Auto Mall Parkway" and p[0]["radius_km"] < 1
+    p = locate("11-25 North 911 south of Oakland Road", jx, 42502000)
+    assert p[0]["hwy"] == "101"
+    p = locate("weaving, Northbound Navy just off the Stevenson", jx, 44942000)
+    assert p[0]["street"] == "Stevenson Boulevard"
+    p = locate("on a stop, First Street just south of 580", jx, 44942000)
+    assert p[0]["street"] == "1st Street"
+    assert locate("1234 Example Court Hayward", jx, 44942000)[0]["kind"] == "city"   # never the house number
+    assert locate("southbound 880 north of Nowhere Lane", jx, 42500000) == []
+
+
+def test_incidents_group_by_place_and_unit_and_close(tmp_path):
+    from rxapp.incidents import build
+    jx = _jx(tmp_path)
+    T = 1_800_000_000
+    recs = [
+        {"i": 0, "t0": T, "t1": T + 5, "freq_hz": 42500000, "text": "1234, 11-25, southbound 880 just north of Brokaw, a ladder in lane 2."},
+        {"i": 1, "t0": T + 60, "t1": T + 63, "freq_hz": 42500000, "text": "1234, I copy, en route."},
+        {"i": 2, "t0": T + 90, "t1": T + 95, "freq_hz": 42502000, "text": "now an 1183 southbound 880 north of Brokaw, two cars"},
+        {"i": 3, "t0": T + 300, "t1": T + 302, "freq_hz": 42500000, "text": "1234, I'm 97."},
+        {"i": 4, "t0": T + 400, "t1": T + 404, "freq_hz": 42500000, "text": "All units, a 23-103 westbound 580 east of Doherty, plate 1 Adam Boy Charles 234."},
+        {"i": 5, "t0": T + 900, "t1": T + 903, "freq_hz": 42500000, "text": "1234, I'll be 98."},
+        {"i": 6, "t0": T + 950, "t1": T + 953, "freq_hz": 42500000, "text": "Okay."},
+    ]
+    inc = build(recs, jx, now=T + 1000)
+    assert len(inc) == 2
+    a, b = inc
+    assert a["cat"] == "collision" and a["place"]["label"].endswith("Brokaw Road")   # the most serious type seen
+    assert [e["i"] for e in a["entries"]] == [0, 1, 2, 3, 5] and a["units"] == ["1234"]
+    assert a["state"] == "closed" and a["closed_by"] == "cleared" and "onscene" in a["status"]
+    assert b["label"] == "Reckless driver" and b["state"] == "open"
+    assert "Adam" not in b["entries"][0]["text"] and "[plate]" in b["entries"][0]["text"]
+    assert build(recs, jx, now=T + 900 + 2 * 3600)[1]["closed_by"] == "quiet"
+
+
+def test_incident_text_redaction():
+    from rxapp.incidents import redact
+    assert redact("1234, 27 returns clear to a 2015 sedan, last of Example") == "(records check: not shown)"
+    assert redact("call back on 555-0100.").endswith("[number].")
+    assert "[address]" in redact("damage at 1234 Example Court Hayward")
+    assert redact("show Officer Example at 1015") == "show Officer [name] at 1015"
+    assert "999" not in redact("sedan, plate ending with 999, weaving")
+    assert redact("11-25 northbound 101 south of Holly") == "11-25 northbound 101 south of Holly"

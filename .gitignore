@@ -23,3 +23,6 @@ tools/ft8_lib/
 tools/AIS-catcher/
 tools/multimon-ng/
 tools/wsjtx/
+
+# junction-table build progress (python -m rxapp.junctions --build)
+rxapp/data/junctions.tiles.json

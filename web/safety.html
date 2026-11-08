@@ -157,11 +157,12 @@ button.on{background:var(--magenta)}
 .feedbar select,.feedbar input[type=text]{font:500 13px "IBM Plex Mono",monospace;background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:4px;padding:6px 8px}
 .feedbar label{display:inline-flex;gap:6px;align-items:center;font:500 12px "IBM Plex Mono",monospace;color:var(--muted)}
 .plog{max-height:760px;overflow:auto;margin:0;padding:0;list-style:none;font:400 14px/1.45 "Barlow",sans-serif}
-.plog li{display:grid;grid-template-columns:8ch 1fr;gap:4px 12px;border-top:1px solid var(--line);padding:7px 4px;cursor:pointer}
+.plog li{display:grid;grid-template-columns:22px 8ch 1fr;gap:4px 12px;border-top:1px solid var(--line);padding:7px 4px;cursor:pointer}
 .plog li:hover,.plog li.sel{background:var(--bg)}
 .plog .t{font:500 12px "IBM Plex Mono",monospace;color:var(--muted)}
-.plog .ch{font:500 12px "IBM Plex Mono",monospace;color:var(--muted);grid-column:2}
-.plog .tx{grid-column:2}
+.plog .ch{font:500 12px "IBM Plex Mono",monospace;color:var(--muted);grid-column:3}
+.plog .clipplay{grid-row:1 / span 2}
+.plog .tx{grid-column:3}
 .plog .dig{color:var(--c-alt);font:500 12px "IBM Plex Mono",monospace}
 .plog .ns{color:var(--muted);font-style:italic}
 abbr.code{text-decoration:underline dotted var(--magenta);text-underline-offset:3px;cursor:help;color:var(--magenta)}
@@ -186,6 +187,27 @@ abbr.code{text-decoration:underline dotted var(--magenta);text-underline-offset:
 .acts .t{font:500 12px "IBM Plex Mono",monospace;color:var(--muted)}
 .acts .a{font-weight:600}
 .acts .w{grid-column:2;color:var(--muted);font:12px "IBM Plex Mono",monospace}
+.incs{max-height:340px}
+.incs li{grid-template-columns:6ch 1fr auto}
+.incs li .w{grid-column:2 / span 2}
+.incs li.sel{background:var(--bg);box-shadow:inset 3px 0 0 var(--ink)}
+.incs li.closed .a{font-weight:500;color:var(--muted)}
+.incs .a i,.inclegend i{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px;vertical-align:0}
+.incs .s{font:500 11px "IBM Plex Mono",monospace;color:var(--muted);align-self:center}
+.incs li.open .s{color:var(--ink)}
+.inclegend{display:inline-flex;flex-wrap:wrap;gap:4px 12px}
+.acbar select{font:500 12px "IBM Plex Mono",monospace;background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:3px}
+.incbox{position:relative;display:grid;gap:8px;margin-top:10px;padding:12px 4px 2px;border-top:1px solid var(--line)}
+.incbox[hidden]{display:none}
+.incclose{position:absolute;right:4px;top:10px}
+.incbox .dhead{padding-right:80px}
+.steps{display:flex;flex-wrap:wrap;align-items:center;gap:4px 6px;font:500 12px "IBM Plex Mono",monospace}
+.steps span{border:1px solid var(--line);border-radius:3px;padding:2px 6px}
+.steps i{color:var(--muted);font-style:normal}
+.inctl{max-height:420px}
+.inctl li.sel{background:var(--bg)}
+.inctl .tx b{font:500 12px "IBM Plex Mono",monospace;color:var(--muted);margin-right:4px}
+.inctl .ch em{font-style:normal;color:var(--ink);font-weight:600}
 </style>
 </head>
 <body>
@@ -193,7 +215,7 @@ abbr.code{text-decoration:underline dotted var(--magenta);text-underline-offset:
   <header>
     <div class="eyebrow"><a href="/" target="_top" style="color:inherit">rxapp</a> · public safety · RX-888</div>
     <h1>Bay Public Safety, Live</h1>
-    <p class="sub">Unencrypted public-safety radio around the Bay: CHP's low-band channels on the HF input and VHF-high channels through the tuner, recorded and transcribed on this Mac. Digital (P25/DMR) transmissions are logged, not decoded. Places named in calls are pinned on the map. Recordings and transcripts are deleted after 7 days.</p>
+    <p class="sub">Unencrypted public-safety radio around the Bay: CHP's low-band channels on the HF input and VHF-high channels through the tuner, recorded and transcribed on this Mac. Digital (P25/DMR) transmissions are logged, not decoded. Calls are grouped into incidents, typed from their radio codes and placed at the highway junction or town they name, with a timeline you can play back. Recordings and transcripts are deleted after 7 days.</p>
     <div class="facts">
       <span><b>STATUS</b><em id="fLive" class="live off" style="font-style:normal"><i></i>–</em></span>
       <span><b>NOW</b><em id="fWin" style="font-style:normal">–</em></span>
@@ -209,9 +231,19 @@ abbr.code{text-decoration:underline dotted var(--magenta);text-underline-offset:
 
   <div class="main2">
     <div class="panel map">
-      <div id="map" role="img" aria-label="Map of places mentioned in public-safety calls"></div>
-      <div class="acbar"><span><i style="background:#D64545"></i>last 10 min</span><span><i style="background:#E0A030"></i>last hour</span><span><i style="background:#8A8F98"></i>older</span>
-        <span>● road location (approximate) · ◯ town</span><span id="mapStatus"></span></div>
+      <div id="map" role="img" aria-label="Map of public-safety incidents"></div>
+      <div class="acbar"><span class="inclegend" id="incLegend"></span>
+        <span>bright = open · faded = closed · circle = how sure the place is</span>
+        <label>show <select id="incWin" aria-label="Incidents to show"><option value="2">last 2 h</option><option value="6" selected>last 6 h</option><option value="all">whole session</option></select></label>
+        <span id="mapStatus"></span></div>
+      <div id="incBox" class="incbox" hidden>
+        <div class="dhead" id="incHead"></div>
+        <button id="incClose" type="button" class="clipbtn incclose" aria-label="Close the incident">Close</button>
+        <p class="meta" id="incMeta"></p>
+        <div class="steps" id="incSteps"></div>
+        <ul class="plog inctl" id="incTl"></ul>
+        <p class="meta">Plates, phone numbers, addresses and names are taken out here. Types and places are read from the transcript, so treat them as a guide.</p>
+      </div>
     </div>
     <div class="panel detail" aria-live="polite">
       <h2>Listen</h2>
@@ -228,8 +260,8 @@ abbr.code{text-decoration:underline dotted var(--magenta);text-underline-offset:
       <p class="atc" id="dAtc"></p>
       <p class="meta" id="dMeta"></p>
       <div><button id="clip" class="clipbtn" type="button" disabled>Play clip</button></div>
-      <h2 style="margin-top:6px">Activity <span id="actCount" style="font-weight:500;letter-spacing:0;text-transform:none"></span></h2>
-      <ul class="acts" id="acts"></ul>
+      <h2 style="margin-top:6px">Incidents <span id="incCount" style="font-weight:500;letter-spacing:0;text-transform:none"></span></h2>
+      <ul class="acts incs" id="incs"></ul>
       <h2 style="margin-top:6px">Codes heard</h2>
       <ul class="codes" id="codes"></ul>
     </div>
@@ -242,6 +274,7 @@ abbr.code{text-decoration:underline dotted var(--magenta);text-underline-offset:
         <input type="text" id="fFind" placeholder="search" size="16" aria-label="Search the transcript">
         <label><input type="checkbox" id="fDigital"> show digital</label>
         <label><input type="checkbox" id="fEmpty"> show no-speech</label>
+        <label class="playon" title="When a clip ends, play the next transmission"><input type="checkbox" id="playOn"> play on</label>
       </div>
       <ul class="plog" id="log"></ul>
   </div>
@@ -259,7 +292,8 @@ abbr.code{text-decoration:underline dotted var(--magenta);text-underline-offset:
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="bayps.js?v=3"></script>
 <script src="audiofocus.js?v=1"></script>
-<script src="safety.js?v=9"></script>
+<script src="clips.js?v=2"></script>
+<script src="safety.js?v=11"></script>
 <script src="focus.js?v=1" data-focus="safety" data-what="public safety (low band and VHF-high)"></script>
 </body>
 </html>
