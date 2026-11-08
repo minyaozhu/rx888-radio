@@ -6,12 +6,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>WSPR Propagation</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <style>
 :root{
   --bg:#F2F4EE; --panel:#FFFFFF; --ink:#1D2833; --muted:#5A6774; --line:#CBD3D8;
-  --land:#E6EBD8; --land-edge:#B9C4A4; --water:#CFE2EC; --water-edge:#9CBCD0;
+  --land:#E6EBD8; --land-edge:#B9C4A4; --water:#CFE2EC; --water-edge:#9CBCD0; --grat:#BCD3E0; --home:#C2410C; --p-cq:#2E7B57;
   --magenta:#A3316F; --blue:#2A5A93; --runway:#2B3440;
   --c-check:#6C7C8C; --c-alt:#B26E12; --c-vec:#2A5A93; --c-trf:#A3316F; --c-app:#2E7B57; --c-hand:#6A4DA1; --c-other:#9AA5AE;
   --shadow:0 1px 2px rgba(29,40,51,.08);
@@ -20,7 +19,7 @@
   :root:not([data-theme="light"]){
     color-scheme:dark;
     --bg:#0E151B; --panel:#151F27; --ink:#E4EAEE; --muted:#93A2AE; --line:#2B3843;
-    --land:#1B2621; --land-edge:#33443A; --water:#10222D; --water-edge:#24475C;
+    --land:#1B2621; --land-edge:#33443A; --water:#10222D; --water-edge:#24475C; --grat:#1A3140; --home:#FB923C; --p-cq:#6CC99A;
     --magenta:#E07BB2; --blue:#7FAEE6; --runway:#D5DCE2;
     --c-check:#9AAAB8; --c-alt:#E3A54B; --c-vec:#7FAEE6; --c-trf:#E07BB2; --c-app:#6CC99A; --c-hand:#B39AE8; --c-other:#66737D;
     --shadow:none;
@@ -29,7 +28,7 @@
 :root[data-theme="dark"]{
   color-scheme:dark;
   --bg:#0E151B; --panel:#151F27; --ink:#E4EAEE; --muted:#93A2AE; --line:#2B3843;
-  --land:#1B2621; --land-edge:#33443A; --water:#10222D; --water-edge:#24475C;
+  --land:#1B2621; --land-edge:#33443A; --water:#10222D; --water-edge:#24475C; --grat:#1A3140; --home:#FB923C; --p-cq:#6CC99A;
   --magenta:#E07BB2; --blue:#7FAEE6; --runway:#D5DCE2;
   --c-check:#9AAAB8; --c-alt:#E3A54B; --c-vec:#7FAEE6; --c-trf:#E07BB2; --c-app:#6CC99A; --c-hand:#B39AE8; --c-other:#66737D;
   --shadow:none;
@@ -111,10 +110,6 @@ button.on{background:var(--magenta)}
 .log li .t{color:var(--muted)}
 .planes-tag{font:600 12px "IBM Plex Mono",monospace;fill:var(--ink);paint-order:stroke;stroke:var(--land);stroke-width:3px}
 #onair circle{fill:none;stroke:var(--magenta);stroke-width:2}
-#map{height:676px;border-radius:4px;background:var(--water)}
-@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) #map .leaflet-tile-pane{filter:invert(1) hue-rotate(180deg) brightness(.85) contrast(.9)}}
-:root[data-theme="dark"] #map .leaflet-tile-pane{filter:invert(1) hue-rotate(180deg) brightness(.85) contrast(.9)}
-.leaflet-container{font:500 12px "IBM Plex Mono",monospace;background:var(--water)}
 .apt-dot{transition:all .3s}
 .viewctl a{font-size:15px;line-height:30px;color:var(--ink)!important;background:var(--panel)!important}
 .apt-dot.on{animation:aptpulse 1s infinite}
@@ -144,9 +139,6 @@ button.on{background:var(--magenta)}
 <style>
 .main2{display:grid;grid-template-columns:minmax(0,1.7fr) minmax(0,1fr);gap:18px;align-items:start}
 @media (max-width:900px){.main2{grid-template-columns:1fr}}
-#map{height:620px;border-radius:4px;background:var(--water)}
-.leaflet-container{font:500 12px "IBM Plex Mono",monospace}
-@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) #map .leaflet-tile-pane{filter:invert(1) hue-rotate(180deg) brightness(.85) contrast(.9)}}
 .legendrow{display:flex;flex-wrap:wrap;gap:6px 14px;margin-top:8px;font:500 12px "IBM Plex Mono",monospace;color:var(--muted)}
 .legendrow i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:4px;vertical-align:-1px}
 .tbl{width:100%;border-collapse:collapse;font:500 12px "IBM Plex Mono",monospace}
@@ -190,11 +182,12 @@ button.on{background:var(--magenta)}
   </header>
   <p class="notice" id="notice" style="display:none"></p>
   <div class="main2">
-    <div class="panel map">
-      <div class="ctl" style="margin-bottom:8px"><label class="lanesub">Last <select id="hours"><option value="1">1 hour</option><option value="3">3 hours</option><option value="6" selected>6 hours</option><option value="24">24 hours</option></select></label>
+    <div class="panel wmap">
+      <div class="ctl" style="margin:4px 4px 8px"><label class="lanesub">Last <select id="hours"><option value="1">1 hour</option><option value="3">3 hours</option><option value="6" selected>6 hours</option><option value="24">24 hours</option></select></label>
         <label class="lanesub">Band <select id="band"><option value="">all</option></select></label></div>
-      <div id="map" role="img" aria-label="World map of WSPR beacons heard"></div>
-      <div class="legendrow" id="legend"></div>
+      <div style="position:relative"><svg id="map" role="img" aria-label="World map of WSPR beacons heard"></svg>
+        <span class="zoomhint">scroll to zoom · drag to pan · double-click to reset</span></div>
+      <div class="wlegend" id="legend"></div>
     </div>
     <div class="panel detail">
       <h2>Band conditions <span class="lanesub" style="text-transform:none;letter-spacing:0">(last 30 min)</span></h2>
@@ -205,8 +198,10 @@ button.on{background:var(--magenta)}
   </div>
   <p class="caveat">Decoded with WSJT-X's wsprd from 2-minute slots on 1.8366, 3.5686, 5.2872, 7.0386, 10.1387, 14.0956, 18.1046, 21.0946, 24.9246, 28.1246 and 50.293 MHz (USB). WSPR runs only while the receiver is on its HF input; hold it there with “Switch receiver here” for unbroken coverage. Distances are from this station's locator (set on the FT8 map) to the centre of the beacon's grid square.</p>
 </div>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
-<script src="wspr.js?v=2"></script>
+<script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/topojson-client@3.1.0/dist/topojson-client.min.js"></script>
+<script src="worldmap.js?v=1"></script>
+<script src="wspr.js?v=3"></script>
 <script src="focus.js?v=1" data-focus="hf" data-what="the HF input, so WSPR (and FT8, FT4, SSTV) run all the time"></script>
 </body>
 </html>

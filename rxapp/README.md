@@ -259,8 +259,9 @@ gives the receiver back. API: `/api/broadcast/stations`, `/api/broadcast/sw/now?
 monitor's RTP timing, with a 150 s buffer), each decoded with WSJT-X's `wsprd`. Spots go to the `wspr` table
 with the distance from this station's locator. `/api/wspr` (status, `{on}`), `/api/wspr/spots`, and
 `/api/propagation?minutes=30`: per band, WSPR spots and FT8/FT4 decodes, stations and the farthest one heard,
-i.e. which bands are open. Page `wspr.html`: great-circle lines from home to each beacon (coloured by band,
-width by SNR), band conditions, latest spots. Runs while the HF input is selected. Tested end to end with a
+i.e. which bands are open. Page `wspr.html`: the FT8 page's world map (`web/worldmap.js`: d3, Natural Earth, no
+tiles) with great-circle lines from home to each beacon (coloured by band, width by SNR), band conditions, latest
+spots. Runs while the HF input is selected. Tested end to end with a
 beacon synthesised from `wsprsim`'s symbols, decoded at about -15 dB SNR.
 
 Build wsprd (C only; its optional Fortran OSD decoder, used only with `-o`, is replaced by a stub):
@@ -293,9 +294,12 @@ Spots: a call after CQ (and contest / activity words: SS, WW, TEST, POTA...), DE
 (one decode is too often a bust, AL4A heard as AL4E); the same call on a band is spotted again after 10 min.
 Table `cw_spots`; a signal's whole text goes to `cw_text` when it has been quiet 15 s. `GET/POST /api/cw`
 (`{on, bands}`; persisted in settings.json `cw_bands`), `/api/cw/live` (signals now: frequency, WPM, SNR, text),
-`/api/cw/spots`, `/api/cw/text`; `/api/propagation` counts CW spots too. Page `cw.html`: signals by band with
-their text as it arrives, spots with the country from the call's prefix, the log; click any of them to listen
-(a `cwu` channel: 400 Hz filter, heard as a 500 Hz tone).
+`/api/cw/spots`, `/api/cw/text`; `/api/propagation` counts CW spots too. Page `cw.html`, laid out like the FT8 page: a world map
+of the stations spotted in the window (`worldmap.js`; placed by call prefix, so drawn hollow like FT8 stations
+without a grid: country, or call area in the US, Canada, Australia and Russia; lines from home for the last 10 min,
+rings on stations on the air now), the selected station (country, ~distance, speed, its live text), the farthest
+stations, spots; below, the signals by band with their text as it arrives and the log. Click a spot or a signal to
+listen (a `cwu` channel: 400 Hz filter, heard as a 500 Hz tone).
 
 Tested on synthetic bands (`tests/test_rxapp.py`: four stations 8-43 WPM, two of them 150 Hz apart, noise and a
 carrier) and on the air during the November 2026 Sweepstakes: strong stations decode cleanly ("AJ6V 370 B AJ6V

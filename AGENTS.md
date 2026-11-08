@@ -70,6 +70,7 @@ permissions (Input Monitoring, LaunchServices).
 | `voice_session.py` | Window rotation, carrier detection, transcription; heals after an rxapp restart |
 | `web/index.html` + `controller.js` | Tab shell; keyboard / dial controller |
 | `web/radio.html`, `app.js`, `panels.js` | Radio tab |
+| `web/worldmap.js` | The FT8 map style (d3 world map, band-coloured stations) shared by WSPR and CW |
 | `web/*.html` + `*.js` | One page per tab (broadcast, ssb, ft8 + ft8viz, wspr, cw, airband, safety, marine, aprs, sstv) |
 | `tests/test_rxapp.py` | Unit tests (pure functions, no radio) |
 | `ka9q/` | macOS patches, radiod configs (`@ROOT@` filled into `ka9q/state/` at run time) |

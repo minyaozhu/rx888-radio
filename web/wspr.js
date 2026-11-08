@@ -7,8 +7,7 @@ const api = async (p, o) => { const r = await fetch(p, o); if (!r.ok) throw new 
 const esc = (x) => String(x ?? '').replace(/[&<>"]/g, (c) => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'})[c]);
 const utc = (t) => new Date(t * 1000).toISOString().slice(11, 16);
 const BANDS = ['160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m'];
-const COLORS = ['#8C564B', '#D62728', '#FF7F0E', '#BCBD22', '#2CA02C', '#17BECF', '#1F77B4', '#9467BD', '#E377C2', '#7F7F7F', '#4C4CA8'];
-const bandColor = (b) => COLORS[Math.max(0, BANDS.indexOf(b))];
+// bandColor, worldMap: worldmap.js (the FT8 page's map)
 
 function gridLL(g) {
   if (!g || !/^[A-R]{2}\d{2}([A-X]{2})?$/i.test(g)) return null;
@@ -17,57 +16,42 @@ function gridLL(g) {
   if (g.length >= 6) { lon += (g.charCodeAt(4) - 65) * (2 / 24) + 1 / 24; lat += (g.charCodeAt(5) - 65) / 24 + 1 / 48; } else { lon += 1; lat += 0.5; }
   return [lat, lon];
 }
-// great circle from a to b as a list of points (so long paths curve like they should)
-function arc(a, b, n = 48) {
-  const r = Math.PI / 180, [la1, lo1, la2, lo2] = [a[0] * r, a[1] * r, b[0] * r, b[1] * r];
-  const d = 2 * Math.asin(Math.sqrt(Math.sin((la2 - la1) / 2) ** 2 + Math.cos(la1) * Math.cos(la2) * Math.sin((lo2 - lo1) / 2) ** 2));
-  if (d < 1e-6) return [a, b];
-  const pts = [];
-  let prevLon = null;
-  for (let i = 0; i <= n; i++) {
-    const f = i / n, A = Math.sin((1 - f) * d) / Math.sin(d), B = Math.sin(f * d) / Math.sin(d);
-    const x = A * Math.cos(la1) * Math.cos(lo1) + B * Math.cos(la2) * Math.cos(lo2);
-    const y = A * Math.cos(la1) * Math.sin(lo1) + B * Math.cos(la2) * Math.sin(lo2);
-    const z = A * Math.sin(la1) + B * Math.sin(la2);
-    let lon = Math.atan2(y, x) / r;
-    if (prevLon !== null) while (lon - prevLon > 180) lon -= 360; while (prevLon !== null && lon - prevLon < -180) lon += 360;
-    prevLon = lon;
-    pts.push([Math.atan2(z, Math.sqrt(x * x + y * y)) / r, lon]);
-  }
-  return pts;
-}
 
-const map = L.map('map', {worldCopyJump: true, zoomSnap: 0.5}).setView([30, -100], 2.5);
-L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom: 10,
-  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'}).addTo(map);
-for (const ms of [200, 800]) setTimeout(() => map.invalidateSize(), ms);
-const layer = L.layerGroup().addTo(map);
+const S = {spots: [], info: null, home: null, sel: null};
+const map = worldMap('#map', {onPick: (id) => { S.sel = S.sel === id ? null : id; draw(); }});
 $('legend').innerHTML = BANDS.map((b) => `<span><i style="background:${bandColor(b)}"></i>${b}</span>`).join('') + '<span>· line width = signal strength</span>';
 
-const S = {spots: [], info: null, home: null};
-
 function draw() {
-  layer.clearLayers();
   const cut = Date.now() / 1000 - +$('hours').value * 3600, band = $('band').value;
   const spots = S.spots.filter((s) => s.t > cut && (!band || s.band === band));
-  if (S.home) L.circleMarker(S.home, {radius: 7, color: '#fff', weight: 2, fillColor: '#C2410C', fillOpacity: 1}).bindTooltip(`Home · ${esc(S.info.qth)}`).addTo(layer);
   const best = new Map();                                  // one line per station and band: its best SNR
   for (const s of spots) { const k = s.call + '|' + s.band; if (!best.has(k) || s.snr > best.get(k).snr) best.set(k, s); }
-  for (const s of best.values()) {
-    const p = gridLL(s.grid); if (!p) continue;
-    if (S.home) L.polyline(arc(S.home, p), {color: bandColor(s.band), weight: Math.max(1, Math.min(4, (s.snr + 30) / 7)), opacity: 0.7, interactive: false}).addTo(layer);
-    L.circleMarker(p, {radius: 4, color: bandColor(s.band), weight: 1, fillColor: bandColor(s.band), fillOpacity: 0.9})
-      .bindTooltip(`<b>${esc(s.call)}</b> ${esc(s.grid)} · ${s.band} · SNR ${s.snr} dB · ${s.dbm != null ? s.dbm + ' dBm' : ''}${s.km ? ' · ' + Math.round(s.km).toLocaleString() + ' km' : ''}<br>${utc(s.t)} UTC`).addTo(layer);
-  }
+  const heard = new Map();                                 // spots per station, for the dot size
+  for (const s of spots) heard.set(s.call, (heard.get(s.call) || 0) + 1);
+  const now = Date.now() / 1000, rows = [...best.values()].filter((s) => gridLL(s.grid));
+  const fade = (t) => Math.max(0.3, 1 - (now - t) / (+$('hours').value * 3600));
+  const far = rows.filter((s) => s.km).sort((a, b) => b.km - a.km).slice(0, 5);
+  map.set({
+    home: S.home, homeLabel: `Home · ${S.info ? S.info.qth : ''}`,
+    lines: S.home ? rows.map((s) => ({id: s.call + '|' + s.band, from: S.home, to: gridLL(s.grid), band: s.band,
+      w: Math.max(1, Math.min(4, (s.snr + 30) / 7)), op: 0.7 * fade(s.t)})) : [],
+    stations: rows.map((s) => ({id: s.call + '|' + s.band, ll: gridLL(s.grid), band: s.band, n: heard.get(s.call), op: fade(s.t),
+      sel: S.sel === s.call + '|' + s.band,
+      title: `${s.call} ${s.grid} · ${s.band} · SNR ${s.snr} dB${s.dbm != null ? ' · ' + s.dbm + ' dBm' : ''}${s.km ? ' · ' + Math.round(s.km).toLocaleString() + ' km' : ''} · ${utc(s.t)} UTC`})),
+    labels: [...far, ...rows.filter((s) => S.sel === s.call + '|' + s.band)].map((s) => ({ll: gridLL(s.grid), text: s.call})),
+  });
   const calls = new Set(spots.map((s) => s.call));
   $('fSpots').textContent = spots.length; $('fSt').textContent = calls.size;
-  const far = spots.filter((s) => s.km).sort((a, b) => b.km - a.km)[0];
-  $('fFar').textContent = far ? `${far.call} · ${Math.round(far.km).toLocaleString()} km (${far.band})` : '–';
-  $('spots').innerHTML = spots.slice(0, 200).map((s) => `<tr data-grid="${esc(s.grid || '')}"><td>${utc(s.t)}</td><td style="color:${bandColor(s.band)}">${s.band}</td>
+  const f = spots.filter((s) => s.km).sort((a, b) => b.km - a.km)[0];
+  $('fFar').textContent = f ? `${f.call} · ${Math.round(f.km).toLocaleString()} km (${f.band})` : '–';
+  $('spots').innerHTML = spots.slice(0, 200).map((s) => `<tr data-grid="${esc(s.grid || '')}" data-id="${esc(s.call + '|' + s.band)}"><td>${utc(s.t)}</td><td style="color:${bandColor(s.band)}">${s.band}</td>
     <td>${esc(s.call)}</td><td>${esc(s.grid || '')}</td><td>${s.snr}</td><td>${s.km ? Math.round(s.km).toLocaleString() : ''}</td></tr>`).join('')
     || '<tr><td colspan="6" class="shut">No spots in this period.</td></tr>';
 }
-$('spots').addEventListener('click', (e) => { const tr = e.target.closest('tr[data-grid]'); const p = tr && gridLL(tr.dataset.grid); if (p) map.setView(p, Math.max(map.getZoom(), 4)); });
+$('spots').addEventListener('click', (e) => {
+  const tr = e.target.closest('tr[data-grid]'); if (!tr) return;
+  S.sel = tr.dataset.id; draw(); map.focus(gridLL(tr.dataset.grid));
+});
 $('hours').addEventListener('change', draw);
 $('band').addEventListener('change', draw);
 
