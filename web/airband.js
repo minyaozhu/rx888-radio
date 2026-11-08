@@ -77,7 +77,13 @@ function callsignOf(texts) {
 
 // ------------------------------------------------------------------ state
 const S = {session: null, recs: [], after: -1, status: {}, live: false, follow: true, cursor: null, sel: null,
-           flights: [], fIndex: new Map(), playing: null};
+           flights: [], fIndex: new Map()};
+const clips = clipPlayer({
+  url: (r) => `/api/airband/clip/${S.session}/${r.clip}`,
+  next: (r) => S.recs.find((x) => x.t0 > r.t0) || null,                  // play on: the next one in time
+  onStart: () => listenOff(),
+  onState: (r) => { $('clip').textContent = r && S.sel && r.i === S.sel.i ? 'Stop' : 'Play clip'; },
+});
 
 function derive() {
   const named = new Map();     // number -> full id, so "…2004" joins "United 2004"
@@ -419,22 +425,25 @@ function select(r, moveTime) {
   if (st) $('dMeta').textContent += `\nADS-B (adsb.fi): ${acLine(real, st)}`;
   $('dMeta').style.whiteSpace = 'pre-line';
   $('clip').disabled = false;
+  $('clip').textContent = clips.playing && clips.playing.i === r.i ? 'Stop' : 'Play clip';
   document.querySelectorAll('#log li').forEach((li) => li.classList.toggle('sel', +li.dataset.i === r.i));
   render();
 }
 function drawLog() {
   const items = S.recs.slice(-300).reverse();
-  $('log').innerHTML = items.map((r) => `<li data-i="${r.i}" class="${S.sel === r ? 'sel' : ''}"><span class="t">${hms(r.t0)}</span>
+  $('log').innerHTML = items.map((r) => `<li data-i="${r.i}" class="${S.sel === r ? 'sel' : ''}">${clips.button(r)}<span class="t">${hms(r.t0)}</span>
     <span class="f">${mhz(r.freq_hz)} ${esc(freqInfo(r.freq_hz)?.label.split(' ').slice(0, 2).join(' ') || '')}</span><span>${r.text ? esc(r.text) : '<span class="t">(no speech)</span>'}</span></li>`).join('')
-    || '<li><span class="t">—</span><span></span><span class="t">Nothing yet.</span></li>';
+    || '<li><span></span><span class="t">—</span><span></span><span class="t">Nothing yet.</span></li>';
 }
-$('log').addEventListener('click', (e) => { const li = e.target.closest('li[data-i]'); if (li) select(S.recs.find((r) => r.i === +li.dataset.i), true); });
-$('clip').addEventListener('click', () => {
-  if (!S.sel) return;
-  if (S.playing) S.playing.pause();
-  S.playing = new Audio(`/api/airband/clip/${S.session}/${S.sel.clip}`);
-  S.playing.play();
+$('log').addEventListener('click', (e) => {
+  const li = e.target.closest('li[data-i]');
+  if (!li) return;
+  const r = S.recs.find((x) => x.i === +li.dataset.i);
+  if (e.target.closest('.clipplay')) { clips.toggle(r); if (S.sel !== r) select(r, true); return; }
+  select(r, true);
 });
+$('playOn').addEventListener('change', (e) => { clips.playOn = e.target.checked; });
+$('clip').addEventListener('click', () => { if (S.sel) clips.toggle(S.sel); });
 
 function render() {
   if (S.follow && S.live) S.cursor = Date.now() / 1000;
@@ -519,7 +528,7 @@ function listenOff() {                    // another page started playing
 }
 $('listen').addEventListener('click', () => {
   audio.on = !audio.on;
-  if (audio.on) audioFocus.claim(listenOff); else audioFocus.release();
+  if (audio.on) { clips.stop(); audioFocus.claim(listenOff); } else audioFocus.release();
   if (audio.on) {
     if (!audio.ctx) { audio.ctx = new AudioContext(); audio.gain = audio.ctx.createGain(); audio.gain.connect(audio.ctx.destination); }
     audio.ctx.resume(); audio.gain.gain.value = +$('vol').value;

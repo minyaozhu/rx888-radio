@@ -106,7 +106,7 @@ button.on{background:var(--magenta)}
 .clipbtn{min-width:0;padding:6px 10px;font-size:12px}
 .atc{font:400 13px/1.45 "IBM Plex Mono",monospace;color:var(--muted);margin:0}
 .log{max-height:340px;overflow:auto;margin:0;padding:0;list-style:none;font:400 13px/1.45 "IBM Plex Mono",monospace}
-.log li{display:grid;grid-template-columns:8ch 8ch 1fr;gap:10px;border-top:1px solid var(--line);padding:4px 2px;cursor:pointer}
+.log li{display:grid;grid-template-columns:22px 8ch 8ch 1fr;gap:10px;align-items:start;border-top:1px solid var(--line);padding:4px 2px;cursor:pointer}
 .log li:hover{background:var(--bg)} .log li .f{color:var(--muted)} .log li.sel{background:var(--bg)}
 .log li .t{color:var(--muted)}
 .planes-tag{font:600 12px "IBM Plex Mono",monospace;fill:var(--ink);paint-order:stroke;stroke:var(--land);stroke-width:3px}
@@ -131,7 +131,7 @@ button.on{background:var(--magenta)}
 .sectors{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
 .sectors span{font:500 12px "IBM Plex Mono",monospace;border:1px solid var(--line);border-radius:3px;padding:4px 7px;color:var(--muted)}
 .sectors span.on{border-color:var(--magenta);color:var(--magenta)}
-.log li{grid-template-columns:8ch 15ch 1fr}
+.log li{grid-template-columns:22px 8ch 15ch 1fr}
 .ac-ic{background:none;border:none}
 .ac-ic svg{position:absolute;left:0;top:0;overflow:visible}
 .ac-lab{position:absolute;left:24px;top:-2px;font:600 11px "IBM Plex Mono",monospace;color:var(--ink);white-space:nowrap;text-shadow:0 0 3px var(--panel),0 0 3px var(--panel),0 0 3px var(--panel)}
@@ -201,7 +201,10 @@ button.on{background:var(--magenta)}
   </div>
 
   <div class="panel" style="padding:14px 18px;display:grid;gap:8px">
-    <h2 style="font:700 13px/1 'Barlow Condensed',sans-serif;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin:0">Transcript</h2>
+    <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+      <h2 style="font:700 13px/1 'Barlow Condensed',sans-serif;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin:0">Transcript</h2>
+      <label class="playon" title="When a clip ends, play the next transmission"><input type="checkbox" id="playOn"> play on</label>
+    </div>
     <ul class="log" id="log"></ul>
   </div>
 
@@ -210,7 +213,8 @@ button.on{background:var(--magenta)}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="bayair.js?v=1"></script>
 <script src="audiofocus.js?v=1"></script>
-<script src="airband.js?v=15"></script>
+<script src="clips.js?v=2"></script>
+<script src="airband.js?v=16"></script>
 <script src="focus.js?v=1" data-focus="air" data-what="the airband (approach and tower windows)"></script>
 </body>
 </html>
