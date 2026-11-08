@@ -122,7 +122,7 @@ $('clip').addEventListener('click', () => {
 });
 
 // ------------------------------------------------------------------ listen: marine voice (follow activity) and weather radio
-const audio = {ctx: null, gain: null, ws: null, next: 0, ssrc: null, on: false, lastKey: 0, fixed: null};
+const audio = {ctx: null, gain: null, ws: null, next: 0, ssrc: null, on: false, lastKey: 0};
 const HANG_MS = 3000;
 // Follow activity, tuned for FM dispatch: stay on the channel being heard through the pauses of a
 // conversation (HANG_MS after it goes quiet, so the reply comes through on it), and only move to a channel
@@ -137,16 +137,31 @@ function trackKeys() {
 const keyedLongEnough = (f) => f in keyedSince && Date.now() - keyedSince[f] >= MIN_KEY_MS;
 
 const freqOf = (ssrc) => Object.entries(S.status.channels || {}).find(([, s]) => s === ssrc)?.[0];
+// NOAA weather radio: a station counts as heard when its carrier stands this far above the window's floor
+const WX_HEARD_DB = 8;
+function wxHeard() {                                        // [[freq, ssrc, dB]], strongest first
+  const wx = S.status.weather || {}, lev = S.status.weather_db || {};
+  return Object.entries(wx).map(([f, ssrc]) => [f, ssrc, lev[f]]).filter((x) => x[2] >= WX_HEARD_DB)
+    .sort((a, b) => b[2] - a[2]);
+}
 function wantedSsrc() {
-  if (audio.fixed) return audio.fixed;                    // a weather radio station
   const ch = S.status.channels || {}, mode = $('chan').value;
+  if (mode.startsWith('wx:')) return (S.status.weather || {})[mode.slice(3)];   // a weather station picked
   if (mode !== 'follow') return ch[mode];
   const keyed = S.status.keyed || {}, cur = freqOf(audio.ssrc);
   if (cur && keyed[cur] != null) { audio.lastKey = Date.now(); return audio.ssrc; }
   if (cur && Date.now() - audio.lastKey < HANG_MS) return audio.ssrc;
   const on = Object.entries(keyed).filter(([f]) => ch[f] && keyedLongEnough(f)).sort((a, b) => b[1] - a[1]);
   if (on.length) { audio.lastKey = Date.now(); return ch[on[0][0]]; }
-  return audio.ssrc && cur ? audio.ssrc : (ch['156800000'] || Object.values(ch)[0]);
+  // Nobody on marine voice: play the weather station being heard best (it stays on the air), and come
+  // back to voice as soon as a ship or the Coast Guard keys up. Stay on the current station unless
+  // another is clearly stronger, so small level changes don't flip between two.
+  const wx = wxHeard();
+  if (wx.length) {
+    const now = wx.find((x) => x[1] === audio.ssrc);
+    return now && wx[0][2] - now[2] < 6 ? audio.ssrc : wx[0][1];
+  }
+  return ch['156800000'] || Object.values(ch)[0] || null;
 }
 function connect(ssrc) {
   if (audio.ws) { const w = audio.ws; audio.ws = null; w.onmessage = w.onclose = null; w.close(); }
@@ -174,50 +189,94 @@ function setOn(on) {
     if (!audio.ctx) { audio.ctx = new AudioContext(); audio.gain = audio.ctx.createGain(); audio.gain.connect(audio.ctx.destination); }
     audio.ctx.resume(); audio.gain.gain.value = +$('vol').value;
     connect(wantedSsrc());
-  } else { connect(null); audio.fixed = null; }
+  } else connect(null);
   $('listen').textContent = on ? 'Stop' : 'Listen'; $('listen').classList.toggle('on', on);
   drawChans();
 }
-$('listen').addEventListener('click', () => { audio.fixed = null; setOn(!audio.on); });
+$('listen').addEventListener('click', () => setOn(!audio.on));
+// pick what to listen to (the dropdown holds the choice: follow, a voice channel, or wx:<freq>)
+function pick(value) {
+  $('chan').value = value;
+  if (!audio.on) setOn(true); else { connect(wantedSsrc()); drawChans(); }
+}
 $('vol').addEventListener('input', () => { if (audio.gain) audio.gain.gain.value = +$('vol').value; });
-$('chan').addEventListener('change', () => { $('chan').blur(); audio.fixed = null; if (audio.on) connect(wantedSsrc()); drawChans(); });
+$('chan').addEventListener('change', () => { $('chan').blur(); if (audio.on) connect(wantedSsrc()); drawChans(); });
 $('wx').addEventListener('click', (e) => {
-  const b = e.target.closest('button[data-ssrc]'); if (!b) return;
-  if (audio.on && audio.fixed === +b.dataset.ssrc) { setOn(false); return; }
-  audio.fixed = +b.dataset.ssrc;
-  if (!audio.on) setOn(true); else { connect(audio.fixed); drawChans(); }
+  const b = e.target.closest('button[data-key]'); if (!b) return;
+  const v = 'wx:' + b.dataset.key;
+  if (audio.on && $('chan').value === v) { pick('follow'); setOn(false); return; }   // the playing one: stop
+  pick(v);
 });
+// Who is on the air: polled fast while the session is live, so the channel and station highlights keep
+// up, and so Follow activity moves the audio as soon as a channel keys up.
+let fastBusy = false, fastLast = 0;
 setInterval(async () => {
-  if (!audio.on || audio.fixed || $('chan').value !== 'follow' || !S.session) return;
+  if (!S.session || !S.live || fastBusy) return;
+  if (!audio.on && Date.now() - fastLast < 1000) return;          // not listening: once a second is enough
+  fastBusy = true; fastLast = Date.now();
   try {
     S.status = (await api(`/api/marine?session=${S.session}`)).status || {};
     trackKeys();
-    const want = wantedSsrc(); if (want && want !== audio.ssrc) connect(want);
+    if (audio.on && $('chan').value === 'follow') {
+      const want = wantedSsrc(); if (want && want !== audio.ssrc) connect(want);
+    }
     drawChans();
-  } catch (e) { /* main poll reports */ }
+  } catch (e) { /* main poll reports */ } finally { fastBusy = false; }
 }, 300);
+
+// Redraw a list in place: the elements stay (keyed by data-key) and only their class, title and text change,
+// so a click isn't lost when the refresh (several times a second) lands between mouse-down and mouse-up.
+function patch(box, tag, items, empty) {
+  if (!items.length) { if (box.dataset.empty !== empty) { box.innerHTML = empty; box.dataset.empty = empty; } return; }
+  delete box.dataset.empty;
+  const keys = items.map((x) => x.key).join(',');
+  if (box.dataset.keys !== keys) {
+    box.innerHTML = items.map((x) => `<${tag} data-key="${x.key}"${tag === 'button' ? ' type="button"' : ''}></${tag}>`).join('');
+    box.dataset.keys = keys;
+  }
+  items.forEach((x, k) => {
+    const el = box.children[k];
+    if (el.className !== x.cls) el.className = x.cls;
+    if (el.title !== (x.title || '')) el.title = x.title || '';
+    if (el.innerHTML !== x.html) el.innerHTML = x.html;
+  });
+}
 
 function drawChans() {
   const ch = S.status.channels || {}, keyed = S.status.keyed || {};
   const counts = {};
   for (const r of S.recs) counts[Math.round(r.freq_hz)] = (counts[Math.round(r.freq_hz)] || 0) + 1;
   const freqs = Object.keys(ch).sort();
-  setOptions($('chan'), '<option value="follow">Follow activity</option>' + freqs.map((f) => `<option value="${f}">${mhz(+f)} ${esc(chLabel(+f))}</option>`).join(''));
-  if (!$('chan').value) $('chan').value = 'follow';
-  const cur = audio.ssrc;
-  $('now').textContent = !audio.on ? '' : audio.fixed ? 'playing weather radio' : freqOf(cur) ? `playing ${mhz(+freqOf(cur))}` : '';
-  $('chans').innerHTML = freqs.map((f) => `<li data-f="${f}" class="${keyed[f] != null ? 'on' : ''} ${ch[f] === cur && audio.on && !audio.fixed ? 'sel' : ''}">
-      <b>${mhz(+f)}</b> ${esc(chLabel(+f))} · ${counts[f] || 0}${keyed[f] != null ? ' · ON AIR' : ''}</li>`).join('')
-    || `<li>${S.status.listening ? 'no marine voice heard yet' : 'marine window not active'}</li>`;
-  const wx = S.status.weather || {};
-  $('wx').innerHTML = Object.entries(wx).sort().map(([f, ssrc]) => `<button type="button" data-ssrc="${ssrc}" class="${audio.on && audio.fixed === ssrc ? 'on' : ''}">${esc(NOAA[f] || mhz(+f))}</button>`).join('')
-    || '<span class="lanesub">available while the marine window is active</span>';
+  const wxAll = S.status.weather || {}, lev = S.status.weather_db || {}, wxF = Object.keys(wxAll).sort();
+  const sel = $('chan'), picked = sel.value;
+  setOptions(sel, '<option value="follow">Follow activity</option>'
+    + (freqs.length ? `<optgroup label="Marine voice">${freqs.map((f) => `<option value="${f}">${mhz(+f)} ${esc(chLabel(+f))}</option>`).join('')}</optgroup>` : '')
+    + (wxF.length ? `<optgroup label="NOAA weather radio">${wxF.map((f) => `<option value="wx:${f}">${esc(NOAA[f] || mhz(+f))}</option>`).join('')}</optgroup>` : ''));
+  // the picked channel or station left with its window: keep the choice shown until it returns
+  if (picked && picked !== 'follow' && sel.value !== picked && document.activeElement !== sel) {
+    sel.insertAdjacentHTML('beforeend', `<option value="${esc(picked)}">${esc(picked.startsWith('wx:') ? NOAA[picked.slice(3)] || picked : mhz(+picked))} (not in view)</option>`);
+    sel.dataset.opts = ''; sel.value = picked;
+  }
+  if (!sel.value) sel.value = 'follow';
+  const cur = audio.ssrc, mode = sel.value, follow = mode === 'follow';
+  const wxOf = (ssrc) => Object.entries(wxAll).find(([, s]) => s === ssrc)?.[0];
+  $('now').textContent = !audio.on ? '' : wxOf(cur) ? `playing ${NOAA[wxOf(cur)] || mhz(+wxOf(cur))}${follow ? ' (no marine voice on the air)' : ''}`
+    : freqOf(cur) ? `playing ${mhz(+freqOf(cur))}` : follow ? 'nothing on the air to follow' : 'waiting for the marine window';
+  patch($('chans'), 'li', freqs.map((f) => ({key: f,
+    cls: `${keyed[f] != null ? 'on' : ''}${audio.on && ch[f] === cur ? ' sel' : ''}`.trim(),
+    html: `<b>${mhz(+f)}</b> ${esc(chLabel(+f))} · ${counts[f] || 0}${keyed[f] != null ? ' · ON AIR' : ''}`})),
+    `<li>${S.status.listening ? 'no marine voice heard yet' : 'marine window not active'}</li>`);
+  const best = wxHeard()[0]?.[0];
+  patch($('wx'), 'button', wxF.map((f) => {
+    const db = lev[f], heard = db >= WX_HEARD_DB, playing = audio.on && cur === wxAll[f];
+    return {key: f, cls: `${heard ? 'heard' : 'quiet'}${playing ? ' on' : ''}${f === best ? ' best' : ''}`,
+      title: `${playing ? 'Playing: click to stop' : 'Listen to this station'} · ${heard ? 'heard' : 'not heard'}${db != null ? `, carrier ${db.toFixed(0)} dB above the floor` : ''}${f === best ? ' (strongest; Follow activity plays it between marine calls)' : ''}`,
+      html: `${esc(NOAA[f] || mhz(+f))}${db != null ? ` <small>${db.toFixed(0)} dB</small>` : ''}`};
+  }), '<span class="lanesub">available while the marine window is active</span>');
 }
 $('chans').addEventListener('click', (e) => {
-  const li = e.target.closest('li[data-f]'); if (!li) return;
-  audio.fixed = null; $('chan').value = li.dataset.f;
-  if (!audio.on) setOn(true); else connect(wantedSsrc());
-  drawChans();
+  const li = e.target.closest('li[data-key]'); if (!li) return;
+  pick(li.dataset.key);
 });
 
 // ------------------------------------------------------------------ data

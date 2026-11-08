@@ -597,6 +597,8 @@ class Session:
         self.ais = AisReceiver(self.outs["marine"]) if "marine" in self.outs else None
         self.aprs = AprsReceiver(self.outs["aprs"]) if "aprs" in self.outs else None
         self.weather = {}             # NOAA weather radio frequency -> rxapp channel (listen only)
+        self.wx_bin = {}              # NOAA frequency -> spectrum bin, while the window covers it
+        self.wx_db = {}               # NOAA frequency -> carrier above the floor (dB, smoothed)
         self.healed = 0.0
 
     @property
@@ -640,6 +642,9 @@ class Session:
         grid = [np.arange(math.ceil(a / prof.grid) * prof.grid, b + 1, prof.grid) for a, b in rng]
         self.grid = np.round(np.concatenate(grid)) if grid else np.zeros(0)
         self.bin_of = {f: int(np.argmin(np.abs(rf_of_bin - f))) for f in self.grid}
+        self.wx_bin = ({f: int(np.argmin(np.abs(rf_of_bin - f))) for f in NOAA_HZ if lo <= f <= hi}
+                       if prof.service == "marine" else {})
+        self.wx_db = {}
         if spec_f != self.spec_freq:
             self._open_spectrum(spec_f)
         if self.ais is not None:
@@ -853,6 +858,7 @@ class Session:
                               "packets": self.aprs.stations.packets, "stations": len(self.aprs.stations.s)}
             if service == "marine":
                 st["weather"] = {f"{f:.0f}": ssrc for f, ssrc in self.weather.items()} if here else {}
+                st["weather_db"] = {f"{f:.0f}": round(x, 1) for f, x in self.wx_db.items()} if here else {}
                 st["ais"] = {"running": bool(self.ais and self.ais.running), "error": self.ais and self.ais.error,
                              "messages": self.ais.vessels.messages if self.ais else 0,
                              "vessels": len(self.ais.vessels.v) if self.ais else 0}
@@ -902,6 +908,10 @@ class Session:
         # Each grid point takes the max over +-1 bin, so neighbours tie on one peak: break ties by the
         # grid point's own bin, so exactly one grid point wins.
         score = levels + 1e-3 * (db[bins] - floor)
+        wx_db = getattr(self, "wx_db", {})
+        for f, b in getattr(self, "wx_bin", {}).items():   # weather radio: a steady carrier; how strong is each?
+            x = float(db[max(0, b - 1):b + 2].max()) - floor
+            wx_db[f] = x if f not in wx_db else 0.8 * wx_db[f] + 0.2 * x
         nb = prof.neighbours
         # pass 1: which channels have a carrier this frame (grid points snapped to channels)
         hits = {}

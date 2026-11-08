@@ -158,6 +158,10 @@ button.on{background:var(--magenta)}
 .vlist li span:last-child{color:var(--muted);font:12px "IBM Plex Mono",monospace;text-align:right}
 .wx{display:flex;flex-wrap:wrap;gap:6px}
 .wx button{min-width:0;padding:6px 9px;font-size:12px}
+.wx button.quiet{background:transparent;color:var(--muted);border:1px dashed var(--line)}
+.wx button.heard{box-shadow:0 0 0 1px var(--magenta) inset}
+.wx button.best{font-weight:700}
+.wx button small{font:500 10px "IBM Plex Mono",monospace;opacity:.8}
 .wx button.on{background:var(--magenta);color:#fff}
 .plog{max-height:520px;overflow:auto;margin:0;padding:0;list-style:none;font:400 14px/1.45 "Barlow",sans-serif}
 .plog li{display:grid;grid-template-columns:8ch 1fr;gap:4px 12px;border-top:1px solid var(--line);padding:7px 4px;cursor:pointer}
@@ -223,7 +227,7 @@ button.on{background:var(--magenta)}
 </div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="audiofocus.js?v=1"></script>
-<script src="marine.js?v=4"></script>
+<script src="marine.js?v=6"></script>
 <script src="focus.js?v=1" data-focus="marine" data-what="the marine window (ships, marine radio, weather)"></script>
 </body>
 </html>
