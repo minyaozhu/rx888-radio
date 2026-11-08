@@ -336,7 +336,9 @@ class AisReceiver:
 
     def start(self, ctl, f_if: float):
         if self.running:
-            return
+            # Back in the window (after a pause, or the tuner moved): the old channel may sit at a stale IF
+            # or have expired in radiod, so start over with a fresh one.
+            self.stop()
         if not AIS_CATCHER.exists():
             self.error = f"AIS-catcher not built ({AIS_CATCHER}); see README"
             log.warning(self.error)
@@ -368,6 +370,12 @@ class AisReceiver:
         rms, last_keep = None, time.time()
         proc = self.proc
         while self.running:
+            if time.time() - last_keep > 10:         # radiod drops the channel when its lifetime runs out
+                try:
+                    self.ctl.set_channel_lifetime(self.ssrc, 1500)
+                except Exception:
+                    pass
+                last_keep = time.time()
             try:
                 d, _ = self.sock.recvfrom(65536)
             except socket.timeout:
@@ -387,12 +395,6 @@ class AisReceiver:
                 proc.stdin.write((a * (0.1 / rms)).astype("<f4").tobytes())
             except (BrokenPipeError, ValueError, OSError):
                 break
-            if time.time() - last_keep > 10:
-                try:
-                    self.ctl.set_channel_lifetime(self.ssrc, 1500)
-                except Exception:
-                    pass
-                last_keep = time.time()
 
     def _read(self, proc):
         out = self.out / "ais.jsonl"
@@ -460,7 +462,9 @@ class AprsReceiver:
 
     def start(self, ctl, f_if: float):
         if self.running:
-            return
+            # Back in the window (after a pause, or the tuner moved): the old channel may sit at a stale IF
+            # or have expired in radiod, so start over with a fresh one.
+            self.stop()
         if not MULTIMON.exists():
             self.error = f"multimon-ng not built ({MULTIMON}); see README"
             log.warning(self.error)
@@ -489,6 +493,14 @@ class AprsReceiver:
         from scipy.signal import resample_poly
         proc, last_keep, carry = self.proc, time.time(), np.zeros(0, np.float32)
         while self.running:
+            # The FM squelch sends nothing between packets, so this can't wait for audio: radiod drops a
+            # channel whose lifetime isn't renewed (30 s), and APRS would go deaf after the first quiet spell.
+            if time.time() - last_keep > 10:
+                try:
+                    self.ctl.set_channel_lifetime(self.ssrc, 1500)
+                except Exception:
+                    pass
+                last_keep = time.time()
             try:
                 d, _ = self.sock.recvfrom(65536)
             except socket.timeout:
@@ -511,12 +523,6 @@ class AprsReceiver:
                 proc.stdin.flush()
             except (BrokenPipeError, ValueError, OSError):
                 break
-            if time.time() - last_keep > 10:
-                try:
-                    self.ctl.set_channel_lifetime(self.ssrc, 1500)
-                except Exception:
-                    pass
-                last_keep = time.time()
 
     def _read(self, proc):
         import aprslib
