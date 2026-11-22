@@ -2,6 +2,9 @@
 // "Switch the receiver here": hold the voice session (voice_session.py) on this page's windows, or release.
 // Include with <script src="focus.js" data-focus="air|safety|hf|pause" data-what="..."></script> and an
 // element with id="focusBox" where the button goes.
+// Listening implies the receiver: a page's Listen calls receiverFocus.ensure(isHere), which switches the receiver
+// here unless it already is (isHere(focus), default: focus === data-focus). Never the other way: holding the
+// receiver doesn't start audio, and stopping audio doesn't release the receiver.
 'use strict';
 (function () {
   const me = document.currentScript;
@@ -37,5 +40,17 @@
     btn.disabled = false;
     render();
   });
+  async function ensure(isHere) {
+    const here = isHere || ((f) => f === want);
+    try { state = await (await fetch('/api/voice/focus')).json(); } catch (e) { return; }
+    if (here(state.focus)) { render(); return; }
+    try {
+      const r = await fetch('/api/voice/focus', {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                                  body: JSON.stringify({focus: want})});
+      if (r.ok) state = await r.json();
+    } catch (e) { /* rxapp restarting: the next refresh shows the state */ }
+    render();
+  }
+  window.receiverFocus = {ensure, want};
   refresh(); setInterval(refresh, 3000);
 })();

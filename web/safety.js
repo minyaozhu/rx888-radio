@@ -219,9 +219,19 @@ function listenOff() {                    // another page started playing
   audio.on = false; connect(null);
   $('listen').textContent = 'Listen'; $('listen').classList.remove('on');
 }
+// Listen switches the receiver here (focus.js), unless it's already on one of this page's windows
+const SVC_HERE = SVC;
+// (no window list, i.e. no voice session status: keep a hold on a single window rather than override it)
+const winService = (f) => {
+  if (!f || !f.startsWith('window:')) return null;
+  const ws = S.status.windows || [];
+  return ws.length ? (ws.find((w) => w.name === f.slice(7)) || {}).service : SVC_HERE;
+};
 $('listen').addEventListener('click', () => {
   audio.on = !audio.on;
   if (audio.on) { clips.stop(); audioFocus.claim(listenOff); } else audioFocus.release();
+  if (audio.on && window.receiverFocus)        // a band already picked here (Low band, Lower...) counts as here
+    receiverFocus.ensure((f) => f === SVC || winService(f) === SVC || (SVC === 'safety' && f === 'hf'));
   if (audio.on) {
     if (!audio.ctx) { audio.ctx = new AudioContext(); audio.gain = audio.ctx.createGain(); audio.gain.connect(audio.ctx.destination); }
     audio.ctx.resume(); audio.gain.gain.value = +$('vol').value;

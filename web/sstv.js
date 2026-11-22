@@ -66,6 +66,7 @@ function startListen(ssrc, f) {
   };
   audio.ws = ws; S.listen = ssrc;
   audioFocus.claim(() => { stopListen(); drawRows(); });
+  if (window.receiverFocus) receiverFocus.ensure((f) => f === 'hf');   // Listen implies the receiver (HF input)
   $('now').textContent = `playing ${mhz(f)} MHz`; $('listen').disabled = false; $('listen').textContent = 'Stop listening';
 }
 $('rows').addEventListener('click', (e) => {
