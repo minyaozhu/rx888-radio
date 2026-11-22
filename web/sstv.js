@@ -7,7 +7,9 @@ const api = async (p, opts) => { const r = await fetch(p, opts); if (!r.ok) thro
 const esc = (x) => String(x ?? '').replace(/[&<>"]/g, (c) => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'})[c]);
 const when = (t) => new Date(t * 1000).toLocaleString([], {month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false});
 const mhz = (f) => (f / 1e6).toFixed(3);
-const SYNC_TRIGGER = 0.25;            // sstvmon.looks_like_sstv
+// sstvmon.looks_like_sstv: picture tones in the video band, little speech energy, some line sync
+const VIDEO_TRIGGER = 0.48;
+const looksSstv = (l) => l.sync >= 0.10 && l.video >= VIDEO_TRIGGER && (l.speech == null || l.speech <= 0.25);
 
 const S = {info: null, pics: [], ids: null, health: null, sel: null, listen: null, playing: null};
 
@@ -20,13 +22,13 @@ function drawRows() {
   const hf = S.health && S.health.band === 'hf';
   $('fRx').innerHTML = !S.health ? '–' : hf ? 'on HF: listening' : '<span class="away">on VHF: SSTV paused until the HF input is back</span>';
   $('rows').innerHTML = i.channels.map((c) => {
-    const sync = c.last && c.last.sync != null ? c.last.sync : null;
+    const l = c.last && c.last.video != null ? c.last : null;
     const cap = c.state.startsWith('capturing');
     return `<tr class="${cap ? 'cap' : ''}">
       <td>${esc(c.band)}</td><td>${mhz(c.freq_hz)} ${c.mode.toUpperCase()}</td>
       <td>${c.parked ? '<span class="away">paused (VHF)</span>' : cap ? `<span class="capture">● ${esc(c.state)}</span>` : esc(c.state)}</td>
-      <td>${sync == null ? '' : `<span class="meter" title="sync ${sync.toFixed(2)}, video ${c.last.video.toFixed(2)}"><b style="width:${Math.min(100, sync / 0.6 * 100)}%"></b><i style="left:${SYNC_TRIGGER / 0.6 * 100}%"></i></span>
-        ${sync.toFixed(2)}${c.last.mode && c.last.mode !== '?' && sync >= SYNC_TRIGGER ? ' · ' + esc(c.last.mode) : ''}`}</td>
+      <td>${l == null ? '' : `<span class="meter" title="video band ${l.video.toFixed(2)}, speech band ${l.speech == null ? '?' : l.speech.toFixed(2)}, line sync ${l.sync.toFixed(2)}"><b style="width:${Math.min(100, l.video * 100)}%"></b><i style="left:${VIDEO_TRIGGER * 100}%"></i></span>
+        ${l.video.toFixed(2)}${looksSstv(l) && l.mode && l.mode !== '?' ? ' · ' + esc(l.mode) : ''}`}</td>
       <td>${c.triggers}</td><td>${c.pictures}</td>
       <td><button class="smallbtn" data-ssrc="${c.ssrc}" data-f="${c.freq_hz}" ${c.parked ? 'disabled' : ''}>${S.listen === c.ssrc ? 'Stop' : 'Listen'}</button></td></tr>`;
   }).join('') || '<tr><td colspan="7" class="empty">The monitor isn\'t running. Start it to watch 3.845, 7.171, 14.230, 14.233, 21.340 and 28.680 MHz.</td></tr>';

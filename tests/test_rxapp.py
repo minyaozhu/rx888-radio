@@ -218,6 +218,82 @@ def test_sstv_detector_fires_on_sstv_not_on_noise():
     assert not sstvmon.looks_like_sstv(sstvmon.analyse(a[:20 * r]))             # noise only
 
 
+def _band_noise(n, rng, lo=300.0, hi=2700.0):
+    """Receiver noise as it comes out of an SSB filter: flat over lo-hi, unit RMS."""
+    spec = np.fft.rfft(rng.standard_normal(n))
+    f = np.fft.rfftfreq(n, 1 / sstvmon.RATE)
+    spec[(f < lo) | (f > hi)] = 0
+    x = np.fft.irfft(spec, n)
+    return x / np.sqrt((x ** 2).mean())
+
+
+def _weak_sstv(mode_name, snr_db, seed=1):
+    import sstv
+    rng = np.random.default_rng(seed)
+    mode = getattr(sstv.Mode, mode_name)
+    img = rng.integers(0, 255, (mode.image_height, mode.image_width, 3)).astype(np.uint8)
+    s = sstv.encode(img, mode, sstvmon.RATE).astype(float)
+    s /= np.sqrt((s ** 2).mean())
+    r = sstvmon.RATE
+    a = _band_noise(len(s) + 30 * r, rng)
+    a[10 * r:10 * r + len(s)] += s * 10 ** (snr_db / 20)
+    return a / np.abs(a).max()
+
+
+def test_sstv_detector_catches_weak_sstv_but_not_a_voice_net():
+    r = sstvmon.RATE
+    for mode in ("MARTIN_1", "SCOTTIE_1", "PD_120", "ROBOT_36"):
+        a = _weak_sstv(mode, 0)                                      # 0 dB SNR in the SSB bandwidth
+        assert sstvmon.looks_like_sstv(sstvmon.analyse(a[20 * r:40 * r])), mode
+    assert not sstvmon.looks_like_sstv(sstvmon.analyse(_band_noise(20 * r, np.random.default_rng(5))))
+    # a voice net: syllables of a few harmonics below 1100 Hz, gaps every ~0.23 s, a steady 668 Hz whistle
+    rng = np.random.default_rng(7)
+    t = np.arange(20 * r) / r
+    gate = (np.sin(2 * np.pi * t / 0.227) > -0.3).astype(float)
+    voice = sum(np.sin(2 * np.pi * h * 180 * t + rng.uniform(0, 6)) / h for h in range(1, 6)) * gate
+    a = voice + 0.6 * np.sin(2 * np.pi * 668 * t) + 0.3 * _band_noise(len(t), rng)
+    r_ = sstvmon.analyse(a / np.abs(a).max())
+    assert not sstvmon.looks_like_sstv(r_), r_
+
+
+def test_sstv_decoder_band_limits_noisy_audio():
+    """At 15 dB SNR the decoder finds nothing in the raw audio but decodes it band-limited to 1050-2350 Hz."""
+    import sstv
+    a = _weak_sstv("PD_120", 15) * 12000
+    assert sstv.decode(a.astype(np.int16), sstvmon.RATE) == []
+    assert len(sstvmon.decode_pictures(a)) == 1
+
+
+def test_sstv_noise_tolerant_decoder_finds_weak_pictures_and_nothing_in_noise():
+    """At 5 dB the package returns nothing; the fallback finds the mode from the line rate and every line."""
+    import sstv
+    from rxapp import sstvdec
+    r = sstvmon.RATE
+    for mode, name in (("MARTIN_1", "Martin M1"), ("PD_120", "PD120"), ("ROBOT_36", "Robot 36")):
+        a = _weak_sstv(mode, 5) * 12000
+        assert sstv.decode(a.astype(np.int16), r) == []
+        pics = sstvmon.decode_pictures(a)
+        assert len(pics) == 1 and pics[0].info["sstv_mode"] == name
+        m = sstvdec.BY_NAME[name]
+        assert pics[0].info["sstv_lines"] >= m.height - 2
+    assert sstvdec.decode(_band_noise(120 * r, np.random.default_rng(11)), r) == []
+
+
+def test_sstv_decoder_reads_a_picture_right():
+    """A clean Martin M1 picture comes back pixel-close, in place (no row or column shift)."""
+    import sstv
+    from rxapp import sstvdec
+    rng = np.random.default_rng(3)
+    img = np.repeat(np.repeat(rng.integers(0, 256, (32, 40, 3)), 8, 0), 8, 1).astype(np.uint8)
+    s = sstv.encode(img, sstv.Mode.MARTIN_1, sstvmon.RATE).astype(float)
+    a = np.concatenate([np.zeros(5 * sstvmon.RATE), s, np.zeros(5 * sstvmon.RATE)])
+    a += _band_noise(len(a), rng) * 0.01 * s.std()
+    im = np.asarray(sstvdec.decode(a, sstvmon.RATE)[0]).astype(float)
+    err = {sh: np.abs(im[max(0, -sh):256 - max(0, sh)] - img[max(0, sh):256 - max(0, -sh)]).mean() for sh in (-1, 0, 1)}
+    assert min(err, key=err.get) == 0                  # rows in place
+    assert err[0] < 14                                 # sharp 8-px block edges blur a little at 12 kHz
+
+
 def _sstv_radio(parked=False, opened=0.0):
     return SimpleNamespace(channels={None: SimpleNamespace(parked=parked, opened=opened)})
 

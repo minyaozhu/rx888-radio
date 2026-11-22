@@ -33,6 +33,7 @@ QUIET_END = 20.0           # s without SSTV that ends a capture
 MAX_CAPTURE = 360.0        # s; the longest common modes (PD290) take ~290 s
 FILTER_HZ = (100.0, 3000.0)
 LIVE_EVERY = 5.0           # s between decodes of a capture in progress (the "receiving now" window)
+KEEP_FAILED = 10           # captures without a picture kept (sstv/failed/) to see why they didn't decode
 SETTLE = 30.0              # s ignored after a channel starts: its AGC settling looks like sync pulses
 
 # Sync period per line (ms). PD modes send one sync per two lines.
@@ -55,7 +56,8 @@ def analyse(audio: np.ndarray) -> dict:
     spec = np.abs(np.fft.rfft(audio * np.hanning(len(audio)))) ** 2
     f = np.fft.rfftfreq(len(audio), 1 / RATE)
     band = spec[(f >= 300) & (f <= 3000)].sum()
-    video = spec[(f >= 1100) & (f <= 2350)].sum() / band if band else 0.0
+    video = spec[(f >= 1500) & (f <= 2300)].sum() / band if band else 0.0     # picture tones (black..white)
+    speech = spec[(f >= 300) & (f < 1100)].sum() / band if band else 0.0      # SSTV leaves this nearly empty
     env = _tone_envelope(audio, 1200, 100)
     env = env - env.mean()
     ac = np.correlate(env, env, mode="full")[len(env) - 1:]
@@ -67,17 +69,52 @@ def analyse(audio: np.ndarray) -> dict:
     mode = min(SYNC_MODES, key=lambda m: abs(SYNC_MODES[m] - period))
     if abs(SYNC_MODES[mode] - period) > 12:
         mode = "?"
-    return {"video": float(video), "sync": sync, "period": float(period), "mode": mode}
+    return {"video": float(video), "speech": float(speech), "sync": sync, "period": float(period), "mode": mode}
 
 
 def looks_like_sstv(r: dict) -> bool:
-    """Generous on purpose: a false trigger only costs a decode attempt."""
-    return r["sync"] >= 0.25 and r["video"] >= 0.45
+    """Picture tones over the 1500-2300 Hz video band and little below 1100 Hz. Band noise alone is about a
+    third in each; SSTV down to -3 dB SNR measures video >= 0.52, speech <= 0.23, while a voice net's syllable
+    gaps (which fooled the sync test alone on 80 m) measure video <= 0.40, speech >= 0.27. The sync test stays,
+    loose, so a steady tone in the video band doesn't count: Martin's short sync pulses read as low as 0.1."""
+    return r["sync"] >= 0.10 and r["video"] >= 0.48 and r.get("speech", 0.0) <= 0.25
+
+
+DECODE_BAND_HZ = (1050.0, 2350.0)  # sync (1200) and video (1500-2300) only: the decoder gives up sooner on band noise
+
+
+def _band_limit(audio: np.ndarray) -> np.ndarray:
+    """Band-pass to DECODE_BAND_HZ and rescale to a fixed int16 level. On synthetic HF noise this moves the
+    decoder's limit from ~20 dB SNR to ~12-15 dB."""
+    x = np.asarray(audio, np.float64)
+    if not len(x):
+        return x.astype(np.int16)
+    spec = np.fft.rfft(x)
+    f = np.fft.rfftfreq(len(x), 1 / RATE)
+    spec[(f < DECODE_BAND_HZ[0]) | (f > DECODE_BAND_HZ[1])] = 0
+    y = np.fft.irfft(spec, len(x))
+    peak = np.abs(y).max()
+    return (y / peak * 12000 if peak > 0 else y).astype(np.int16)
 
 
 def decode_pictures(audio: np.ndarray) -> list:
+    """The `sstv` package first (exact on clean signals, needs the VIS header); when it finds nothing, the
+    noise-tolerant decoder (rxapp/sstvdec.py), which finds the mode from the line rate and keeps going down
+    to about 0 dB SNR, where the package gives up below 12-15 dB."""
     import sstv                                       # the decoder package, imported on first use
-    return sstv.decode(audio.astype(np.int16), RATE)   # int16 as is; float input must be scaled to +-1
+    pics = sstv.decode(_band_limit(audio), RATE)
+    if pics:
+        return pics
+    from . import sstvdec
+    return sstvdec.decode(np.asarray(audio, np.float64), RATE)
+
+
+def _write_wav(path, audio: np.ndarray):
+    with wave.open(str(path), "wb") as f:
+        f.setnchannels(1)
+        f.setsampwidth(2)
+        f.setframerate(RATE)
+        f.writeframes(audio.astype("<i2").tobytes())
 
 
 # ---- one frequency ------------------------------------------------------------------
@@ -249,16 +286,17 @@ class SstvMonitor:
 
     async def _decode(self, w: Watch, t0: float, audio: np.ndarray):
         pics = await asyncio.to_thread(decode_pictures, audio)
-        if not pics:
-            log.info("SSTV %s: %.0f s captured, no picture decoded", w.band, len(audio) / RATE)
-            return
         stamp = time.strftime("%Y%m%d-%H%M%S", time.localtime(t0))
+        if not pics:
+            failed = self.dir / "failed"
+            failed.mkdir(exist_ok=True)
+            _write_wav(failed / f"{stamp}_{w.band}.wav", audio)
+            for old in sorted(failed.glob("*.wav"))[:-KEEP_FAILED]:
+                old.unlink(missing_ok=True)
+            log.info("SSTV %s: %.0f s captured, no picture decoded (audio in sstv/failed/)", w.band, len(audio) / RATE)
+            return
         wav = self.dir / f"{stamp}_{w.band}.wav"
-        with wave.open(str(wav), "wb") as f:
-            f.setnchannels(1)
-            f.setsampwidth(2)
-            f.setframerate(RATE)
-            f.writeframes(audio.astype("<i2").tobytes())
+        _write_wav(wav, audio)
         for k, im in enumerate(pics):
             png = self.dir / f"{stamp}_{w.band}_{k}.png"
             im.save(png)

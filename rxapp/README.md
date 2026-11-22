@@ -102,15 +102,31 @@ on the FT8 / FT4 page (`ft8.html?proto=ft4`, the page's FT8 / FT4 switch); each 
 
 ## SSTV
 
-Each SSTV channel's last 20 s of audio is checked every 5 s with the Malahit toolkit's detector
-(energy in the 1100–2350 Hz video band, plus a 1200 Hz line-sync pulse repeating at the mode's line
-period). A hit starts a capture that includes the 40 s before it (so the VIS header that names the mode
-is in it) and ends 20 s after SSTV stops (or at 6 min). The capture goes to the
-[`sstv`](https://pypi.org/project/sstv/) decoder (a Rust crate: Martin, Scottie, Robot, PD, Pasokon,
-Wrasse modes); pictures go to `rxapp_data/sstv/` and the `sstv` table, and captures with no picture are
-dropped. Measured on band noise, the detector's sync score sits at 0.04–0.12 against a 0.25 trigger; each
-channel's first 30 s are ignored because its AGC settling looks like sync. The decoder needs the VIS
-header, so a picture already under way when the monitor starts is missed.
+Each SSTV channel's last 20 s of audio is checked every 5 s (`analyse` / `looks_like_sstv`): a capture
+starts when at least 0.48 of the 300–3000 Hz energy is in SSTV's 1500–2300 Hz picture band, at most 0.25
+is at 300–1100 Hz where speech lives, and there's some 1200 Hz line sync at a mode's line period
+(≥ 0.10). Band noise sits near 0.33 / 0.33. Synthetic SSTV down to −3 dB SNR passes in every common mode.
+The earlier rule (sync ≥ 0.25 and 1100–2350 Hz energy ≥ 0.45) fired again and again on an 80 m voice
+net, whose syllable gaps look like line sync. A capture includes the 40 s before the trigger (so the
+VIS header that names the mode is in it) and ends 20 s after SSTV stops (or at 6 min). It is
+band-limited to 1050–2350 Hz and goes to the [`sstv`](https://pypi.org/project/sstv/) decoder (a Rust
+crate: Martin, Scottie, Robot, PD, Pasokon, Wrasse modes). The band-limiting moves that decoder's
+limit on synthetic HF noise from about 20 dB SNR to 12–15 dB; below that it returns nothing, even
+with a clean VIS header. When the package finds nothing, `rxapp/sstvdec.py` decodes it the way slowrx and MMSSTV do: no VIS
+header needed, so a picture already under way still decodes. It finds the mode and the exact line period from the autocorrelation
+of a 1200 Hz sync likelihood (the shortest period wins, since Robot 72 = 2 × Robot 36 and Scottie DX = 7 ×
+Robot 36). Each line's sync is measured, and a robust straight-line fit through them places every line,
+so a noisy or missing pulse doesn't move its line. The picture is the densest cluster of lines whose
+sync lands on the fit. Each pixel is the mean instantaneous frequency over its time; Robot and PD use
+full-swing YCbCr. The timing tables (Martin M1/M2, Scottie S1/S2/DX, Robot 36/72, PD50–PD290) were
+checked against the package's encoder: every component lands within 0.4 ms. On synthetic HF noise
+(300–2700 Hz) it gets the mode and the whole picture down to 0 dB SNR, recognizable even at −3 dB; the
+package gives up below 12–15 dB. Noise alone and the saved 80 m voice-net captures give no picture
+(fold contrast at most 3.0 against a 4.0 gate). A 5-minute PD290 capture decodes in 0.3 s. Pictures go to
+`rxapp_data/sstv/` and the `sstv` table. The last 10 captures with no picture are kept in
+`rxapp_data/sstv/failed/` to see why. Each channel's first 30 s are ignored because its AGC settling looks
+like sync, and that restarts whenever the channel is re-created: switching the input to VHF parks the
+channels and switching back re-creates them.
 
 API: `GET/POST /api/sstv` (status / `{on}`), `GET /api/sstv/pictures`, `GET /api/sstv/pictures/{id}.png|.wav`,
 `DELETE /api/sstv/pictures/{id}`.

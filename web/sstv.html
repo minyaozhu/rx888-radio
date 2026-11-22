@@ -197,7 +197,7 @@ button.on{background:var(--magenta)}
     </div>
     <table class="chtable"><thead><tr><th>Band</th><th>Frequency</th><th>State</th><th>SSTV detector</th><th>Captures</th><th>Pictures</th><th></th></tr></thead>
       <tbody id="rows"></tbody></table>
-    <p class="caveat" style="margin:0">The detector looks for SSTV's 1200 Hz line-sync pulses (the bar; a capture starts above the mark at 0.25) and most energy in the 1100–2350 Hz picture band. A capture without a decodable picture is dropped. A picture already under way when the monitor starts is missed: the decoder needs the opening tone burst (VIS header) that names the mode.</p>
+    <p class="caveat" style="margin:0">The detector bar is the share of the audio in SSTV's 1500–2300 Hz picture band (band noise alone sits near 0.33); a capture starts above the mark at 0.48 when there is also little energy at 300–1100 Hz, where speech lives, and some 1200 Hz line sync. Hover the bar for all three. A capture without a decodable picture is kept in <code>sstv/failed/</code> (the last 10). Weak pictures are decoded too: when the standard decoder finds nothing, a noise-tolerant one reads the picture from its line sync (no header needed), down to about 0 dB SNR.</p>
   </div>
 
   <div class="panel" style="padding:14px 18px">
