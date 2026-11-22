@@ -193,7 +193,7 @@ button.on{background:var(--magenta)}
       <h2>Band conditions <span class="lanesub" style="text-transform:none;letter-spacing:0">(last 30 min)</span></h2>
       <table class="tbl"><thead><tr><th>Band</th><th>WSPR</th><th>FT8</th><th>FT4</th><th>CW</th><th>Stations</th><th>Farthest</th></tr></thead><tbody id="cond"></tbody></table>
       <h2 style="margin-top:8px">Latest spots</h2>
-      <div class="scroll"><table class="tbl"><thead><tr><th>UTC</th><th>Band</th><th>Call</th><th>Grid</th><th>SNR</th><th>km</th></tr></thead><tbody id="spots"></tbody></table></div>
+      <div class="scroll"><table class="tbl"><thead><tr><th>UTC · PT</th><th>Band</th><th>Call</th><th>Grid</th><th>SNR</th><th>km</th></tr></thead><tbody id="spots"></tbody></table></div>
     </div>
   </div>
   <p class="caveat">Decoded with WSJT-X's wsprd from 2-minute slots on 1.8366, 3.5686, 5.2872, 7.0386, 10.1387, 14.0956, 18.1046, 21.0946, 24.9246, 28.1246 and 50.293 MHz (USB). WSPR runs only while the receiver is on its HF input; hold it there with “Switch receiver here” for unbroken coverage. Distances are from this station's locator (set on the FT8 map) to the centre of the beacon's grid square.</p>
@@ -201,7 +201,8 @@ button.on{background:var(--magenta)}
 <script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/topojson-client@3.1.0/dist/topojson-client.min.js"></script>
 <script src="worldmap.js?v=1"></script>
-<script src="wspr.js?v=3"></script>
-<script src="focus.js?v=1" data-focus="hf" data-what="the HF input, so WSPR (and FT8, FT4, SSTV) run all the time"></script>
+<script src="time.js?v=1"></script>
+<script src="wspr.js?v=4"></script>
+<script src="focus.js?v=2" data-focus="hf" data-what="the HF input, so WSPR (and FT8, FT4, SSTV) run all the time"></script>
 </body>
 </html>

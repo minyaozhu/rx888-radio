@@ -37,14 +37,14 @@ function draw() {
       w: Math.max(1, Math.min(4, (s.snr + 30) / 7)), op: 0.7 * fade(s.t)})) : [],
     stations: rows.map((s) => ({id: s.call + '|' + s.band, ll: gridLL(s.grid), band: s.band, n: heard.get(s.call), op: fade(s.t),
       sel: S.sel === s.call + '|' + s.band,
-      title: `${s.call} ${s.grid} · ${s.band} · SNR ${s.snr} dB${s.dbm != null ? ' · ' + s.dbm + ' dBm' : ''}${s.km ? ' · ' + Math.round(s.km).toLocaleString() + ' km' : ''} · ${utc(s.t)} UTC`})),
+      title: `${s.call} ${s.grid} · ${s.band} · SNR ${s.snr} dB${s.dbm != null ? ' · ' + s.dbm + ' dBm' : ''}${s.km ? ' · ' + Math.round(s.km).toLocaleString() + ' km' : ''} · ${utcPt(s.t)}`})),
     labels: [...far, ...rows.filter((s) => S.sel === s.call + '|' + s.band)].map((s) => ({ll: gridLL(s.grid), text: s.call})),
   });
   const calls = new Set(spots.map((s) => s.call));
   $('fSpots').textContent = spots.length; $('fSt').textContent = calls.size;
   const f = spots.filter((s) => s.km).sort((a, b) => b.km - a.km)[0];
   $('fFar').textContent = f ? `${f.call} · ${Math.round(f.km).toLocaleString()} km (${f.band})` : '–';
-  $('spots').innerHTML = spots.slice(0, 200).map((s) => `<tr data-grid="${esc(s.grid || '')}" data-id="${esc(s.call + '|' + s.band)}"><td>${utc(s.t)}</td><td style="color:${bandColor(s.band)}">${s.band}</td>
+  $('spots').innerHTML = spots.slice(0, 200).map((s) => `<tr data-grid="${esc(s.grid || '')}" data-id="${esc(s.call + '|' + s.band)}"><td>${utcPtCell(s.t)}</td><td style="color:${bandColor(s.band)}">${s.band}</td>
     <td>${esc(s.call)}</td><td>${esc(s.grid || '')}</td><td>${s.snr}</td><td>${s.km ? Math.round(s.km).toLocaleString() : ''}</td></tr>`).join('')
     || '<tr><td colspan="6" class="shut">No spots in this period.</td></tr>';
 }

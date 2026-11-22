@@ -53,7 +53,7 @@ $('resume').addEventListener('click', async () => {
 });
 
 // ------------------------------------------------------------------ player
-const audio = {ctx: null, gain: null, ws: null, next: 0};
+const audio = {ctx: null, gain: null, ws: null, next: 0, ssrc: null, retry: null};
 async function play(item) {
   const sec = item.sec, freq = item.freq_hz, band = sec === 'fm' ? 'vhf' : 'hf', mode = sec === 'fm' ? 'wfm' : 'am';
   $('nowName').textContent = 'Tuning…'; $('nowMeta').textContent = '';
@@ -79,7 +79,9 @@ async function play(item) {
   draw();
 }
 function connect(ssrc) {
+  clearTimeout(audio.retry); audio.retry = null;      // a pending reconnect is for the stream being replaced
   if (audio.ws) { const w = audio.ws; audio.ws = null; w.onmessage = w.onclose = null; w.close(); }
+  audio.ssrc = ssrc;
   if (!ssrc) return;
   audio.next = 0;
   const ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + `/ws/audio/${ssrc}`);
@@ -96,7 +98,19 @@ function connect(ssrc) {
     if (audio.next < now + 0.05 || audio.next > now + 1.0) audio.next = now + 0.25;
     src.start(audio.next); audio.next += buf.duration;
   };
-  ws.onclose = () => { if (audio.ws === ws && S.playing) setTimeout(() => S.playing && connect(ssrc), 1000); };
+  // Server restart or network blip: reconnect while still listening, to the channel still wanted. The old
+  // version reconnected to the ssrc it was opened with, and a timer left over from a dead channel replaced
+  // the next station's stream about a second after it started. 4404: the channel is gone, make a new one.
+  ws.onclose = (e) => {
+    if (audio.ws !== ws || !S.playing) return;
+    audio.ws = null;
+    audio.retry = setTimeout(async () => {
+      audio.retry = null;
+      if (!S.playing || audio.ssrc !== ssrc) return;
+      try { if (e.code === 4404) { const p = S.playing, band = p.sec === 'fm' ? 'vhf' : 'hf'; S.chans[band] = (await post('/api/channels', {freq_hz: p.freq, mode: p.sec === 'fm' ? 'wfm' : 'am', band, label: 'broadcast'})).ssrc; } } catch (err) { /* rxapp still starting: try again */ }
+      connect(e.code === 4404 ? S.chans[S.playing.sec === 'fm' ? 'vhf' : 'hf'] : ssrc);
+    }, 1000);
+  };
   audio.ws = ws;
 }
 // FM stereo: kept per browser; stereo needs a strong signal, mono is quieter on weak stations
@@ -216,7 +230,7 @@ function rowsFor() {
     for (const [f, xs] of byF) {
       const names = [...new Set(xs.map((x) => x.station))];
       rows.push({sec: 'sw', freq_hz: f, title: names.join(' / '), sub: `${[...new Set(xs.map((x) => x.language))].join(', ')} → ${[...new Set(xs.map((x) => x.target_name))].join(', ')}`,
-        cols: [names.join(' / '), [...new Set(xs.map((x) => x.language))].join(', '), [...new Set(xs.map((x) => x.target_name))].join(', '), xs.map((x) => x.time).join(', '), xs[0].itu, xs[0].band],
+        cols: [names.join(' / '), [...new Set(xs.map((x) => x.language))].join(', '), [...new Set(xs.map((x) => x.target_name))].join(', '), xs.map((x) => eibiPt(x.time)).join(', '), xs[0].itu, xs[0].band],
         snr: hitFor('sw', f)});
     }
     for (const [f, snr] of Object.entries(S.hits.sw)) {
@@ -231,7 +245,7 @@ function rowsFor() {
 }
 function draw() {
   const sw = S.sec === 'sw';
-  $('thead').innerHTML = sw ? '<tr><th>kHz</th><th>Station (EiBi, now)</th><th>Language</th><th>Target</th><th>UTC</th><th>From</th><th>Band</th><th>Signal</th><th></th></tr>'
+  $('thead').innerHTML = sw ? '<tr><th>kHz</th><th>Station (EiBi, now)</th><th>Language</th><th>Target</th><th>UTC · PT</th><th>From</th><th>Band</th><th>Signal</th><th></th></tr>'
     : `<tr><th>${S.sec === 'fm' ? 'MHz' : 'kHz'}</th><th>Station</th><th>City</th><th>Format</th><th>Signal</th><th></th></tr>`;
   const rows = rowsFor();
   $('rows').innerHTML = rows.map((r, i) => {

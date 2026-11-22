@@ -137,7 +137,7 @@ function derive() {
 // ------------------------------------------------------------------ facts and lists
 function renderFacts() {
   const t1 = Date.now() / 1000, t0 = t1 - S.win;
-  $('fWin').textContent = `${S.win >= 3600 ? S.win / 3600 + ' h' : S.win / 60 + ' min'} · ${utc(t0).slice(0, 5)}–${utc(t1).slice(0, 5)} UTC`;
+  $('fWin').textContent = `${S.win >= 3600 ? S.win / 3600 + ' h' : S.win / 60 + ' min'} · ${utc(t0).slice(0, 5)}–${utc(t1).slice(0, 5)} UTC · ${ptParts(t0).hm}–${ptTime(t1)}`;
   $('fMsgs').textContent = S.rows.length.toLocaleString();
   const heard = [...S.stations.values()].filter((s) => s.n > 0);
   $('fStations').textContent = heard.length;
@@ -265,7 +265,7 @@ function renderMap() {
 }
 
 // ------------------------------------------------------------------ timeline (canvas)
-const TL = {left: 168, top: 26, lane: 18, right: 14};
+const TL = {left: 168, top: 38, lane: 18, right: 14};
 // The axis spans the window, or from the first decode if there's less data than that (at least 15 min)
 function tRange() {
   const t1 = Date.now() / 1000;
@@ -294,8 +294,10 @@ function renderTimeline() {
     const xx = Math.round(x(d / 1000)) + 0.5;
     g.beginPath(); g.moveTo(xx, TL.top - 6); g.lineTo(xx, h); g.globalAlpha = 0.5; g.stroke(); g.globalAlpha = 1;
     g.fillText(d.toISOString().slice(11, 16), xx - 16, 14);
+    g.fillText(ptParts(d / 1000).hm, xx - 16, 27);
   }
   g.fillText('UTC', 8, 14);
+  g.fillText(ptParts(t1).tz, 8, 27);
   if (!S.lanes.length) { g.fillStyle = muted; g.fillText('No messages in this window yet.', TL.left, TL.top + 14); return; }
   // lanes
   S.lanes.forEach((s, i) => {
@@ -374,7 +376,7 @@ function select(r, moveCursor) {
   S.sel = r;
   if (moveCursor && r.t + SLOT < Date.now() / 1000 - 1) { S.follow = false; S.cursor = r.t + SLOT - 0.1; }
   const p = PHASES[r.ph];
-  $('dTime').textContent = utc(r.t) + ' UTC';
+  $('dTime').textContent = utcPt(r.t, true);
   $('dCall').textContent = r.ph === 'cq' ? `${r.from_call} · CQ` : r.from_call ? `${r.from_call} → ${r.to_call}` : r.band;
   $('dPhase').textContent = p.label; $('dPhase').style.color = css(p.v);
   $('dRaw').textContent = r.msg;
@@ -403,7 +405,7 @@ function setCursor(t, keepFollow) {
 function syncControls() {
   const [t0, t1] = tRange();
   $('scrub').value = Math.round((S.cursor - t0) / (t1 - t0) * 1000);
-  $('clock').innerHTML = utc(S.cursor) + ' UTC' + (S.follow ? ' <span class="live">● live</span>' : '');
+  $('clock').innerHTML = utcPt(S.cursor, true) + (S.follow ? ' <span class="live">● live</span>' : '');
   $('play').textContent = S.playing ? 'Pause' : 'Play';
   $('play').setAttribute('aria-pressed', S.playing);
 }

@@ -55,7 +55,7 @@ function drawMap() {
     home: S.home, homeLabel: `Home · ${S.qth}`,
     stations: sts.map((st) => ({id: st.call, ll: st.ll, band: st.band, approx: true, n: st.n, sel: S.sel === st.call,
       op: now - st.t <= 120 ? 1 : Math.max(0.25, 1 - (now - st.t) / win),
-      title: `${st.call} · ${st.where || '?'}${st.km ? ' · ~' + Math.round(st.km).toLocaleString() + ' km' : ''} · ${st.band} ${khz(st.freq_hz)} kHz · ${Math.round(st.wpm)} wpm · ${utc(st.t)} UTC`})),
+      title: `${st.call} · ${st.where || '?'}${st.km ? ' · ~' + Math.round(st.km).toLocaleString() + ' km' : ''} · ${st.band} ${khz(st.freq_hz)} kHz · ${Math.round(st.wpm)} wpm · ${utcPt(st.t)}`})),
     lines: S.home ? sts.filter((st) => now - st.t < 600).map((st) => ({id: st.call, from: S.home, to: st.ll, band: st.band, w: 1.4, op: 0.65})) : [],
     rings: sts.filter(onAir).map((st) => st.ll),
     labels: [...far.slice(0, 5), ...sts.filter((st) => st.call === S.sel)].map((st) => ({ll: st.ll, text: st.call})),
@@ -72,7 +72,7 @@ function drawSel() {
   const air = onAir(st);
   $('dCall').textContent = st.call;
   $('dWhere').textContent = `${st.where || 'unknown prefix'}${st.km ? ' · ~' + Math.round(st.km).toLocaleString() + ' km' : ''}`;
-  $('dMeta').innerHTML = `${st.band} · ${khz(st.freq_hz)} kHz · ${Math.round(st.wpm)} wpm · SNR ${Math.round(st.snr)} dB · spotted ${st.n}× ${utc(st.first)}–${utc(st.t)} UTC` +
+  $('dMeta').innerHTML = `${st.band} · ${khz(st.freq_hz)} kHz · ${Math.round(st.wpm)} wpm · SNR ${Math.round(st.snr)} dB · spotted ${st.n}× ${utc(st.first)}–${utc(st.t)} UTC · ${ptParts(st.first).hm}–${ptTime(st.t)}` +
     (air ? ' · <b style="color:var(--green)">on the air now</b>' : '') + ` · <a href="#" id="dListen">listen</a>`;
   $('dText').style.display = air ? '' : 'none';
   if (air) $('dText').innerHTML = marked(air.text.trimEnd().slice(-160));
@@ -124,7 +124,7 @@ function drawSigs() {
   }
   setHTML($('sigs'), sigs.map((s) => {
     const sel = S.playing && Math.abs(S.playing.freq - s.freq_hz) < 60;
-    return `<div class="sig${sel ? ' sel' : ''}${now - s.last > 6 ? ' stale' : ''}" data-f="${s.freq_hz}" title="${esc(s.band)} · since ${utc(s.since)} UTC · click to listen">
+    return `<div class="sig${sel ? ' sel' : ''}${now - s.last > 6 ? ' stale' : ''}" data-f="${s.freq_hz}" title="${esc(s.band)} · since ${utcPt(s.since)} · click to listen">
       <i class="k${s.keyed ? ' on' : ''}"></i><span class="f">${khz(s.freq_hz)}</span><span class="w">${Math.round(s.wpm)}</span>
       <span class="s">${Math.round(s.snr)}</span><span class="x"><span>${marked(s.text.trimEnd())}</span></span></div>`;
   }).join(''));
@@ -138,12 +138,12 @@ function drawSpots() {
   $('fSt').textContent = new Set(hour.map((s) => s.call)).size;
   const rows = S.spots.filter((s) => !S.band || s.band === S.band).slice(0, 300);
   setHTML($('spots'), rows.map((s) => { const p = typeof prefixInfo === 'function' ? prefixInfo(s.call) : null;
-    return `<tr data-f="${s.freq_hz}" data-call="${esc(s.call)}"><td>${utc(s.t)}</td><td>${esc(s.band)}</td><td>${khz(s.freq_hz)}</td><td class="c">${esc(s.call)}</td>
+    return `<tr data-f="${s.freq_hz}" data-call="${esc(s.call)}"><td>${utcPtCell(s.t)}</td><td>${esc(s.band)}</td><td>${khz(s.freq_hz)}</td><td class="c">${esc(s.call)}</td>
       <td class="m">${esc(p ? p.name : '')}</td><td>${Math.round(s.wpm)}</td><td>${Math.round(s.snr)}</td></tr>`; }).join('')
     || `<tr><td colspan="7" class="m">No spots yet${S.band ? ' on ' + S.band : ''}.</td></tr>`);
   buildStations(); drawMap();
   const log = S.log.filter((x) => !S.band || x.band === S.band).slice(0, 120);
-  setHTML($('log'), log.map((x) => `<li data-f="${x.freq_hz}"><span class="h">${utc(x.t)}–${utc(x.t_end)} ${esc(x.band)} ${khz(x.freq_hz)} · ${Math.round(x.wpm)} wpm</span>${marked(x.text)}</li>`).join('')
+  setHTML($('log'), log.map((x) => `<li data-f="${x.freq_hz}"><span class="h">${utc(x.t)}–${utc(x.t_end)} UTC · ${ptParts(x.t).hm}–${ptTime(x.t_end)} · ${esc(x.band)} ${khz(x.freq_hz)} · ${Math.round(x.wpm)} wpm</span>${marked(x.text)}</li>`).join('')
     || '<li class="m" style="cursor:default;color:var(--muted)">Transmissions land here when a station goes quiet.</li>');
 }
 $('spots').addEventListener('click', (e) => {
@@ -181,7 +181,7 @@ async function ensureHF() {
   await post('/api/band', {band: 'hf'});
   await new Promise((r) => setTimeout(r, 1500));
 }
-const audio = {ctx: null, gain: null, ws: null, next: 0};
+const audio = {ctx: null, gain: null, ws: null, next: 0, ssrc: null, retry: null};
 async function listen(freq) {
   freq = Math.round(freq / 10) * 10;
   $('nowFreq').textContent = khz(freq) + ' kHz'; $('nowMeta').textContent = 'tuning…';
@@ -193,7 +193,7 @@ async function listen(freq) {
     if (!S.ssrc) S.ssrc = (await post('/api/channels', {freq_hz: freq, mode: 'cwu', band: 'hf', label: 'cw listen'})).ssrc;
     if (!audio.ctx) { audio.ctx = new AudioContext(); audio.gain = audio.ctx.createGain(); audio.gain.connect(audio.ctx.destination); }
     audio.ctx.resume(); audio.gain.gain.value = +$('vol').value;
-    if (!S.playing) connect(S.ssrc);
+    if (!S.playing || audio.ssrc !== S.ssrc) connect(S.ssrc);   // the channel was re-created (rxapp restarted)
     audioFocus.claim(stop);
     S.playing = {freq};
     const s = S.live.find((x) => Math.abs(x.freq_hz - freq) < 60);
@@ -203,7 +203,9 @@ async function listen(freq) {
   drawSigs();
 }
 function connect(ssrc) {
+  clearTimeout(audio.retry); audio.retry = null;      // a pending reconnect is for the stream being replaced
   if (audio.ws) { const w = audio.ws; audio.ws = null; w.onmessage = w.onclose = null; w.close(); }
+  audio.ssrc = ssrc;
   if (!ssrc) return;
   audio.next = 0;
   const ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + `/ws/audio/${ssrc}`);
@@ -218,7 +220,19 @@ function connect(ssrc) {
     if (audio.next < now + 0.05 || audio.next > now + 1.0) audio.next = now + 0.2;
     src.start(audio.next); audio.next += buf.duration;
   };
-  ws.onclose = () => { if (audio.ws === ws && S.playing) setTimeout(() => S.playing && connect(ssrc), 1000); };
+  // Server restart or network blip: reconnect while still listening, to the channel still wanted. The old
+  // version reconnected to the ssrc it was opened with, and a timer left over from a dead channel replaced
+  // the next station's stream about a second after it started. 4404: the channel is gone, make a new one.
+  ws.onclose = (e) => {
+    if (audio.ws !== ws || !S.playing) return;
+    audio.ws = null;
+    audio.retry = setTimeout(async () => {
+      audio.retry = null;
+      if (!S.playing || audio.ssrc !== ssrc) return;
+      try { if (e.code === 4404) { S.ssrc = (await post('/api/channels', {freq_hz: S.playing.freq, mode: 'cwu', band: 'hf', label: 'cw listen'})).ssrc; } } catch (err) { /* rxapp still starting: try again */ }
+      connect(e.code === 4404 ? S.ssrc : ssrc);
+    }, 1000);
+  };
   audio.ws = ws;
 }
 function stop() {
