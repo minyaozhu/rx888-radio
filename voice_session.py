@@ -22,7 +22,7 @@ after SAFETY_KEEP_DAYS. At the end the session removes its channels and puts rxa
     .venv/bin/python voice_session.py --windows approach:135.7 --minutes 60        # one airband window
     .venv/bin/python voice_session.py --retranscribe rxapp_data/airband/<stamp>
 
-Window syntax: name:band:centre_MHz[:service[:hold]], band = vhf | hf, service = air (default) | safety | marine | aprs;
+Window syntax: name:band:centre_MHz[:service[:hold]], band = vhf | hf, service = air (default) | safety | marine | aprs | p25 | uhf;
 "hold" = visit this window only while the receiver is held on its service (the page's button).
 (The older name:centre_MHz means a VHF airband window.) Live pages: /airband.html, /safety.html.
 """
@@ -117,7 +117,18 @@ MARINE = Profile("marine", "nfm", 25e3, 1, 3, 10.0, 0.0,
                  min_frames=2)
 # APRS: data only (no voice channels); the window's work is AprsReceiver on 144.390 MHz
 APRS = Profile("aprs", "nfm", 25e3, 1, 3, 10.0, 0.0, (), "", "APRS", False)
-PROFILES = {"air": AIR, "safety": SAFETY, "marine": MARINE, "aprs": APRS}
+UHF_PROMPT = ("Business and industrial two-way radio, San Francisco Bay Area: security, maintenance, facilities, "
+              "school bus, transit, construction, utilities, hospital, hotel, warehouse, parking, event staff. "
+              "Copy, ten-four, on my way, go ahead, standby, base, dispatch, unit, gate, dock, loading, over.")
+# UHF business and public safety: 12.5 kHz FM channels on the 6.25 kHz raster, 450-470 MHz. FRS/GMRS
+# (462.5500-462.7250, 467.5500-467.7250) are personal radios, so left out. A 12.5 kHz FM signal lights ~2 grid
+# points; a 25 kHz-wide one (4+) is data.
+UHF = Profile("uhf", "nfm", 6.25e3, 2, 5, 10.0, 3e3,
+              ((450.0e6, 462.53e6), (462.74e6, 467.53e6), (467.74e6, 470.0e6)), UHF_PROMPT, "UHF", True,
+              min_frames=3, sideband_hz=25e3)
+# P25: the 700 MHz trunked system, decoded by dsd-fme (rxapp/p25.py); no spectrum-found voice channels either
+P25 = Profile("p25", "nfm", 25e3, 1, 3, 10.0, 0.0, (), "", "P25", False)
+PROFILES = {"air": AIR, "safety": SAFETY, "marine": MARINE, "aprs": APRS, "p25": P25, "uhf": UHF}
 APRS_HZ = 144.390e6
 MULTIMON = Path(__file__).resolve().parent / "tools" / "multimon-ng" / "build" / "multimon-ng"
 NOAA_HZ = [162.400e6, 162.425e6, 162.450e6, 162.475e6, 162.500e6, 162.525e6, 162.550e6]
@@ -266,6 +277,19 @@ class Transcriber(threading.Thread):
 
 
 # ---- retention ---------------------------------------------------------------------------
+def prune_p25(days: float, now: float = None):
+    """P25 call recordings (rxapp_data/p25/<session>/calls/) older than `days`: the same retention as the
+    public-safety recordings."""
+    cut = (now or time.time()) - days * 86400
+    gone = 0
+    for wav in [*(CONFIG.data_dir / "p25").glob("*/calls/*.wav"), *(CONFIG.data_dir / "p25").glob("*/input.raw"),
+                *(CONFIG.data_dir / "p25").glob("*/iq.raw")]:
+        if wav.stat().st_mtime < cut:
+            wav.unlink(missing_ok=True)
+            gone += 1
+    return gone
+
+
 def prune(base: Path, days: float, now: float = None):
     """Delete recordings and transcript lines older than `days` under base/<session>/."""
     now = now or time.time()
@@ -754,6 +778,8 @@ class Session:
         self.focus_checked = 0.0
         self.ais = AisReceiver(self.outs["marine"]) if "marine" in self.outs else None
         self.aprs = AprsReceiver(self.outs["aprs"]) if "aprs" in self.outs else None
+        from rxapp.p25 import P25Receiver
+        self.p25 = P25Receiver(self.outs["p25"]) if "p25" in self.outs else None
         self.weather = {}             # NOAA weather radio frequency -> rxapp channel (listen only)
         air = self.outs.get("air") or CONFIG.data_dir / "airband" / stamp
         air.mkdir(parents=True, exist_ok=True)
@@ -828,6 +854,12 @@ class Session:
                 self.aprs.start(self.ctl, info["vhf"]["if_hz"] - (APRS_HZ - self.tuner_hz))
             else:
                 self.aprs.stop()
+        if self.p25 is not None:
+            from rxapp.p25 import CC_HZ
+            if prof.service == "p25" and win.band == "vhf" and lo <= CC_HZ <= hi:
+                self.p25.start(self.ctl, self.tuner_hz, info["vhf"]["if_hz"], maddr, CONFIG.rtp_port, CONFIG.iface_addr)
+            else:
+                self.p25.stop()
         self.settle_until = time.time() + 1.0       # spectrum frames from before the move, PLL settling
         log.info("window %s (%s, %s): watching %.4f-%.4f MHz, %d channels on the %.1f kHz grid",
                  win.name, win.band, prof.service, self.lo / 1e6, self.hi / 1e6, len(self.grid), prof.grid / 1e3)
@@ -864,6 +896,8 @@ class Session:
         if f == "pause":
             for g in list(self.keyed_since):
                 self.finish(g, self.keyed_since.pop(g), self.last_keyed.get(g, now))
+            if getattr(self, "p25", None) is not None:
+                self.p25.stop()                           # manual tuning moves the tuner off the trunk
             return
         if f == "hf" and not any(w.band == "hf" for w in self.windows):
             call("POST", "/band", {"band": "hf"})          # no HF window: just put the radio on HF and wait
@@ -949,6 +983,8 @@ class Session:
             self.ais.stop()
         if self.aprs is not None:
             self.aprs.stop()
+        if self.p25 is not None:
+            self.p25.stop()
         for f, ssrc in list(self.weather.items()):
             try:
                 call("DELETE", f"/channels/{ssrc}")
@@ -1052,6 +1088,8 @@ class Session:
             if service == "aprs":
                 st["aprs"] = {"running": bool(self.aprs.running), "error": self.aprs.error,
                               "packets": self.aprs.stations.packets, "stations": len(self.aprs.stations.s)}
+            if service == "p25":
+                st["p25"] = {"running": bool(self.p25 and self.p25.running), "error": self.p25 and self.p25.error}
             if service == "marine":
                 st["weather"] = {f"{f:.0f}": ssrc for f, ssrc in self.weather.items()} if here else {}
                 st["weather_db"] = {f"{f:.0f}": round(x, 1) for f, x in self.wx_db.items()} if here else {}
@@ -1075,8 +1113,11 @@ class Session:
                     self.ais.write(time.time())
                 if self.aprs is not None and self.aprs.running:
                     self.aprs.write(time.time())
-            if "safety" in self.outs and time.time() - self.last_prune > 3600:
-                n = prune(CONFIG.data_dir / "safety", SAFETY_KEEP_DAYS)
+                if self.p25 is not None and self.p25.running:
+                    self.p25.write(time.time())
+            if ({"safety", "p25", "uhf"} & set(self.outs)) and time.time() - self.last_prune > 3600:
+                n = (prune(CONFIG.data_dir / "safety", SAFETY_KEEP_DAYS) + prune(CONFIG.data_dir / "uhf", SAFETY_KEEP_DAYS)
+                     + prune_p25(SAFETY_KEEP_DAYS))
                 if n:
                     log.info("retention: deleted %d public-safety recordings older than %d days", n, SAFETY_KEEP_DAYS)
                 self.last_prune = time.time()
@@ -1189,7 +1230,7 @@ class Session:
 
 def retranscribe(session_dir: Path):
     """Transcribe a session's WAVs again (e.g. after improving prepare()) into transcripts.jsonl."""
-    prof = SAFETY if session_dir.parent.name == "safety" else AIR
+    prof = PROFILES.get(session_dir.parent.name, AIR)
     recs = [json.loads(l) for l in open(session_dir / "transmissions.jsonl")]
     out = session_dir / "transcripts.jsonl"
     done = {json.loads(l)["wav"] for l in open(out)} if out.exists() else set()

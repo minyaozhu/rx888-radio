@@ -357,6 +357,43 @@ in a 2-minute check, so nothing was decoded on the air yet.
 Build multimon-ng: `git clone --depth 1 https://github.com/EliasOenal/multimon-ng.git tools/multimon-ng &&
 cmake -S tools/multimon-ng -B tools/multimon-ng/build && cmake --build tools/multimon-ng/build -j`
 
+## P25 (700 MHz trunked)
+
+A VHF window held on demand (`p25:vhf:773.45:p25:hold`; the page's "Switch receiver here"). The 700 MHz system
+heard here (WACN BEE00, SYSID 5E4, NAC 5E1, site 1) is Motorola simulcast: control channel 772.30625 MHz,
+voice on Phase 2 TDMA channels (identifier 3: 762.00625 MHz + 12.5 kHz steps, two slots per carrier),
+seen at 772.606, 772.906, 773.181, 774.406 and 774.681 MHz. With the tuner at 773.45 MHz all of these are in
+its window (the bridge accepts retunes within ±1.95 MHz of the centre). `rxapp/p25.py` (P25Receiver) opens a radiod `nfm` channel (flat FM discriminator, 48 kHz) and
+serves it on TCP 127.0.0.1:17355 to [dsd-fme](https://github.com/lwvmobile/dsd-fme) (`-i tcp -ft -mq -T`),
+whose rigctl client (127.0.0.1:14532) asks for voice channels: each `F <Hz>` retunes that radiod channel. On
+the air, `-mq` (CQPSK, for simulcast) cut frame errors from about 40% (C4FM, `-mc`) to under 10%.
+dsd-fme records each unencrypted call (`-P`, `calls/`) and its console is parsed (`Trunk`): system,
+channel plan (identifier updates), and every grant (talkgroup, radio, voice channel, encrypted or not),
+in `rxapp_data/p25/<stamp>/p25.json`. Encrypted talkgroups (ALG 0x84, AES-256, seen) appear in the activity
+but can't be heard. No ADS-B hops in this window: a hop would drop the control channel mid-call. Pausing
+the session stops dsd-fme. Recordings are deleted after 7 days like the public-safety ones, and are never
+published. `/api/p25`, `/api/p25/trunk`, `/api/p25/calls`, `/api/p25/clip/{session}/{name}`; page
+`p25.html` (talkgroups in the last hour, recorded calls with "play new calls", grants).
+
+Build (macOS): `brew install libsndfile pulseaudio`, then
+`git clone --depth 1 https://github.com/szechyjs/mbelib.git tools/mbelib`,
+`cmake -S tools/mbelib -B tools/mbelib/build -DCMAKE_INSTALL_PREFIX=$PWD/tools/local -DCMAKE_POLICY_VERSION_MINIMUM=3.5 && cmake --build tools/mbelib/build -j && cmake --install tools/mbelib/build`,
+`git clone --depth 1 https://github.com/lwvmobile/dsd-fme.git tools/dsd-fme`, and
+`cmake -S tools/dsd-fme -B tools/dsd-fme/build -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DMBE_INCLUDE_DIR=$PWD/tools/local/include -DMBE_LIBRARY=$PWD/tools/local/lib/libmbe.dylib -DPULSEAUDIO_INCLUDE_DIR=/opt/homebrew/opt/pulseaudio/include -DPULSEAUDIO_LIBRARY=/opt/homebrew/opt/pulseaudio/lib/libpulse.dylib -DPULSEAUDIO_SIMPLE_LIBRARY=/opt/homebrew/opt/pulseaudio/lib/libpulse-simple.dylib -DPULSEAUDIO_MAINLOOP_LIBRARY=/opt/homebrew/opt/pulseaudio/lib/libpulse-mainloop-glib.dylib -DCURSES_INCLUDE_PATH=/opt/homebrew/opt/ncurses/include -DCURSES_LIBRARY=/opt/homebrew/opt/ncurses/lib/libncursesw.dylib && cmake --build tools/dsd-fme/build -j`.
+
+## UHF business and public safety
+
+Two VHF-tuner windows held on demand: `uhf454:vhf:454.2:uhf:hold` (450.0–458.4 MHz) and
+`uhf463:vhf:462.9:uhf:hold` (458.8–467.0 MHz). The page's Lower / Upper / Both buttons pick one or alternate.
+Profile `UHF` in `voice_session.py`: 12.5 kHz FM channels on the 6.25 kHz raster, found, recorded,
+digital-checked and transcribed like public safety, with a business-radio Whisper prompt. FRS/GMRS
+(462.5500–462.7250 and 467.5500–467.7250 MHz) are personal radios and left out. The 200–1000 MHz survey
+found at least 14 busy channels here (451.39–454.34 and 461.82–464.72 MHz, busy 5–85% of the time).
+T-band (470–512 MHz; 483.31 and 490.21 MHz came and went) isn't covered yet. Recordings go to
+`rxapp_data/uhf/<stamp>` and are deleted after 7 days. `/api/uhf`, `/api/uhf/transmissions`,
+`/api/uhf/clip/{session}/{name}`. Page `uhfvoice.html` is the Public safety page's script (`safety.js`)
+with `<html data-service="uhf">`: same transcript, timeline and live listening, no incidents map.
+
 ## Maritime
 
 An on-demand marine window (`marine:vhf:159.9:marine:hold`, visited only while the receiver is held on it from

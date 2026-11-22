@@ -499,6 +499,8 @@ AIRBAND_DIR = CONFIG.data_dir / "airband"
 SAFETY_DIR = CONFIG.data_dir / "safety"
 MARINE_DIR = CONFIG.data_dir / "marine"
 APRS_DIR = CONFIG.data_dir / "aprs"
+P25_DIR = CONFIG.data_dir / "p25"
+UHF_DIR = CONFIG.data_dir / "uhf"
 
 
 def _session_dir(base: Path, name: Optional[str]) -> Path:
@@ -635,6 +637,59 @@ async def aprs_packets(session: Optional[str] = None, limit: int = 300):
     return list(reversed(_jsonl(d / "packets.jsonl")[-min(limit, 5000):]))
 
 
+@app.get("/api/uhf")
+async def uhf_info(session: Optional[str] = None):
+    """UHF business and public safety (450-470 MHz): the latest (or a named) session's live status."""
+    return _session_info(UHF_DIR, session)
+
+
+@app.get("/api/uhf/transmissions")
+async def uhf_transmissions(session: Optional[str] = None, after: int = -1):
+    return _session_transmissions(UHF_DIR, session, after)
+
+
+@app.get("/api/uhf/clip/{session}/{name}")
+async def uhf_clip(session: str, name: str):
+    return _session_clip(UHF_DIR, session, name)
+
+
+@app.get("/api/p25")
+async def p25_info(session: Optional[str] = None):
+    """The latest (or a named) P25 session's live status."""
+    return _session_info(P25_DIR, session)
+
+
+@app.get("/api/p25/trunk")
+async def p25_trunk(session: Optional[str] = None):
+    """The 700 MHz trunked system as dsd-fme decodes it (rxapp/p25.py via voice_session.py): system IDs,
+    control-channel lock, talkgroups heard in the last hour (encrypted or not) and the latest grants."""
+    d = _session_dir(P25_DIR, session)
+    try:
+        return json.loads((d / "p25.json").read_text())
+    except (OSError, ValueError):
+        return {"t": None, "running": False, "error": None, "system": {}, "talkgroups": [], "grants": []}
+
+
+@app.get("/api/p25/calls")
+async def p25_calls(session: Optional[str] = None, limit: int = 300):
+    """Recorded (unencrypted) calls, newest first: talkgroup, radio ID, length, clip name."""
+    from .p25 import list_calls
+    d = _session_dir(P25_DIR, session)
+    try:
+        enc = json.loads((d / "p25.json").read_text()).get("enc_calls", [])
+    except (OSError, ValueError):
+        enc = []
+    return list_calls(d / "calls", limit=min(limit, 2000), enc_calls=enc)
+
+
+@app.get("/api/p25/clip/{session}/{name}")
+async def p25_clip(session: str, name: str):
+    path = _session_dir(P25_DIR, session) / "calls" / Path(name).name
+    if path.suffix != ".wav" or not path.exists():
+        raise HTTPException(404, "no such clip")
+    return FileResponse(path, media_type="audio/wav")
+
+
 _INCIDENTS: Dict[tuple, list] = {}
 
 
@@ -656,6 +711,8 @@ async def safety_incidents(session: Optional[str] = None):
 FOCUS_FILE = CONFIG.data_dir / "voice_control.json"
 FOCUS_VALUES = {"air": "airband windows", "safety": "public-safety windows", "marine": "the marine window (AIS, marine radio, weather)",
                 "aprs": "the APRS window (144.390 MHz)",
+                "p25": "the 700 MHz P25 trunked system",
+                "uhf": "the UHF business and public-safety windows (450-470 MHz)",
                 "hf": "the HF input (FT8, SSTV, low band)",
                 "pause": "paused for manual tuning"}
 

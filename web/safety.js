@@ -26,9 +26,12 @@ const mhz = (f) => (f / 1e6).toFixed(4);
 const esc = (x) => String(x ?? '').replace(/[&<>"]/g, (c) => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'})[c]);
 const chName = (f) => `${mhz(f)}${psLabel(f) ? ' ' + psLabel(f) : ''}`;
 
+// The same page serves public safety (safety.html) and UHF business radio (uhfvoice.html): <html data-service>.
+const SVC = document.documentElement.dataset.service || 'safety';
+const INCIDENTS = SVC === 'safety';             // incidents: police and CHP codes and highway places
 const S = {session: null, recs: [], after: -1, status: {}, live: false, sel: null};
 const clips = clipPlayer({
-  url: (r) => `/api/safety/clip/${S.session}/${r.clip}`,
+  url: (r) => `/api/${SVC}/clip/${S.session}/${r.clip}`,
   next: (r) => S.recs.find((x) => x.t0 > r.t0 && visible(x)) || null,      // play on: the next one in time
   onStart: () => listenOff(),
   list: '#log, #incTl',
@@ -238,7 +241,7 @@ function followTick() {
 }
 setInterval(async () => {
   if (!audio.on || $('chan').value !== 'follow' || !S.session) return;
-  try { S.status = (await api(`/api/safety?session=${S.session}`)).status || {}; followTick(); drawChans(); } catch (e) { /* main poll reports */ }
+  try { S.status = (await api(`/api/${SVC}?session=${S.session}`)).status || {}; followTick(); drawChans(); } catch (e) { /* main poll reports */ }
 }, 300);
 
 function drawChans() {
@@ -252,7 +255,7 @@ function drawChans() {
   $('now').textContent = audio.on && cur ? `playing ${mhz(+cur)}${keyed[cur] != null ? ' · on air' : ''}` : '';
   $('chans').innerHTML = freqs.map((f) => `<li data-f="${f}" class="${keyed[f] != null ? 'on' : ''} ${ch[f] === audio.ssrc && audio.on ? 'sel' : ''}">
       <b>${mhz(+f)}</b>${psLabel(+f) ? ' ' + esc(psLabel(+f)) : ''} · ${counts[f] || 0}${keyed[f] != null ? ' · ON AIR' : ''}</li>`).join('')
-    || `<li>${S.status.listening === false ? 'not listening to public safety right now' : 'no channels yet'}</li>`;
+    || `<li>${S.status.listening === false ? `not listening to ${SVC === 'safety' ? 'public safety' : 'UHF'} right now` : 'no channels yet'}</li>`;
 }
 $('chans').addEventListener('click', (e) => {
   const li = e.target.closest('li[data-f]'); if (!li) return;
@@ -391,7 +394,7 @@ $('incWin').addEventListener('change', () => { $('incWin').blur(); drawIncidents
 
 // ------------------------------------------------------------------ data
 async function loadSession(name) {
-  const info = await api('/api/safety' + (name ? `?session=${name}` : ''));
+  const info = await api(`/api/${SVC}` + (name ? `?session=${name}` : ''));
   S.session = info.session; S.recs = []; S.after = -1; S.sel = null;
   $('session').innerHTML = info.sessions.map((s) => `<option ${s === info.session ? 'selected' : ''}>${s}</option>`).join('');
   await poll(true);
@@ -402,12 +405,13 @@ async function loadSession(name) {
 const fmtR = (lo, hi) => `${(lo / 1e6).toFixed(1)}–${(hi / 1e6).toFixed(1)} MHz`;
 let winFocus = null;
 async function drawWinSwitch() {
-  const wins = (S.status.windows || []).filter((w) => w.service === 'safety');
+  const wins = (S.status.windows || []).filter((w) => w.service === SVC);
   if (!wins.length) { $('winSeg').innerHTML = ''; return; }
   try { winFocus = (await api('/api/voice/focus')).focus; } catch (e) { /* rxapp restarting */ }
-  const opts = [...wins.map((w) => ({focus: `window:${w.name}`, label: w.band === 'hf' ? 'Low band' : 'VHF-high',
-                                     sub: fmtR(w.lo, w.hi), also: w.band === 'hf' ? 'hf' : null})),
-                {focus: 'safety', label: 'Both', sub: 'alternate, 5 min each'}];
+  const label = (w) => SVC === 'safety' ? (w.band === 'hf' ? 'Low band' : 'VHF-high') : (w === wins[0] ? 'Lower' : 'Upper');
+  const opts = [...wins.map((w) => ({focus: `window:${w.name}`, label: label(w),
+                                     sub: fmtR(w.lo, w.hi), also: SVC === 'safety' && w.band === 'hf' ? 'hf' : null})),
+                ...(wins.length > 1 ? [{focus: SVC, label: 'Both', sub: 'alternate, 5 min each'}] : [])];
   const html = opts.map((o) => `<button type="button" data-focus="${o.focus}" class="${winFocus === o.focus || (o.also && winFocus === o.also) ? 'on' : ''}"
       aria-pressed="${winFocus === o.focus}">${o.label}<small>${o.sub}</small></button>`).join('');
   if ($('winSeg').dataset.html !== html) { $('winSeg').innerHTML = html; $('winSeg').dataset.html = html; }
@@ -426,7 +430,7 @@ $('winSeg').addEventListener('click', async (e) => {
 
 async function poll(full) {
   try {
-    const info = await api(`/api/safety?session=${S.session}`);
+    const info = await api(`/api/${SVC}?session=${S.session}`);
     S.status = info.status || {}; S.live = info.live;
     drawWinSwitch();
     $('fLive').className = 'live' + (S.live ? '' : ' off');
@@ -436,7 +440,7 @@ async function poll(full) {
     $('fWin').innerHTML = !S.live ? '–' : st.listening
       ? `${esc(st.window)} ${mhz(st.lo)}–${mhz(st.hi)} MHz${clock ? ' · next switch in ' + clock : ''}`
       : `<span class="away">away on ${esc(st.window)} (${esc(st.window_service)})${clock ? ' · next switch in ' + clock : ''}</span>`;
-    const add = await api(`/api/safety/transmissions?session=${S.session}&after=${S.after}`);
+    const add = await api(`/api/${SVC}/transmissions?session=${S.session}&after=${S.after}`);
     if (add.length || full) {
       S.recs.push(...add);
       S.after = S.recs.length ? S.recs[S.recs.length - 1].i : -1;
@@ -448,8 +452,13 @@ async function poll(full) {
     }
     followTick(); drawChans(); drawTimeline();
   } catch (e) {
-    $('log').innerHTML = `<li><span class="t">—</span><span class="tx ns">No public-safety session yet (${esc(e.message)}). Start voice_session.py with a safety window.</span></li>`;
+    $('log').innerHTML = `<li><span class="t">—</span><span class="tx ns">No ${SVC === 'safety' ? 'public-safety' : 'UHF'} session yet (${esc(e.message)}). Start voice_session.py with a ${SVC} window.</span></li>`;
   }
 }
-$('session').addEventListener('change', () => { I.sel = null; I.list = []; drawIncident(); loadSession($('session').value).then(pollIncidents); });
-loadSession().catch(() => poll(true)).finally(() => { setInterval(poll, 2000); pollIncidents(); setInterval(pollIncidents, 8000); });
+if (!INCIDENTS) {                                  // no incidents map: the transcript side gets the room
+  for (const q of ['.panel.map', '#incCount']) { const e = document.querySelector(q); if (e) (q === '#incCount' ? e.parentElement : e).hidden = true; }
+  $('incs').hidden = true;
+  const m = document.querySelector('.main2'); if (m) m.style.gridTemplateColumns = 'minmax(0,1fr)';
+}
+$('session').addEventListener('change', () => { I.sel = null; I.list = []; drawIncident(); loadSession($('session').value).then(() => INCIDENTS && pollIncidents()); });
+loadSession().catch(() => poll(true)).finally(() => { setInterval(poll, 2000); if (INCIDENTS) { pollIncidents(); setInterval(pollIncidents, 8000); } });

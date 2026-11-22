@@ -1201,6 +1201,131 @@ def test_adsb_feed_switch_clears_and_stops_the_feed():
     assert snap["aircraft"] == [] and snap["feed"] is False and snap["source"] is None
 
 
+# ---- P25 (dsd-fme console parsing) ------------------------------------------------------------
+P25_CONSOLE = """\x1b[0m20:12:16 Sync: -P25p1  \x1b[36mWACN: BEE00; SYS: 5E4; NAC/CC: 5E1; RFSS: 001; Site: 001; \x1b[0m TSBK
+ Identifier Update for TDMA - Abbreviated
+  Channel Identifier [3] Channel Type [3] Transmit Offset [2960]
+  Channel Spacing [064] Base Frequency [09157562] [762006250]
+ Identifier Update (8.3.1.23)
+  Channel Identifier [1] BW [68] Transmit Offset [0978]
+  Channel Spacing [032] Base Frequency [09157562] [762006250]
+ Group Voice Channel Grant
+  SVC [04] CHAN [36D0] Group [2351] Source [13180001]
+ Encrypted Group Voice Channel Grant
+  SVC [44] CHAN [37C1] Group [1801] Source [13330451]
+ Group Voice Channel Grant Update - Implicit
+  Channel 1 [37C0] Group 1 [2701][0A8D]
+ Group Voice Channel Grant Update - Implicit
+  Channel 1 [37C0] Group 1 [2701][0A8D]
+"""
+
+
+def test_p25_trunk_parses_system_channel_plan_and_grants():
+    from rxapp.p25 import Trunk
+    t = Trunk()
+    for k, line in enumerate(P25_CONSOLE.splitlines()):
+        t.feed(line, 100.0 + k * 0.1)
+    snap = t.snapshot(101.5)
+    assert snap["system"] == {"wacn": "BEE00", "sysid": "5E4", "nac": "5E1", "rfss": "001", "site": "001"}
+    assert snap["locked"] and snap["channel_plan"] == 2
+    assert t.iden[3] == {"base": 762006250.0, "spacing": 12500.0, "tdma": True}
+    tg = {g["tg"]: g for g in snap["talkgroups"]}
+    assert tg[2351]["hz"] == 772906250.0 and tg[2351]["src"] == 13180001 and not tg[2351]["enc"]
+    assert tg[1801]["enc"] and tg[1801]["hz"] == 774406250.0           # TDMA: two slots per carrier
+    assert tg[2701]["grants"] == 1 and tg[2701]["hz"] == 774406250.0   # a repeated update is the same call
+    assert t.freq(0x1000 | 10) == 762006250.0 + 10 * 6250.0           # FDMA identifier: one channel per step
+
+
+def test_p25_lists_finished_calls_only(tmp_path):
+    import os
+    from rxapp.p25 import list_calls
+    done = tmp_path / "20261108_201709_00651_P25_BEE005E45E1_1_1_GROUP_TGT_1001_SRC_13100321.wav"
+    done.write_bytes(b"\0" * (44 + 16000 * 3))
+    os.utime(done, (1000, 1000))
+    (tmp_path / "20261108_201800_00700_P25_BEE005E45E1_1_1_GROUP_TGT_4798_SRC_1.wav").write_bytes(b"\0" * 100)  # being written
+    (tmp_path / "19691231_160000_47090__GROUP_TGT_0_SRC_0.wav").write_bytes(b"\0" * 100)
+    calls = list_calls(tmp_path, now=2000)
+    assert [c["tg"] for c in calls] == [1001]
+    assert calls[0]["src"] == 13100321 and calls[0]["secs"] == 3.0
+
+
+def test_p25_api_reads_the_latest_session(tmp_path, monkeypatch):
+    import json, os
+    from fastapi.testclient import TestClient
+    from rxapp import server
+    d = tmp_path / "p25" / "20261108-2000"
+    (d / "calls").mkdir(parents=True)
+    (d / "p25.json").write_text(json.dumps({"t": 1, "running": True, "system": {"wacn": "BEE00"}, "talkgroups": [], "grants": []}))
+    wav = d / "calls" / "20261108_201709_00651_P25_BEE005E45E1_1_1_GROUP_TGT_1001_SRC_13100321.wav"
+    wav.write_bytes(b"RIFF" + b"\0" * 100)
+    os.utime(wav, (1000, 1000))
+    monkeypatch.setattr(server, "P25_DIR", tmp_path / "p25")
+    c = TestClient(server.app)
+    assert c.get("/api/p25/trunk").json()["system"]["wacn"] == "BEE00"
+    calls = c.get("/api/p25/calls").json()
+    assert calls[0]["tg"] == 1001
+    assert c.get(f"/api/p25/clip/20261108-2000/{calls[0]['clip']}").status_code == 200
+    assert c.get("/api/p25/clip/20261108-2000/..%2Fp25.json").status_code == 404
+
+
+def test_p25_watchdog_takes_a_stranded_decoder_back_to_the_control_channel(tmp_path):
+    from rxapp.p25 import CC_HZ, P25Receiver
+    calls = []
+    rx = P25Receiver(tmp_path)
+    rx.ctl = SimpleNamespace(set_frequency=lambda ssrc, f: calls.append((ssrc, f)))
+    rx.running, rx.ssrc, rx.tuner_hz, rx.if_hz, rx.started = True, 7, 773.45e6, 4.57e6, 100.0
+    rx.tuned_hz = 774.68125e6                       # left on a voice channel
+    rx.trunk.last_sync = 100.0
+    rx.watchdog(103.0)                              # 3 s: still fine
+    assert not calls
+    rx.watchdog(106.0)                              # 6 s without sync: back to the control channel
+    assert rx.tuned_hz == CC_HZ and calls == [(7, 4.57e6 - (CC_HZ - 773.45e6))]
+
+
+def test_uhf_profile_leaves_out_frs_gmrs_and_parses_as_a_window():
+    import voice_session as vs
+    u = vs.PROFILES["uhf"]
+    inside = lambda f: any(a <= f <= b for a, b in u.ranges)
+    assert inside(451.39375e6) and inside(462.04375e6) and inside(464.69375e6)
+    assert not inside(462.5625e6) and not inside(462.7125e6) and not inside(467.6375e6)   # FRS/GMRS
+    (w,) = vs.parse_windows("uhf454:vhf:454.2:uhf:hold")
+    assert w.profile is u and w.on_demand and w.band == "vhf"
+
+
+def test_uhf_api_serves_transmissions(tmp_path, monkeypatch):
+    import json
+    from fastapi.testclient import TestClient
+    from rxapp import server
+    d = tmp_path / "uhf" / "20261108-2100"
+    d.mkdir(parents=True)
+    (d / "transmissions.jsonl").write_text(json.dumps({"t0": 1.0, "t1": 3.0, "freq_hz": 451393750.0, "kind": "voice",
+                                                       "text": "copy", "wav": str(d / "a.wav")}) + "\n")
+    (d / "a.wav").write_bytes(b"RIFF" + b"\0" * 40)
+    monkeypatch.setattr(server, "UHF_DIR", tmp_path / "uhf")
+    c = TestClient(server.app)
+    tx = c.get("/api/uhf/transmissions").json()
+    assert tx[0]["text"] == "copy" and tx[0]["clip"] == "a.wav"
+    assert c.get("/api/uhf/clip/20261108-2100/a.wav").status_code == 200
+
+
+def test_p25_marks_calls_encrypted_from_the_voice_channel(tmp_path):
+    import os
+    from rxapp.p25 import Trunk, list_calls
+    t = Trunk()
+    for line in [" VCH 0 - TG 1801 SRC 13330003 ", "         ALG ID: 0x84 KEY ID: 0xA100 MI: 0xF53F9EDE46EA779E MPTT",
+                 " VCH 1 - TG 2801 SRC 13330010 ", "         ALG ID: 0x80 KEY ID: 0x0000 MI: 0x0 MPTT"]:
+        t.feed(line, 1794202000.0)
+    assert t.enc_calls[-1][1] == 1801 and len(t.enc_calls) == 1
+    import time as _t
+    stamp = _t.strftime("%Y%m%d_%H%M%S", _t.localtime(1794201998))
+    for tg in (1801, 2801):
+        p = tmp_path / f"{stamp}_00001_P25_BEE005E45E1_1_1_GROUP_TGT_{tg}_SRC_1.wav"
+        p.write_bytes(b"\0" * (44 + 16000 * 4))
+        os.utime(p, (1000, 1000))
+    calls = {c["tg"]: c for c in list_calls(tmp_path, now=1794203000, enc_calls=[[1794202000.0, 1801]])}
+    assert calls[1801]["enc"] and not calls[2801]["enc"]
+
+
 def test_voiced_share_tells_speech_from_fm_noise():
     import voice_session as vs
     rate = 12000
