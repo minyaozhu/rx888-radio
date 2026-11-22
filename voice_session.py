@@ -46,10 +46,13 @@ from pathlib import Path
 from typing import List, Tuple
 
 import numpy as np
-from ka9q import RadiodControl, SpectrumStream
+from ka9q import RadiodControl
 
 from rxapp.addr import maddr
 from rxapp.config import CONFIG
+from rxapp.spectrum import LeasedSpectrumStream
+from rxapp.speech import (COMPRESSION_MAX, HALLUCINATIONS, VOICED_MIN, WHISPER, prepare,  # noqa: F401
+                          transcribe, voiced_share)
 
 log = logging.getLogger("voice")
 API = f"http://{CONFIG.host}:{CONFIG.port}/api"
@@ -743,7 +746,7 @@ class Session:
             db = st.spectrum.bin_power_db
             if db is not None and len(db):
                 self.frames.put((time.time(), np.asarray(db, float)))
-        self.stream = SpectrumStream(control=self.ctl, frequency_hz=freq, bin_count=BINS,
+        self.stream = LeasedSpectrumStream(control=self.ctl, frequency_hz=freq, bin_count=BINS,
                                      resolution_bw=BIN_HZ, on_spectrum=on)
         self.stream.start()
         self.spec_freq = freq

@@ -99,6 +99,14 @@ class Watch:
     triggers: int = 0
     live: Optional[dict] = None                         # the picture so far, while capturing
     live_t: float = 0.0
+    opened: float = 0.0                                 # the channel's `opened` this audio belongs to
+
+    def reset(self):
+        """Forget the audio: the channel was parked or re-created, so what comes next starts a new
+        AGC settling (which looks like sync pulses) and doesn't continue what is buffered."""
+        self.buf.clear()
+        self.buf_n = self.total_n = 0
+        self.capture, self.capture_n, self.live = None, 0, None
 
     def add(self, pcm: bytes):
         a = np.frombuffer(pcm, "<i2")
@@ -192,6 +200,14 @@ class SstvMonitor:
                     log.exception("SSTV %s", w.band)
 
     async def check(self, w: Watch, now: float):
+        ch = self.radio.channels.get(w.ssrc)
+        if ch is None or ch.parked or ch.opened != w.opened:
+            if w.capture is not None:
+                log.info("SSTV %s: channel %s, capture dropped", w.band, "parked" if ch is None or ch.parked else "re-created")
+                (self.dir / f"live_{w.band}.png").unlink(missing_ok=True)
+            w.reset()
+            w.opened = ch.opened if ch is not None and not ch.parked else 0.0
+            return
         a = w.recent(WINDOW)
         if a is None or w.total_n < SETTLE * RATE:
             return

@@ -8,6 +8,10 @@ The view is always in real (RF) frequencies. On VHF radiod's spectrum is of the 
 IF, which is inverted, so the bins are flipped and relabelled. The span is kept within
 what the input can deliver: Nyquist on HF (radiod returns half-empty frames beyond it),
 the tuner's IF window on VHF.
+
+Every spectrum channel is a LeasedSpectrumStream: radiod only deletes a channel when its lifetime
+runs out (ka9q-python's remove_channel just tunes it to 0 Hz), so a stream without one leaks a
+channel each time the view is rebuilt.
 """
 
 import asyncio
@@ -20,12 +24,44 @@ import numpy as np
 from ka9q import SpectrumStream
 
 from .config import CONFIG, VHF_MAX_HZ, VHF_MIN_HZ
+from .radio import KEEPALIVE_SEC, LIFETIME_FRAMES
 from .vhf import WINDOW_HZ
 
 LIVE_VHF_SPAN = 2 * WINDOW_HZ     # widest VHF view the tuner shows at once; wider views are swept
 SWEEP_SETTLE_FRAMES = 2           # spectrum frames to discard after each tuner step
 
 log = logging.getLogger(__name__)
+
+END_FRAMES = 50                   # lifetime given on stop: radiod deletes the channel within a second
+
+
+class LeasedSpectrumStream(SpectrumStream):
+    """A SpectrumStream whose radiod channel has a finite lifetime.
+
+    The lifetime is renewed every KEEPALIVE_SEC while the stream runs (spectrum polls alone don't
+    refresh it), so a crashed client's channel expires within LIFETIME_FRAMES. stop() cuts it to
+    END_FRAMES, which is what actually makes radiod delete the channel.
+    """
+
+    def __init__(self, *args, lifetime: int = LIFETIME_FRAMES, renew_sec: float = KEEPALIVE_SEC, **kw):
+        super().__init__(*args, **kw)
+        self._lifetime, self._renew_sec, self._leased = lifetime, renew_sec, None
+
+    def _send_spectrum_command(self):
+        super()._send_spectrum_command()
+        now = time.monotonic()
+        if self._leased is None or now - self._leased >= self._renew_sec:
+            self._leased = now
+            self._control.set_channel_lifetime(self._ssrc, self._lifetime)
+
+    def stop(self):
+        ssrc, running = self._ssrc, self._running
+        super().stop()
+        if running and ssrc is not None:
+            try:
+                self._control.set_channel_lifetime(ssrc, END_FRAMES)
+            except Exception as e:
+                log.debug("spectrum channel %d: end lifetime: %s", ssrc, e)
 
 
 @dataclass
@@ -105,11 +141,17 @@ class Spectrum:
         self._loop = asyncio.get_running_loop()
         await self._restart()
 
+    async def _stop_stream(self):
+        """Forget the stream before stopping it: its SSRC is about to be deleted, and polling a deleted
+        SSRC (the supervisor's probe) would make radiod re-create it as a default channel."""
+        s, self._stream = self._stream, None
+        if s:
+            await asyncio.to_thread(s.stop)
+
     async def _restart(self):
-        if self._stream:
-            await asyncio.to_thread(self._stream.stop)
+        await self._stop_stream()
         self._radiod_center = self._radiod_center_for(self.center_hz)
-        self._stream = SpectrumStream(
+        self._stream = LeasedSpectrumStream(
             control=self.radio.ctl, frequency_hz=self._radiod_center, bin_count=self.bins,
             resolution_bw=self.bin_hz, on_spectrum=self._on_frame)
         await asyncio.to_thread(self._stream.start)
@@ -183,8 +225,7 @@ class Spectrum:
             self._sweep_task = None
         if not self.radio.vhf_paused:
             await self.radio.pause_vhf()
-        if self._stream:
-            await asyncio.to_thread(self._stream.stop)
+        await self._stop_stream()
         self.sweeping = True
         win_bins = max(16, min(self.bins, int(LIVE_VHF_SPAN * 0.95 / self.bin_hz)))
         q: asyncio.Queue = asyncio.Queue()
@@ -195,7 +236,7 @@ class Spectrum:
             if db is not None and len(db):
                 loop.call_soon_threadsafe(q.put_nowait, np.asarray(db, np.float32))
 
-        self._stream = SpectrumStream(control=self.radio.ctl, frequency_hz=self.radio.vhf.if_hz,
+        self._stream = LeasedSpectrumStream(control=self.radio.ctl, frequency_hz=self.radio.vhf.if_hz,
                                       bin_count=win_bins, resolution_bw=self.bin_hz, on_spectrum=on_frame)
         await asyncio.to_thread(self._stream.start)
         self._radiod_center = None           # live-path frames don't apply
@@ -237,9 +278,7 @@ class Spectrum:
         if self._sweep_task:
             self._sweep_task.cancel()
             self._sweep_task = None
-        if self._stream:
-            await asyncio.to_thread(self._stream.stop)
-            self._stream = None
+        await self._stop_stream()
         self.sweeping = False
 
     async def band_changed(self, old_band: str):
@@ -263,9 +302,7 @@ class Spectrum:
     async def stop(self):
         if self._sweep_task:
             self._sweep_task.cancel()
-        if self._stream:
-            await asyncio.to_thread(self._stream.stop)
-            self._stream = None
+        await self._stop_stream()
 
     def info(self):
         return {"center_hz": self.center_hz, "bin_hz": self.bin_hz, "bins": self.bins,

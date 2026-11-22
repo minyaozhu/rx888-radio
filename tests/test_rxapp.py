@@ -10,7 +10,7 @@ import pytest
 
 from rxapp.addr import maddr
 from rxapp.jobs import BANDS, Scanner
-from rxapp.radio import estimate_snr
+from rxapp.radio import Channel, agc_seed, estimate_snr
 from rxapp.spectrum import Frame
 
 
@@ -218,11 +218,35 @@ def test_sstv_detector_fires_on_sstv_not_on_noise():
     assert not sstvmon.looks_like_sstv(sstvmon.analyse(a[:20 * r]))             # noise only
 
 
+def _sstv_radio(parked=False, opened=0.0):
+    return SimpleNamespace(channels={None: SimpleNamespace(parked=parked, opened=opened)})
+
+
+def test_sstv_reopened_channel_settles_again(tmp_path):
+    """Switching the input VHF -> HF re-creates the channels; their AGC settling must not trigger a capture."""
+    mon = sstvmon.SstvMonitor.__new__(sstvmon.SstvMonitor)
+    mon.store, mon.dir, mon.radio = None, tmp_path, _sstv_radio()
+    w = sstvmon.Watch("20m", 14.230e6, "usb")
+    w.add(np.zeros(int(60 * sstvmon.RATE), np.int16).tobytes())     # a minute of audio: settled
+    w.capture = [np.zeros(10, np.int16)]                             # mid-capture
+    mon.radio.channels[None].parked = True                           # input -> VHF
+    asyncio.run(mon.check(w, 0.0))
+    assert w.capture is None and w.total_n == 0
+    mon.radio.channels[None].parked, mon.radio.channels[None].opened = False, 123.0   # back to HF: re-created
+    w.add(_sstv_audio()[:int(20 * sstvmon.RATE)].tobytes())         # stale audio from just before the check
+    asyncio.run(mon.check(w, 1.0))
+    assert w.total_n == 0 and w.opened == 123.0                      # settle period starts over
+    w.add(_sstv_audio()[60 * sstvmon.RATE:80 * sstvmon.RATE].tobytes())   # 20 s of real SSTV, within SETTLE
+    asyncio.run(mon.check(w, 2.0))
+    assert w.capture is None and w.triggers == 0
+
+
 def test_sstv_monitor_captures_and_decodes_a_picture(tmp_path):
     saved = []
     store = SimpleNamespace(add_sstv=lambda **r: saved.append(r), event=lambda *a, **k: None)
     mon = sstvmon.SstvMonitor.__new__(sstvmon.SstvMonitor)
     mon.store, mon.dir = store, tmp_path
+    mon.radio = _sstv_radio()
     w = sstvmon.Watch("20m", 14.230e6, "usb")
     audio = _sstv_audio()
     step = int(sstvmon.CHECK_EVERY * sstvmon.RATE)
@@ -499,6 +523,7 @@ def test_sstv_live_picture_builds_up_then_clears(tmp_path):
     store = SimpleNamespace(add_sstv=lambda **r: saved.append(r), event=lambda *a, **k: None)
     mon = sstvmon.SstvMonitor.__new__(sstvmon.SstvMonitor)
     mon.store, mon.dir = store, tmp_path
+    mon.radio = _sstv_radio()
     w = sstvmon.Watch("20m", 14.230e6, "usb")
     audio = _sstv_audio()
     step = int(sstvmon.CHECK_EVERY * sstvmon.RATE)
@@ -954,3 +979,68 @@ def test_incident_text_redaction():
     assert redact("show Officer Example at 1015") == "show Officer [name] at 1015"
     assert "999" not in redact("sedan, plate ending with 999, weaving")
     assert redact("11-25 northbound 101 south of Holly") == "11-25 northbound 101 south of Holly"
+
+
+# -- spectrum channel lifetimes -------------------------------------------------------------------
+from rxapp import reap
+from rxapp.spectrum import END_FRAMES, LeasedSpectrumStream
+
+
+class _Ctl:
+    def __init__(self):
+        self.calls = []
+
+    def set_spectrum(self, ssrc, **kw):
+        self.calls.append(("spectrum", ssrc))
+
+    def set_channel_lifetime(self, ssrc, lifetime, encoding=None):
+        self.calls.append(("lifetime", ssrc, lifetime))
+
+    def remove_channel(self, ssrc):
+        self.calls.append(("remove", ssrc))
+
+
+def test_spectrum_stream_is_leased_renewed_and_ended(monkeypatch):
+    """Without a lifetime radiod keeps a stopped spectrum channel forever (remove_channel only zeroes it)."""
+    ctl, clock = _Ctl(), [100.0]
+    monkeypatch.setattr("rxapp.spectrum.time.monotonic", lambda: clock[0])
+    s = LeasedSpectrumStream(control=ctl, frequency_hz=1e6, lifetime=1500, renew_sec=10)
+    s._ssrc, s._running = 42, True
+    s._send_spectrum_command()                    # creation: leased at once
+    clock[0] += 5
+    s._send_spectrum_command()                    # a poll: no renewal yet
+    clock[0] += 6
+    s._send_spectrum_command()                    # renewal due
+    assert [c for c in ctl.calls if c[0] == "lifetime"] == [("lifetime", 42, 1500)] * 2
+    s.stop()
+    assert ctl.calls[-2:] == [("remove", 42), ("lifetime", 42, END_FRAMES)]
+    n = len(ctl.calls)
+    s.stop()                                      # second stop: nothing more sent
+    assert len(ctl.calls) == n
+
+
+def test_reap_only_takes_unowned_spectrum_channels_at_zero():
+    C = SimpleNamespace
+    chans = [C(ssrc=1, demod_type=4, frequency=0.0),       # orphan
+             C(ssrc=2, demod_type=4, frequency=4.57e6),    # live spectrum stream
+             C(ssrc=3, demod_type=0, frequency=0.0),       # parked audio channel
+             C(ssrc=4, demod_type=4, frequency=0.0),       # owned
+             C(ssrc=5, demod_type=3, frequency=0.0)]       # old-style spectrum orphan
+    assert reap.orphans(chans, owned={4}) == {1, 5}
+
+
+def test_agc_seed_starts_a_new_channel_near_its_neighbours_gain():
+    """A fresh channel's AGC climbs from low gain for ~4 s of silence unless it is given a starting gain."""
+    ft8 = Channel(1, 14.074e6, "usb", kind="ft8", gain_db=81.0)
+    cw40 = Channel(2, 7.010e6, "usb", kind="cw", gain_db=78.0)
+    fm = Channel(3, 39.9e6, "nfm", gain_db=20.0)
+    vhf = Channel(4, 120.5e6, "am", band="vhf", gain_db=60.0)
+    new = Channel(5, 14.030e6, "cwu")
+    assert agc_seed(new, [ft8, cw40, fm, vhf, new]) == 91.0            # nearest HF AGC channel + margin
+    assert agc_seed(Channel(6, 39.9e6, "nfm"), [ft8]) is None           # FM has no AGC
+    assert agc_seed(Channel(7, 7.0e6, "lsb", gain_db=70.0), [ft8]) == 70.0   # re-created: its own gain
+    assert agc_seed(new, [Channel(8, 50.3e6, "usb", gain_db=97.0)]) == 100.0  # radiod's limit
+    assert agc_seed(new, [new]) == 90.0                                  # nothing known yet: HF default
+    assert agc_seed(Channel(9, 120.5e6, "am", band="vhf"), []) is None  # VHF: no guess
+
+

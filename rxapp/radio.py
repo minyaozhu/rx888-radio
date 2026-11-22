@@ -27,6 +27,9 @@ log = logging.getLogger(__name__)
 LIFETIME_FRAMES = 1500        # radiod frames are 20 ms: 30 s without a refresh
 KEEPALIVE_SEC = 10
 STALL_SEC = 5                 # no new output packets for this long: re-create the channel
+AGC_MODES = {"am", "sam", "usb", "lsb", "cwu", "cwl"}
+HF_SEED_DB = 90.0             # HF linear channels settle at 72-97 dB here; used when no neighbour's gain is known yet
+SEED_MARGIN_DB = 10           # a borrowed gain is raised by this: the AGC comes down fast but climbs ~20 dB/s
 
 
 @dataclass
@@ -46,6 +49,7 @@ class Channel:
     packets_t: Optional[float] = None
     reopens: int = 0
     created: float = field(default_factory=time.time)
+    opened: float = 0.0             # when the channel was last (re)created in radiod: its AGC settles from here
     # Latest status from radiod
     power_db: Optional[float] = None
     noise_db: Optional[float] = None
@@ -55,6 +59,22 @@ class Channel:
 
     def to_dict(self):
         return asdict(self)
+
+
+def agc_seed(ch, channels) -> Optional[float]:
+    """Gain to start a new channel's AGC from. radiod starts it low and climbs slowly, so a fresh channel is
+    silent for ~4 s. Its own last gain if it had one (re-created after a band switch), else the nearest
+    settled channel's on the same input, raised a little (a narrower filter needs more gain; too much is
+    corrected at once)."""
+    if ch.mode not in AGC_MODES:
+        return None
+    if ch.gain_db is not None:
+        return max(-100.0, min(ch.gain_db, 100.0))                      # radiod refuses gains outside +-100 dB
+    near = [c for c in channels if c is not ch and not c.parked and c.band == ch.band
+            and c.mode in AGC_MODES and c.gain_db is not None]
+    if not near:          # gains are only known once something polled status (e.g. right after a restart)
+        return HF_SEED_DB if ch.band == "hf" else None
+    return min(min(near, key=lambda c: abs(c.freq_hz - ch.freq_hz)).gain_db + SEED_MARGIN_DB, 100.0)   # radiod's limit
 
 
 def estimate_snr(status: dict) -> Optional[float]:
@@ -126,11 +146,14 @@ class Radio:
             agc_enable=1, destination=self.pcm_group, ssrc=ch.ssrc, lifetime=LIFETIME_FRAMES)
         # create_channel's agc flag doesn't take on this radiod; without AGC the audio sits near -55 dBFS
         await asyncio.to_thread(self.ctl.set_agc, ch.ssrc, True)
+        seed = agc_seed(ch, list(self.channels.values()))
+        if seed is not None:
+            await asyncio.to_thread(self.ctl.set_gain, ch.ssrc, seed)
         if ch.filter_hz:
             await asyncio.to_thread(self.ctl.set_filter, ch.ssrc, *ch.filter_hz)
         if ch.mode == "wfm" and ch.stereo:
             await asyncio.to_thread(self.ctl.set_output_channels, ch.ssrc, 2)
-        ch.parked = False
+        ch.parked, ch.opened = False, time.time()
 
     async def _close(self, ch):
         ch.parked = True

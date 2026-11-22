@@ -10,9 +10,9 @@ from dataclasses import dataclass
 from typing import Dict, Optional
 
 import numpy as np
-from ka9q import SpectrumStream
 
 from .config import CONFIG
+from .spectrum import LeasedSpectrumStream
 from .vhf import WINDOW_HZ
 
 log = logging.getLogger(__name__)
@@ -87,7 +87,7 @@ class Scanner:
             if db is not None and len(db):
                 loop.call_soon_threadsafe(q.put_nowait, np.asarray(db, np.float64))
 
-        stream = SpectrumStream(control=self.spectrum.radio.ctl, frequency_hz=center_hz, bin_count=self.bins,
+        stream = LeasedSpectrumStream(control=self.spectrum.radio.ctl, frequency_hz=center_hz, bin_count=self.bins,
                                 resolution_bw=bin_hz, on_spectrum=on_frame)
         await asyncio.to_thread(stream.start)
         acc, n, t0 = None, 0, time.time()

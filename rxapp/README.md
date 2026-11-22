@@ -434,6 +434,13 @@ librtlsdr). With a 1090 MHz antenna, ADS-B would be a third window in the airban
 - **Channels expire on their own.** Each is created with a 30 s lifetime and refreshed every 10 s, so a
   crashed rxapp never leaves radiod demodulating forever. AGC is enabled with an explicit command after
   creation (the flag in the create command doesn't take on this radiod; without it audio sits near −55 dBFS).
+  radiod starts a new channel's AGC at low gain and climbs ~20 dB/s, so a fresh channel was silent for ~4 s;
+  `agc_seed` gives it a starting gain (its own last gain, or the nearest settled channel's + 10 dB), and
+  audio is at full level within half a second.
+  Spectrum streams (display, panels, scans, voice_session.py) are `LeasedSpectrumStream`s with the same lease;
+  stopping one cuts its lifetime to 1 s. ka9q-python's `remove_channel` only tunes a channel to 0 Hz, and
+  radiod deletes it only when its lifetime runs out, so a stream without one leaks a channel on every
+  rebuild. `python -m rxapp.reap [--apply]` removes such leftovers (spectrum, 0 Hz, not rxapp's).
 - **SNR** is estimated as baseband power over (noise density × filter width).
 - **Storage**: `rxapp_data/rxapp.sqlite` (scans, detections, recordings, health, events) and
   `rxapp_data/recordings/*.wav`.

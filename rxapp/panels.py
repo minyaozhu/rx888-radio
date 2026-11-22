@@ -16,10 +16,9 @@ import time
 from typing import Dict, List, Optional, Set, Tuple
 
 import numpy as np
-from ka9q import SpectrumStream
 
 from .config import CONFIG
-from .spectrum import LIVE_VHF_SPAN
+from .spectrum import LIVE_VHF_SPAN, LeasedSpectrumStream
 
 log = logging.getLogger(__name__)
 
@@ -40,7 +39,7 @@ def frame_bytes(fid: int, first_hz: float, bin_hz: float, db: np.ndarray, t: flo
 class Feed:
     def __init__(self, fid: int, kind: str, lo: float, hi: float):
         self.id, self.kind, self.lo, self.hi = fid, kind, lo, hi
-        self.stream: Optional[SpectrumStream] = None
+        self.stream: Optional[LeasedSpectrumStream] = None
         self.radiod_center: Optional[float] = None
         self.center = (lo + hi) / 2
         self.bin = (hi - lo) / BINS
@@ -157,7 +156,7 @@ class PanelHub:
 
     async def _open(self, feed: Feed, radiod_center: float, bins: int, bin_hz: float):
         feed.radiod_center, feed.bin, feed.got = radiod_center, bin_hz, time.time()
-        feed.stream = SpectrumStream(control=self.radio.ctl, frequency_hz=radiod_center, bin_count=bins,
+        feed.stream = LeasedSpectrumStream(control=self.radio.ctl, frequency_hz=radiod_center, bin_count=bins,
                                      resolution_bw=bin_hz, on_spectrum=self._on_frame(feed))
         await asyncio.to_thread(feed.stream.start)
 
