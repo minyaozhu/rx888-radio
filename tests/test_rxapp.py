@@ -1044,3 +1044,35 @@ def test_agc_seed_starts_a_new_channel_near_its_neighbours_gain():
     assert agc_seed(Channel(9, 120.5e6, "am", band="vhf"), []) is None  # VHF: no guess
 
 
+def test_voiced_share_tells_speech_from_fm_noise():
+    import voice_session as vs
+    rate = 12000
+    t = np.arange(int(3 * rate)) / rate
+    rng = np.random.default_rng(0)
+    pitch = 120 * (1 + 0.1 * np.sin(2 * np.pi * 0.7 * t))           # a voice: harmonics of a gliding pitch,
+    phase = 2 * np.pi * np.cumsum(pitch) / rate                       # in syllables 4 times a second
+    vowel = sum(np.sin(k * phase) / k for k in range(1, 20)) * (np.sin(2 * np.pi * 4 * t) > -0.2)
+    speech = (vowel * 6000 + rng.normal(0, 600, len(t))).astype(np.int16)
+    noise = (rng.normal(0, 6000, len(t)) * (1 + 0.8 * np.sin(2 * np.pi * 3 * t))).astype(np.int16)   # hiss, even if it pulses
+    assert vs.voiced_share(speech, rate) > 0.3
+    assert vs.voiced_share(noise, rate) < vs.VOICED_MIN
+
+
+def test_clean_noise_clears_invented_text(tmp_path):
+    import json
+    import wave as wv
+    import voice_session as vs
+    rate = 12000
+    rng = np.random.default_rng(1)
+    w = tmp_path / "a.wav"
+    with wv.open(str(w), "wb") as f:
+        f.setnchannels(1); f.setsampwidth(2); f.setframerate(rate)
+        f.writeframes(rng.normal(0, 5000, 3 * rate).astype("<i2").tobytes())
+    rec = {"t0": 1.0, "t1": 4.0, "freq_hz": 41102500.0, "kind": "voice", "text": "Okay.", "text_atc": "Okay.", "wav": str(w)}
+    (tmp_path / "transmissions.jsonl").write_text(json.dumps(rec) + "\n")
+    assert vs.clean_noise(tmp_path) == 1
+    last = json.loads((tmp_path / "transcripts.jsonl").read_text().splitlines()[-1])
+    assert last["text"] == "" and last["cleaned"] == "no speech"
+    assert vs.clean_noise(tmp_path) == 0                             # already clean
+
+

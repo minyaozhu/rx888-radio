@@ -67,8 +67,6 @@ SPUR_FRACTION = 0.9              # keyed this much of the last SPUR_WINDOW s = a
 SPUR_WINDOW = 60.0
 MAX_CHANNELS = 64
 SAFETY_KEEP_DAYS = 7
-WHISPER = "mlx-community/whisper-large-v3-turbo"
-HALLUCINATIONS = {"", "thank you.", "thanks for watching!", "you", "bye.", ".", "thank you very much."}
 
 ATC_PROMPT = ("Air traffic control radio, Northern California. NorCal Approach, Oakland Center, San Francisco "
               "tower. United, Southwest, Alaska, SkyWest, Delta, American, JetBlue. Descend and maintain, "
@@ -209,16 +207,6 @@ class Audio:
 
 
 # ---- audio analysis ---------------------------------------------------------------------
-def prepare(a: np.ndarray, rate: int = 12000) -> np.ndarray:
-    """Demodulated audio -> what Whisper hears best: DC removed (an AM carrier's level), voice band only,
-    normalised, 16 kHz. (Fed raw AM, Whisper called nearly every transmission 'no speech'.)"""
-    from scipy.signal import butter, resample_poly, sosfilt
-    x = a.astype(np.float32) / 32768
-    x = sosfilt(butter(4, [250, 3200], btype="band", fs=rate, output="sos"), x - x.mean())
-    x = x / (np.abs(x).max() + 1e-9) * 0.8
-    g = math.gcd(16000, int(rate))
-    return resample_poly(x, 16000 // g, int(rate) // g).astype(np.float32)
-
 
 def looks_digital(a: np.ndarray, rate: int) -> bool:
     """FM-demodulated P25/DMR/NXDN: a continuous, noise-like signal with a steady level, unlike speech,
@@ -240,20 +228,6 @@ def looks_digital(a: np.ndarray, rate: int) -> bool:
     return cv < 0.3 and flat > 0.3
 
 
-def transcribe(a: np.ndarray, rate: int = 12000, prompt: str = ATC_PROMPT) -> dict:
-    """Two readings: plain, and with the service's vocabulary prompt (it helps with call signs and
-    phrases, but can also pull a garbled transmission towards stock phrases)."""
-    import mlx_whisper
-    x = prepare(a, rate)
-    out = {}
-    for key, pr in (("text", None), ("text_atc", prompt)):
-        r = mlx_whisper.transcribe(x, path_or_hf_repo=WHISPER, language="en", initial_prompt=pr,
-                                   condition_on_previous_text=False, temperature=0.0)
-        segs = r.get("segments") or []
-        text = " ".join(s["text"].strip() for s in segs if s.get("no_speech_prob", 0) < 0.8).strip()
-        caption = re.fullmatch(r"[\[(]?[A-Z][A-Z ,.'!-]*[\])]?", text) is not None   # "BELL RINGS": a sound caption
-        out[key] = "" if text.lower() in HALLUCINATIONS or caption else text
-    return out
 
 
 class Transcriber(threading.Thread):
@@ -273,6 +247,8 @@ class Transcriber(threading.Thread):
                     a = np.frombuffer(w.readframes(w.getnframes()), "<i2")
                 if prof.digital_check and looks_digital(a, rate):
                     rec.update(kind="digital", text="", text_atc="")
+                elif prof.digital_check and (v := voiced_share(a, rate)) < VOICED_MIN:
+                    rec.update(kind="voice", text="", text_atc="", voiced=round(v, 3))   # no speech: Whisper would invent some
                 else:
                     rec.update(kind="voice", **transcribe(a, rate, prof.prompt))
             except Exception as e:
@@ -1012,11 +988,42 @@ def retranscribe(session_dir: Path):
                 a = np.frombuffer(w.readframes(w.getnframes()), "<i2")
             if prof.digital_check and looks_digital(a, rate):
                 rec.update(kind="digital", text="", text_atc="")
+            elif prof.digital_check and (v := voiced_share(a, rate)) < VOICED_MIN:
+                rec.update(kind="voice", text="", text_atc="", voiced=round(v, 3))
             else:
                 rec.update(kind="voice", **transcribe(a, rate, prof.prompt))
             f.write(json.dumps(rec) + "\n")
             f.flush()
             print(f"{i + 1}/{len(recs)} {rec['freq_hz'] / 1e6:.4f} {rec['text']}", flush=True)
+
+
+def clean_noise(session_dir: Path) -> int:
+    """Clear the text of a session's transmissions that aren't speech (voiced share below VOICED_MIN) or are a
+    stock hallucination, without running Whisper again: the corrected records go to transcripts.jsonl, which
+    the pages read over transmissions.jsonl. Returns how many were cleared."""
+    recs = [json.loads(l) for l in open(session_dir / "transmissions.jsonl")]
+    out = session_dir / "transcripts.jsonl"
+    latest = {}
+    if out.exists():
+        for l in open(out):
+            r = json.loads(l)
+            latest[r["wav"]] = r
+    n = 0
+    with open(out, "a") as f:
+        for rec in recs:
+            rec = latest.get(rec["wav"], rec)
+            if rec.get("kind") != "voice" or not (rec.get("text") or rec.get("text_atc")) or not Path(rec["wav"]).exists():
+                continue
+            with wave.open(rec["wav"]) as w:
+                rate = w.getframerate()
+                a = np.frombuffer(w.readframes(w.getnframes()), "<i2")
+            v = voiced_share(a, rate)
+            stock = (rec.get("text") or "").strip().lower() in HALLUCINATIONS
+            if v < VOICED_MIN or stock:
+                rec.update(text="", text_atc="", voiced=round(v, 3), cleaned="no speech" if v < VOICED_MIN else "stock phrase")
+                f.write(json.dumps(rec) + "\n")
+                n += 1
+    return n
 
 
 def main():
@@ -1027,7 +1034,14 @@ def main():
     ap.add_argument("--minutes", type=float, default=0, help="0 (default): until stopped (Ctrl-C / SIGTERM)")
     ap.add_argument("--preload", default="", help="comma-separated MHz to open channels on as soon as they're in view")
     ap.add_argument("--retranscribe", type=Path, help="transcribe this session directory's WAVs again")
+    ap.add_argument("--clean-noise", type=Path, help="clear the text of this session directory's non-speech transmissions")
+    ap.add_argument("--adsb-plan", default="0:5:10,15:3:20,30:2:30",
+                    help="ADS-B hops to 1090 MHz during VHF windows, by how busy voice is: BUSY%%:HOP_S:EVERY_S,... "
+                         "(interpolated; default: silent 5 s every 10 s, 15%% 3 s every 20 s, 30%%+ 2 s every 30 s; off: none)")
     args = ap.parse_args()
+    if args.clean_noise:
+        print(f"cleared {clean_noise(args.clean_noise)} transmissions")
+        return
     if args.retranscribe:
         logging.getLogger("httpx").setLevel(logging.WARNING)
         return retranscribe(args.retranscribe)
