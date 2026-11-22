@@ -1358,3 +1358,127 @@ def test_clean_noise_clears_invented_text(tmp_path):
     assert vs.clean_noise(tmp_path) == 0                             # already clean
 
 
+# ---- SSB transcription (rxapp/ssbvoice.py) -------------------------------------------------------
+def _ssb_voice(sec, f0=120, rate=12000, shift_hz=0.0):
+    from scipy.signal import hilbert
+    t = np.arange(int(sec * rate)) / rate
+    pitch = f0 * (1 + 0.1 * np.sin(2 * np.pi * 0.7 * t))
+    ph = 2 * np.pi * np.cumsum(pitch) / rate
+    v = sum(np.sin(k * ph) / k for k in range(1, 25))
+    v = v / np.sqrt((v ** 2).mean()) * (np.sin(2 * np.pi * 4 * t) > -0.3)        # syllables
+    if shift_hz:                                                                   # a mistuned SSB receiver
+        v = np.real(hilbert(v) * np.exp(2j * np.pi * shift_hz * t))
+    return v
+
+
+def _ssb_hiss(sec, rng, rate=12000):
+    from scipy.signal import butter, sosfiltfilt
+    x = sosfiltfilt(butter(4, [300, 2700], "band", fs=rate, output="sos"), rng.standard_normal(int(sec * rate)))
+    return x / np.sqrt((x ** 2).mean())
+
+
+def _ssb_run(sig, rate=12000):
+    from rxapp.ssbvoice import Segmenter
+    a = (sig / np.abs(sig).max() * 20000).astype(np.int16)
+    seg, out = Segmenter(rate), []
+    for i in range(0, len(a), 240):                                # 20 ms packets, as radiod sends them
+        out += seg.feed(a[i:i + 240], 1000 + (i + 240) / rate)
+    return out + seg.flush()
+
+
+def test_ssb_segmenter_finds_speech_in_hiss_even_mistuned():
+    rng = np.random.default_rng(0)
+    g = 10 ** (8 / 20)                                             # 8 dB SNR in the voice band
+    sig = np.concatenate([_ssb_hiss(5, rng), _ssb_voice(3) * g + _ssb_hiss(3, rng), _ssb_hiss(4, rng),
+                          _ssb_voice(2, 220, shift_hz=60) * g + _ssb_hiss(2, rng), _ssb_hiss(3, rng)])
+    out = _ssb_run(sig)
+    assert len(out) == 2
+    (a, b) = [(u["t0"] - 1000, u["t1"] - 1000) for u in out]
+    assert 4.0 <= a[0] <= 5.2 and 7.8 <= a[1] <= 8.8                # the 5-8 s voice, with its lead-in
+    assert 11.0 <= b[0] <= 12.2 and 13.8 <= b[1] <= 14.8           # the mistuned 12-14 s voice
+
+
+def test_ssb_segmenter_ignores_hiss():
+    assert _ssb_run(_ssb_hiss(120, np.random.default_rng(5))) == []
+
+
+def test_ssb_transcripts_api(tmp_path, monkeypatch):
+    import json
+    from fastapi.testclient import TestClient
+    from rxapp import server
+    from rxapp.ssbvoice import SsbTranscriber
+    tr = SsbTranscriber(SimpleNamespace(channels={}), SimpleNamespace(subscribe=lambda *a: None, unsubscribe=lambda *a: None),
+                        tmp_path)
+    day = tmp_path / "20261114"
+    day.mkdir()
+    rows = [{"t0": 10.0, "t1": 12.0, "freq_hz": 7185000, "mode": "lsb", "text": "", "day": day.name, "clip": "a.wav"},
+            {"t0": 20.0, "t1": 23.0, "freq_hz": 7185000, "mode": "lsb", "text": "CQ CQ this is W6ABC", "day": day.name, "clip": "b.wav"}]
+    (day / "transcripts.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+    (day / "b.wav").write_bytes(b"RIFF" + b"\0" * 40)
+    monkeypatch.setattr(server.S, "ssbv", tr, raising=False)
+    c = TestClient(server.app)
+    assert [r["text"] for r in c.get("/api/ssb/transcripts").json()] == ["CQ CQ this is W6ABC"]   # no-words hidden
+    assert len(c.get("/api/ssb/transcripts?empty=true").json()) == 2
+    assert c.get("/api/ssb/transcripts?after=15&empty=true").json()[0]["t0"] == 20.0
+
+
+# ---- SSB auto-tune (rxapp/ssbtune.py) ------------------------------------------------------------
+@pytest.mark.parametrize("f0,shift", [(110, -170), (200, 85), (130, 0), (180, 230)])
+def test_ssb_tuning_error_from_the_voice(f0, shift):
+    from rxapp.ssbtune import estimate
+    rng = np.random.default_rng(1)
+    sig = _ssb_voice(4, f0, shift_hz=shift) * 10 ** (12 / 20) + _ssb_hiss(4, rng)
+    d, n = estimate(sig, 12000)
+    assert n >= 40 and abs(d - shift) <= 6
+
+
+def test_ssb_hiss_gives_no_tuning_estimate():
+    from rxapp.ssbtune import estimate
+    assert estimate(_ssb_hiss(5, np.random.default_rng(2)), 12000)[1] < 10
+
+
+def test_ssb_corrected_dial_sign_and_snap():
+    from rxapp.ssbtune import corrected_dial
+    assert corrected_dial(7240100, "lsb", 108) == (7240000, True)      # voice too high on LSB: dial too high
+    assert corrected_dial(14250000 - 110, "usb", 108) == (14250000, True)
+    assert corrected_dial(7183300, "lsb", -64) == (7183360, False)     # off the grid: 10 Hz steps
+
+
+def test_ssb_autotune_pools_then_moves_then_wants_agreement():
+    from rxapp.ssbtune import D, AutoTune
+    def sc(d):
+        return np.exp(-((D - d) / 6.0) ** 2)
+    a = AutoTune()
+    a.new_station(7240100)
+    assert a.add(sc(108), 20, 7240100, "lsb", 1) is None                # 20 frames: not enough yet
+    assert a.add(sc(108), 30, 7240100, "lsb", 2) == 7240000             # pooled: snap to the net
+    assert a.add(sc(2), 50, 7240000, "lsb", 3) is None and not a.last["moved"]     # in tune
+    assert a.add(sc(-90), 50, 7240000, "lsb", 4) is None and a.last["waiting"]     # second station: wait...
+    assert a.add(sc(-92), 50, 7240000, "lsb", 5) == 7240090                         # ...it agrees: move
+    a.add(sc(40), 30, 7241000, "lsb", 6)                               # tuned by hand: starts over there
+    assert a.frames == 30 and a.dial == 7241000
+
+
+def test_ssb_transcriber_autotunes_the_channel(tmp_path):
+    import asyncio
+    from rxapp.ssbvoice import SsbTranscriber
+    ch = SimpleNamespace(freq_hz=7240100.0, mode="lsb", sample_rate=12000)
+    tuned = []
+
+    async def tune(ssrc, f):
+        tuned.append(f)
+        ch.freq_hz = f
+    radio = SimpleNamespace(channels={5: ch}, tune=tune)
+    tr = SsbTranscriber(radio, SimpleNamespace(subscribe=lambda *a: None, unsubscribe=lambda *a: None), tmp_path)
+
+    async def go():
+        tr.beat(5, transcribe=False, autotune=True)
+        voice = _ssb_voice(3, 140, shift_hz=105) * 10 ** (12 / 20) + _ssb_hiss(3, np.random.default_rng(3))
+        tr._queue({"audio": (voice / np.abs(voice).max() * 20000).astype(np.int16), "t0": 0, "t1": 3, "voiced": .5})
+        for _ in range(100):
+            await asyncio.sleep(0.05)
+            if tuned:
+                break
+    asyncio.run(go())
+    assert tuned == [7240000.0] and tr.busy == 0                      # retuned, nothing sent to Whisper
+    assert tr.status()["autotune"]["last"]["snapped"]

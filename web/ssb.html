@@ -35,7 +35,8 @@
 }
 *{box-sizing:border-box}
 body{background:var(--bg);color:var(--ink);font:15px/1.5 "Barlow",system-ui,-apple-system,"Segoe UI",sans-serif;padding:0 20px;}
-.wrap{max-width:1475px;margin:0 auto;padding-block:28px 48px;display:grid;gap:22px}
+.wrap{max-width:1475px;margin:0 auto;padding-block:28px 48px;display:grid;grid-template-columns:minmax(0,1fr);gap:22px}
+.wrap > *{min-width:0}
 header{display:grid;gap:6px}
 .eyebrow{font:600 13px/1 "Barlow Condensed",sans-serif;letter-spacing:.14em;text-transform:uppercase;color:var(--magenta)}
 h1{font:700 clamp(34px,5vw,54px)/1 "Barlow Condensed","Arial Narrow",sans-serif;letter-spacing:.01em;margin:0;text-wrap:balance}
@@ -70,6 +71,17 @@ button{font:600 14px/1 "Barlow Condensed",sans-serif;letter-spacing:.1em;text-tr
 button:focus-visible,input:focus-visible{outline:2px solid var(--magenta);outline-offset:2px}
 #scrub{flex:1 1 260px;accent-color:var(--magenta)}
 #clock{font:500 18px "IBM Plex Mono",monospace;font-variant-numeric:tabular-nums;min-width:8ch}
+.tpanel{padding:12px 16px;display:grid;gap:8px}
+.tbar{display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px}
+.tbar h2{font:700 13px/1 "Barlow Condensed",sans-serif;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin:0}
+.tbar label{font:500 13px "IBM Plex Mono",monospace;display:inline-flex;gap:6px;align-items:center}
+.tlog{margin:0;padding:0;list-style:none;max-height:340px;overflow:auto;font:400 14px/1.45 "IBM Plex Mono",monospace}
+.tlog li{display:grid;grid-template-columns:auto auto 1fr auto;gap:4px 12px;align-items:baseline;border-top:1px solid var(--line);padding:5px 2px}
+.tlog .t,.tlog .f{color:var(--muted);font-size:12px;white-space:nowrap}
+.tlog .x{overflow-wrap:anywhere}
+.tlog .x.none{color:var(--muted);font-style:italic}
+.tlog li.playing .x{color:var(--magenta)}
+@media (max-width:600px){.tlog li{grid-template-columns:auto 1fr auto}.tlog .f{display:none}}
 .legend{display:flex;flex-wrap:wrap;gap:6px 14px;font:600 13px "Barlow Condensed",sans-serif;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
 .legend i{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px;vertical-align:-1px}
 .tl{padding:8px 0 4px}
@@ -177,7 +189,7 @@ tr.activity td.name{font-style:italic;color:var(--muted)}
   <header>
     <div class="eyebrow"><a href="/" target="_top" style="color:inherit">rxapp</a> · SSB voice · HF · RX-888</div>
     <h1>SSB Voice</h1>
-    <p class="sub">Single-sideband voice on HF: amateur radio nets and conversations, oceanic aviation (San Francisco Radio works the Pacific), Honolulu VOLMET weather, the US Air Force HF network and the Coast Guard. Scan to see which channels have a signal right now, click to listen, nudge the tuning until voices sound natural.</p>
+    <p class="sub">Single-sideband voice on HF: amateur radio nets and conversations, oceanic aviation (San Francisco Radio works the Pacific), Honolulu VOLMET weather, the US Air Force HF network and the Coast Guard. Scan to see which channels have a signal right now, click to listen, nudge the tuning until voices sound natural, or let auto-tune do it from the voices.</p>
   </header>
 
   <div class="nowbar" id="nowbar">
@@ -189,6 +201,8 @@ tr.activity td.name{font-style:italic;color:var(--muted)}
       <button type="button" class="smallbtn" data-nudge="100" title="Tune up 100 Hz (voices too low)">+100</button>
       <button type="button" class="smallbtn" data-nudge="500" title="Tune up 500 Hz">+500</button>
       <button type="button" class="smallbtn" id="side" title="Switch sideband">USB</button>
+      <label class="m" title="Measure the tuning error from the voices heard and correct it (snaps to a whole or half kHz when that close)"><input type="checkbox" id="autoTune"> auto-tune</label>
+      <span class="m" id="autoNote"></span>
     </span>
     <span style="flex:1"></span>
     <label class="m">vol <input id="vol" type="range" min="0" max="3" step="0.05" value="1"></label>
@@ -209,10 +223,21 @@ tr.activity td.name{font-style:italic;color:var(--muted)}
   <div class="panel" style="padding:8px 12px">
     <div class="wrapt"><table class="tbl"><thead id="thead"></thead><tbody id="rows"></tbody></table></div>
   </div>
-  <p class="caveat">Frequencies are dial (suppressed-carrier) frequencies; the voice is 300–2700 Hz above them (USB) or below (LSB). Amateurs use LSB below 10 MHz, except the 60 m channels, and USB above; aviation, military and marine HF voice is USB. The signal column is the strongest speech in each channel's voice band from your last scan, against the local noise floor: SSB is silent between words, so a quiet channel may just be between transmissions. In the amateur bands, a scan also finds conversations anywhere in the phone segments (“activity”); the tuning there is a guess from where the speech energy sits, so nudge it. Listening or scanning holds the receiver on the HF input (FT8, WSPR and SSTV keep running; the VHF rotation pauses) until “Resume rotation”.</p>
+  <div class="panel tpanel" aria-labelledby="tTitle">
+    <div class="tbar">
+      <h2 id="tTitle">Transcript</h2>
+      <label title="Transcribe what this page plays; only stretches that sound like a voice go to Whisper"><input type="checkbox" id="tOn"> Transcribe</label>
+      <label title="Also list utterances in which Whisper found no words"><input type="checkbox" id="tEmpty"> show no-words</label>
+      <span class="m" id="tStatus" style="font:500 12px 'IBM Plex Mono',monospace;color:var(--muted)"></span>
+    </div>
+    <ul class="tlog" id="tlog"><li><span class="x none">Nothing yet. Play a channel with Transcribe on; each spoken stretch appears here a few seconds after it ends.</span></li></ul>
+    <audio id="tPlayer" preload="none"></audio>
+  </div>
+
+  <p class="caveat">Frequencies are dial (suppressed-carrier) frequencies; the voice is 300–2700 Hz above them (USB) or below (LSB). Amateurs use LSB below 10 MHz, except the 60 m channels, and USB above; aviation, military and marine HF voice is USB. The signal column is the strongest speech in each channel's voice band from your last scan, against the local noise floor: SSB is silent between words, so a quiet channel may just be between transmissions. In the amateur bands, a scan also finds conversations anywhere in the phone segments (“activity”); the tuning there is a guess from where the speech energy sits, so nudge it. Transcription (on Mac, Whisper) only hears what this page plays: SSB never goes quiet, so it first looks for a voice's pitch in the sound (it still finds it when the tuning is off) and sends only those stretches to Whisper; hiss, static and data are skipped. Clips and text are kept 7 days. Auto-tune uses the same spoken stretches: a voice's harmonics sit at whole multiples of its pitch, so after about two seconds of speech it can tell how far off they are and retune (within ~5 Hz); amateur nets sit on whole or half kHz, so a result that close is put on it. It moves only for speech, and after the first correction only when two stretches in a row agree. Listening or scanning holds the receiver on the HF input (FT8, WSPR and SSTV keep running; the VHF rotation pauses) until “Resume rotation”.</p>
 </div>
-<script src="audiofocus.js?v=1"></script>
+<script src="audiofocus.js?v=2"></script>
 <script src="ndjson.js?v=1"></script>
-<script src="ssb.js?v=3"></script>
+<script src="ssb.js?v=6"></script>
 </body>
 </html>

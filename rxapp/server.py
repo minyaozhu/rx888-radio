@@ -37,6 +37,7 @@ from .radio import Radio
 from .rtp import RtpHub
 from .spectrum import Spectrum
 from .sstvmon import SstvMonitor
+from .ssbvoice import SsbTranscriber
 from .store import Store
 from .supervisor import Supervisor
 
@@ -58,6 +59,7 @@ class State:
     wspr: WsprMonitor
     cw: CwMonitor
     sstv: SstvMonitor
+    ssbv: SsbTranscriber
     adsb: AdsbFeed
     jx: Junctions
     recorders: Dict[int, Recorder] = {}
@@ -117,6 +119,8 @@ async def lifespan(app):
     S.jx = Junctions()                  # highway junctions for placing public-safety calls (offline table)
     S.adsb = AdsbFeed(enabled=RUNTIME.adsb_feed)
     S.adsb.start()                      # fetches only while a page is asking for aircraft
+    S.ssbv = SsbTranscriber(S.radio, S.rtp, CONFIG.data_dir / "ssb", enabled=RUNTIME.ssb_transcribe)
+    S.ssbv.start()
     S.sstv = SstvMonitor(S.radio, S.rtp, S.store)
     if RUNTIME.sstv_on:
         try:
@@ -142,6 +146,7 @@ async def lifespan(app):
     await S.wspr.stop(save=False)
     await S.cw.stop(save=False)
     await S.sstv.stop(save=False)
+    await S.ssbv.stop()
     await S.adsb.stop()
     await S.panels.stop()
     await S.hfgain.stop()
@@ -775,6 +780,52 @@ async def put_controller(body: dict):
 @app.get("/api/ssb/channels")
 async def ssb_channels():
     return ssb.channels(CONFIG.max_freq_hz)
+
+
+class SsbBeat(BaseModel):
+    ssrc: int
+    transcribe: bool = True
+    autotune: bool = False
+
+
+class SsbTranscribeSet(BaseModel):
+    on: bool
+
+
+@app.get("/api/ssb/transcribe")
+async def ssb_transcribe_status():
+    """Transcription of what the SSB Voice page plays: on/off, the channel it's on, utterances heard."""
+    return S.ssbv.status()
+
+
+@app.post("/api/ssb/transcribe")
+async def ssb_transcribe_set(body: SsbTranscribeSet):
+    S.ssbv.set_enabled(body.on)
+    RUNTIME.ssb_transcribe = body.on
+    RUNTIME.save()
+    return S.ssbv.status()
+
+
+@app.post("/api/ssb/transcribe/beat")
+async def ssb_transcribe_beat(body: SsbBeat):
+    """The page is playing this channel: transcribe and / or auto-tune it (until the heartbeats stop,
+    rxapp/ssbvoice.py)."""
+    S.ssbv.beat(body.ssrc, body.transcribe, body.autotune)
+    return S.ssbv.status()
+
+
+@app.get("/api/ssb/transcripts")
+async def ssb_transcripts(after: float = 0.0, limit: int = 300, empty: bool = False):
+    """Utterances with their text, newest first; empty=true also lists the ones Whisper found no words in."""
+    return S.ssbv.transcripts(after=after, limit=min(limit, 2000), include_empty=empty)
+
+
+@app.get("/api/ssb/clip/{day}/{name}")
+async def ssb_clip(day: str, name: str):
+    path = CONFIG.data_dir / "ssb" / Path(day).name / Path(name).name
+    if path.suffix != ".wav" or not path.exists():
+        raise HTTPException(404, "no such clip")
+    return FileResponse(path, media_type="audio/wav")
 
 
 class SsbCheck(BaseModel):

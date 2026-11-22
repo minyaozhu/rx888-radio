@@ -39,7 +39,7 @@ $('resume').addEventListener('click', async () => {
 });
 
 // ------------------------------------------------------------------ player
-const audio = {ctx: null, gain: null, ws: null, next: 0};
+const audio = {ctx: null, gain: null, ws: null, next: 0, ssrc: null, retry: null};
 async function play(row) {
   $('nowName').textContent = 'Tuning…'; $('nowMeta').textContent = '';
   try {
@@ -50,6 +50,7 @@ async function play(row) {
     connect(S.ssrc);
     audioFocus.claim(stop);
     S.playing = {key: row.key, freq: row.freq_hz, mode: row.mode, title: row.title, sub: row.sub};
+    setTimeout(beat, 0);                   // start transcribing now, not at the next heartbeat
     $('stop').disabled = false; $('tune').style.visibility = '';
     showNow();
   } catch (e) { $('nowName').textContent = 'Could not tune'; $('nowMeta').textContent = e.message; }
@@ -82,7 +83,9 @@ $('side').addEventListener('click', () => {
   S.playing.mode = S.playing.mode === 'usb' ? 'lsb' : 'usb'; showNow(); retune();
 });
 function connect(ssrc) {
+  clearTimeout(audio.retry); audio.retry = null;      // a pending reconnect is for the stream being replaced
   if (audio.ws) { const w = audio.ws; audio.ws = null; w.onmessage = w.onclose = null; w.close(); }
+  audio.ssrc = ssrc;
   if (!ssrc) return;
   audio.next = 0;
   const ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + `/ws/audio/${ssrc}`);
@@ -97,7 +100,19 @@ function connect(ssrc) {
     if (audio.next < now + 0.05 || audio.next > now + 1.0) audio.next = now + 0.25;
     src.start(audio.next); audio.next += buf.duration;
   };
-  ws.onclose = () => { if (audio.ws === ws && S.playing) setTimeout(() => S.playing && connect(ssrc), 1000); };
+  // Server restart or network blip: reconnect while still listening, to the channel still wanted. The old
+  // version reconnected to the ssrc it was opened with, and a timer left over from a dead channel replaced
+  // the next station's stream about a second after it started. 4404: the channel is gone, make a new one.
+  ws.onclose = (e) => {
+    if (audio.ws !== ws || !S.playing) return;
+    audio.ws = null;
+    audio.retry = setTimeout(async () => {
+      audio.retry = null;
+      if (!S.playing || audio.ssrc !== ssrc) return;
+      try { if (e.code === 4404) { S.ssrc = null; await tuneTo(S.playing.freq, S.playing.mode); } } catch (err) { /* rxapp still starting: try again */ }
+      connect(e.code === 4404 ? S.ssrc : ssrc);
+    }, 1000);
+  };
   audio.ws = ws;
 }
 function stop() {
@@ -105,7 +120,7 @@ function stop() {
   connect(null); S.playing = null;
   $('nowName').textContent = 'Nothing playing'; $('nowMeta').textContent = 'pick a channel below';
   $('stop').disabled = true; $('tune').style.visibility = 'hidden';
-  draw();
+  draw(); tStatus(null); autoNote(null);
 }
 $('stop').addEventListener('click', stop);
 $('vol').addEventListener('input', () => { if (audio.gain) audio.gain.gain.value = +$('vol').value; });
@@ -225,3 +240,80 @@ async function load() {
   draw();
 }
 load().catch((e) => { $('rows').innerHTML = `<tr><td colspan="6" class="lanesub">rxapp not reachable: ${esc(e.message)}</td></tr>`; });
+
+// ------------------------------------------------------------------ transcript (rxapp/ssbvoice.py)
+// While playing with Transcribe or Auto-tune on, a heartbeat tells rxapp which channel to listen to; it stops on
+// its own some seconds after the heartbeats do (Stop, another channel's audio, a closed tab). Auto-tune retunes
+// the channel in rxapp (rxapp/ssbtune.py); the heartbeat's answer says where to.
+const T = {list: [], newest: 0, playing: null, moveSeen: 0};
+const store = {get: (k) => { try { return localStorage.getItem(k); } catch (e) { return null; } },
+  set: (k, v) => { try { localStorage.setItem(k, v); } catch (e) { /* private window */ } }};
+$('autoTune').checked = store.get('ssb.autotune') !== '0';
+$('autoTune').addEventListener('change', () => { store.set('ssb.autotune', $('autoTune').checked ? '1' : '0'); beat(); });
+async function beat() {
+  const tOn = $('tOn').checked, aOn = $('autoTune').checked;
+  if (!S.playing || !S.ssrc || !(tOn || aOn)) { autoNote(null); return tStatus(null); }
+  try {
+    const st = await post('/api/ssb/transcribe/beat', {ssrc: S.ssrc, transcribe: tOn, autotune: aOn});
+    followAuto(st); tStatus(st);
+  } catch (e) { $('tStatus').textContent = e.message; }
+}
+function followAuto(st) {
+  const a = st && st.autotune, last = a && a.last;
+  if (S.playing && last && last.moved && last.t > T.moveSeen && st.ssrc === S.ssrc) {
+    T.moveSeen = last.t;
+    if (Math.abs(st.freq_hz - S.playing.freq) >= 1) { S.playing.freq = st.freq_hz; showNow(); }
+  }
+  autoNote(st);
+}
+function autoNote(st) {
+  const a = st && st.autotune;
+  if (!S.playing || !$('autoTune').checked || !a || !a.on || !st.listening) { $('autoNote').textContent = ''; return; }
+  const l = a.last, sgn = (x) => (x > 0 ? '+' : x < 0 ? '−' : '±') + Math.abs(x).toFixed(0);
+  $('autoNote').textContent = !l ? `auto: listening for a voice (${Math.min(a.frames, a.need)}/${a.need})`
+    : l.moved ? `auto: voice ${sgn(l.offset_hz)} Hz → ${khz(l.to_hz)}${l.snapped ? '' : ` (${(l.to_hz / 1e3).toFixed(2)})`}`
+    : l.waiting ? `auto: ${sgn(l.offset_hz)} Hz, checking with the next voice`
+    : `auto: in tune (${sgn(l.offset_hz)} Hz)`;
+  $('autoNote').title = l ? `last estimate ${new Date(l.t * 1000).toLocaleTimeString([], {hour12: false})} from ${l.frames} voiced 40 ms frames` : '';
+}
+function tStatus(st) {
+  const on = $('tOn').checked;
+  $('tStatus').textContent = !on ? 'off' : !S.playing ? 'play a channel to transcribe it'
+    : !st ? '' : st.listening ? `listening for speech on ${khz(st.freq_hz)} kHz ${String(st.mode || '').toUpperCase()} · ${st.heard} spoken stretches${st.pending ? ` · ${st.pending} being transcribed` : ''}`
+    : 'starting…';
+}
+function tDraw() {
+  const showEmpty = $('tEmpty').checked;
+  const rows = T.list.filter((r) => showEmpty || r.text);
+  $('tlog').innerHTML = rows.slice(0, 300).map((r) => `<li class="${T.playing === r.clip ? 'playing' : ''}">
+      <span class="t">${new Date(r.t0 * 1000).toLocaleTimeString([], {hour12: false})}</span>
+      <span class="f">${r.freq_hz ? khz(r.freq_hz) + ' ' + String(r.mode || '').toUpperCase() : ''}</span>
+      <span class="x ${r.text ? '' : 'none'}" title="${esc(r.text_hint && r.text_hint !== r.text ? 'with the radio vocabulary hint: ' + r.text_hint : '')}">${esc(r.text || '(no words)')}</span>
+      <button type="button" class="smallbtn" data-day="${esc(r.day)}" data-clip="${esc(r.clip)}">${T.playing === r.clip ? 'Stop' : '▶'}</button></li>`).join('')
+    || '<li><span class="x none">Nothing yet. Play a channel with Transcribe on; each spoken stretch appears here a few seconds after it ends.</span></li>';
+}
+async function tPoll() {
+  try {
+    const add = await api(`/api/ssb/transcripts?after=${T.newest}&empty=true&limit=300`);
+    if (add.length) {
+      T.list = [...add, ...T.list].slice(0, 600);
+      T.newest = Math.max(T.newest, ...add.map((r) => r.t0));
+      tDraw();
+    }
+  } catch (e) { /* rxapp restarting */ }
+}
+$('tlog').addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-clip]'); if (!b) return;
+  const p = $('tPlayer');
+  if (T.playing === b.dataset.clip) { p.pause(); T.playing = null; return tDraw(); }
+  p.src = `/api/ssb/clip/${encodeURIComponent(b.dataset.day)}/${encodeURIComponent(b.dataset.clip)}`;
+  p.play().catch(() => {}); T.playing = b.dataset.clip; tDraw();
+});
+$('tPlayer').addEventListener('ended', () => { T.playing = null; tDraw(); });
+$('tOn').addEventListener('change', async () => {
+  try { await post('/api/ssb/transcribe', {on: $('tOn').checked}); } catch (e) { /* shown on the next beat */ }
+  beat();
+});
+$('tEmpty').addEventListener('change', tDraw);
+api('/api/ssb/transcribe').then((st) => { $('tOn').checked = st.enabled; tStatus(null); }).catch(() => {});
+tPoll(); setInterval(tPoll, 3000); setInterval(beat, 4000);
