@@ -30,8 +30,9 @@ def _num(v):
 
 
 class AdsbFeed:
-    def __init__(self, lat=37.6, lon=-122.2, nm=45):
+    def __init__(self, lat=37.6, lon=-122.2, nm=45, enabled=True):
         self.lat, self.lon, self.nm = lat, lon, nm
+        self.enabled = enabled                     # off: never fetch; the map shows only this receiver's aircraft
         self.aircraft: Dict[str, dict] = {}        # hex -> latest state
         self.tracks: Dict[str, deque] = {}         # hex -> (t, lat, lon, alt_ft or None)
         self.last_fetch: Optional[float] = None
@@ -83,7 +84,7 @@ class AdsbFeed:
 
     async def _loop(self):
         while True:
-            if time.time() < self.wanted_until:
+            if self.enabled and time.time() < self.wanted_until:
                 try:
                     data = await asyncio.to_thread(self._fetch)
                     self.ingest(data)
@@ -95,11 +96,18 @@ class AdsbFeed:
                     log.warning("ADS-B feed: %s", e)
             await asyncio.sleep(POLL_SEC)
 
+    def set_enabled(self, on: bool):
+        self.enabled = bool(on)
+        if not self.enabled:                       # nothing from the feed lingers on the map
+            self.aircraft.clear()
+            self.tracks.clear()
+            self.last_fetch = self.last_error = None
+
     def snapshot(self, since: float = 0.0):
         """Aircraft now, with the track points newer than `since` (the page keeps the rest)."""
         self.wanted_until = time.time() + IDLE_SEC
         out = []
         for hx, a in self.aircraft.items():
             out.append({**a, "trail": [p for p in self.tracks.get(hx, ()) if p[0] > since]})
-        return {"now": time.time(), "fetched": self.last_fetch, "error": self.last_error,
-                "source": "adsb.fi", "source_url": "https://adsb.fi", "aircraft": out}
+        return {"now": time.time(), "fetched": self.last_fetch, "error": self.last_error, "feed": self.enabled,
+                "source": "adsb.fi" if self.enabled else None, "source_url": "https://adsb.fi", "aircraft": out}

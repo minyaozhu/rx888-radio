@@ -413,15 +413,29 @@ stream; the page's view is untouched):
 API: `GET /api/adsb?since=` (aircraft and track points newer than `since`), `GET /api/airband?session=` (status, sessions), `GET /api/airband/transmissions?session=&after=`,
 `GET /api/airband/clip/{session}/{wav}`.
 
-## ADS-B (not yet)
+## ADS-B
 
-`rxapp/modes.py` demodulates Mode S at 2 MS/s (dump1090's preamble test and PPM slicing; pyModeS checks
-the CRC and decodes); it recovers synthetic frames in noise (tests). On the air it found nothing: with the
-tuner locked at 1090 MHz and a radiod IQ channel at 2 MS/s, 21 s of capture were pure noise. Measured through
-the VHF input with the current antenna, FM broadcast is 29 dB over the noise, airband 19 dB, cell towers at
-751–880 MHz only 3–8 dB, 1090 MHz nothing: the antenna doesn't work at UHF. The R828D's PLL does lock at
-1090 MHz (the demo driver read the lock bit after 2 ms and reported false "not locked"; it now waits 10 ms like
-librtlsdr). With a 1090 MHz antenna, ADS-B would be a third window in the airband rotation.
+The airband map shows aircraft from the adsb.fi open-data feed (`rxapp/adsb.py`), and marks the ones this
+receiver heard itself with a dashed ring ("heard by this receiver" in the legend and tooltips).
+
+Those come from hops: during any VHF window, `voice_session.py` moves the tuner to 1091 MHz, records a
+2 MS/s IQ channel and moves back (the tuner is away the hop's length plus ~0.1 s, and voice in that time is
+lost). The hops adapt to how busy voice has been in the window over the last two minutes: silent, 5 s every
+10 s; on the air 15% of the time, 3 s every 20 s; 30% or more, 2 s every 30 s; interpolated in between
+(`--adsb-plan 0:5:10,15:3:20,30:2:30`, as busy%:hop s:interval s; `--adsb-plan off` turns them off). A
+window just started counts as busy until it has 30 s of history. A hop waits for 3 s of silence after the last
+transmission, since a reply usually follows within that, unless it is half an interval overdue.
+
+The **Online feed (adsb.fi)** checkbox on the Airband page turns the feed off (`POST /api/adsb/feed
+{"on": false}`, kept in settings.json): nothing is fetched, and the map shows only this receiver's aircraft. `rxapp/modes.py` finds the frames (dump1090's
+preamble test and PPM slicing) and pyModeS checks the CRC and decodes them; positions come from single
+messages against a reference point (the aircraft's last position, or the Bay), since a 2 s hop may not
+catch the even/odd pair a global decode needs. The aircraft go to `adsb.json` in the airband session, and
+`/api/adsb` merges them with the feed by ICAO address (`heard_here`, `heard_msgs`; `only_here` for one
+the feed doesn't list). No hops while the receiver is on an HF window or paused.
+
+Reception: an earlier antenna heard nothing at 1090 MHz. With the current one (November 2026) a 2 s hop
+gets a few messages, from the nearest aircraft: enough to mark some planes, not a full picture.
 
 ## Design notes
 

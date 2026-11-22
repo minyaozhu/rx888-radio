@@ -121,6 +121,10 @@ PROFILES = {"air": AIR, "safety": SAFETY, "marine": MARINE, "aprs": APRS}
 APRS_HZ = 144.390e6
 MULTIMON = Path(__file__).resolve().parent / "tools" / "multimon-ng" / "build" / "multimon-ng"
 NOAA_HZ = [162.400e6, 162.425e6, 162.450e6, 162.475e6, 162.500e6, 162.525e6, 162.550e6]
+# ADS-B: short hops of the VHF tuner to 1090 MHz in the middle of any VHF window (see AdsbHopper)
+ADSB_HZ = 1090e6
+ADSB_TUNE_OFFSET = 1.0e6      # tune 1 MHz above, so 1090 MHz sits away from the tuner's DC spike
+ADSB_REF = (37.6, -122.2)     # reference for decoding positions from one message (anywhere within ~180 NM)
 AIS_CENTRE = 162.000e6        # AIS channel A 161.975, B 162.025: both in a 96 kHz IQ channel here
 AIS_RATE = 96000
 AIS_CATCHER = Path(__file__).resolve().parent / "tools" / "AIS-catcher" / "build" / "AIS-catcher"
@@ -550,9 +554,178 @@ class AprsReceiver:
         self.write(time.time() + 3)
 
 
+class AdsbHopper:
+    """ADS-B from the RX-888, in hops: during a VHF window the tuner goes to 1090 MHz for a few seconds, a
+    2 MS/s IQ channel records it, and the tuner comes back. Decoding (rxapp.modes + pyModeS) runs on a thread;
+    aircraft go to adsb.json in the airband session, which rxapp merges into /api/adsb.
+
+    The hops adapt to how busy voice is (plan()): the quieter the window has been over the last two minutes,
+    the longer and more often they are. `points` is [(busy share, hop seconds, interval seconds)], interpolated
+    in between and held beyond the ends (DEFAULT_PLAN).
+
+    Positions come from single messages with a reference point (the aircraft's last position, or ADSB_REF),
+    which suits short hops: the even/odd message pair a global decode needs may not arrive in one hop."""
+    FS = 2_000_000
+    KEEP_SEC = 15 * 60
+    TRAIL_SEC = 20 * 60
+
+    DEFAULT_PLAN = [(0.0, 5.0, 10.0), (0.15, 3.0, 20.0), (0.30, 2.0, 30.0)]   # silent: 5 s every 10 s; busy: 2 s every 30 s
+
+    def __init__(self, out_dir: Path, points=None):
+        self.out = out_dir
+        self.points = sorted(points or self.DEFAULT_PLAN)
+        self.secs, self.every = self.points[-1][1], self.points[-1][2]      # the current plan: start as if busy
+        self.busy = None
+        self.last = time.time()                  # first hop one interval in
+        self.hops = self.messages = 0
+        self.planes = {}                         # icao (lower case) -> state + trail
+        self.lock = threading.Lock()
+        self.work = queue.Queue(maxsize=2)
+        self.sock = None
+        self.ssrc = int(time.time()) % 1_000_000 + 8_000_000
+
+    def plan(self, busy: float):
+        """Hop length and interval for a window whose voice channels were on the air `busy` of the time."""
+        p = self.points
+        self.busy = round(busy, 3)
+        x = min(max(busy, p[0][0]), p[-1][0])
+        k = next((i for i in range(1, len(p)) if x <= p[i][0]), len(p) - 1)
+        (b0, s0, e0), (b1, s1, e1) = p[max(k - 1, 0)], p[k]
+        u = 0.0 if b1 == b0 else (x - b0) / (b1 - b0)
+        self.secs = round(s0 + (s1 - s0) * u, 1)
+        self.every = round(e0 + (e1 - e0) * u)
+        return self.secs, self.every
+
+    def due(self, now) -> bool:
+        return now - self.last >= self.every
+
+    def _socket(self):
+        group = maddr("voice-adsb.local")
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 64 << 20)
+        s.bind((group, CONFIG.rtp_port))
+        s.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, socket.inet_aton(group) + socket.inet_aton(CONFIG.iface_addr))
+        s.settimeout(0.3)
+        self.sock, self.group = s, group
+        threading.Thread(target=self._decode_loop, daemon=True).start()
+
+    def hop(self, ctl, home_hz: float):
+        """Tuner to 1090 MHz, record, tuner back to home_hz. Returns when the tuner is home."""
+        self.last = time.time()
+        if self.sock is None:
+            self._socket()
+        self.ssrc += 1                           # a fresh channel each hop: radiod reaps the old one
+        t_start, chunks = None, []
+        try:
+            info = call("POST", "/band", {"band": "vhf", "center_hz": ADSB_HZ + ADSB_TUNE_OFFSET})
+            f_if = info["vhf"]["if_hz"] - (ADSB_HZ - info["vhf"]["center_hz"])
+            ctl.create_channel(frequency_hz=f_if, preset="iq", sample_rate=self.FS, destination=self.group, ssrc=self.ssrc,
+                               lifetime=int((self.secs + 2) * 50), encoding=4, low_edge=-1_000_000, high_edge=1_000_000)
+            t0 = time.time()
+            while time.time() - t0 < self.secs + 1.0:
+                try:
+                    d, _ = self.sock.recvfrom(65536)
+                except socket.timeout:
+                    continue
+                if len(d) < 12 or struct.unpack("!I", d[8:12])[0] != self.ssrc:
+                    continue
+                h = 12 + 4 * (d[0] & 15)
+                if d[0] & 0x10:
+                    h += 4 + 4 * struct.unpack("!H", d[h + 2:h + 4])[0]
+                if t_start is None:
+                    t_start = time.time()
+                chunks.append(d[h:])
+                if time.time() - t_start >= self.secs:
+                    break
+        except Exception as e:
+            log.warning("ADS-B hop: %s", e)
+        finally:
+            try:
+                ctl.set_channel_lifetime(self.ssrc, 1)
+                ctl.remove_channel(self.ssrc)
+            except Exception:
+                pass
+            try:
+                call("POST", "/band", {"band": "vhf", "center_hz": home_hz})
+            except Exception as e:                   # rxapp restarting: heal() puts the tuner back
+                log.warning("ADS-B hop: tuner not returned (%s)", e)
+        self.hops += 1
+        if chunks and t_start:
+            try:
+                self.work.put_nowait((t_start, b"".join(chunks)))
+            except queue.Full:
+                log.warning("ADS-B: decoder behind; dropping a hop")
+
+    def _decode_loop(self):
+        import pyModeS as pms
+        from rxapp import modes
+        while True:
+            t_start, raw = self.work.get()
+            a = np.frombuffer(raw, "<f4")
+            iq = np.conj((a[0::2] + 1j * a[1::2]).astype(np.complex64))      # the tuner inverts the spectrum
+            n = 0
+            for idx, hx in modes.demodulate(iq):
+                icao = hx[2:8].lower()
+                with self.lock:
+                    p = self.planes.get(icao)
+                ref = (p["lat"], p["lon"]) if p and p.get("lat") is not None and t_start - p["t"] < 600 else ADSB_REF
+                try:
+                    d = pms.decode(hx, reference=ref)
+                except Exception:
+                    continue
+                if not d.get("crc_valid") or d.get("df") not in (17, 18):
+                    continue
+                n += 1
+                self._ingest(d, t_start + idx / self.FS)
+            with self.lock:
+                self.messages += n
+            self.write(time.time())
+
+    def _ingest(self, d, t):
+        icao = d["icao"].lower()
+        with self.lock:
+            p = self.planes.setdefault(icao, {"hex": icao, "flight": "", "lat": None, "lon": None, "alt": None, "gs": None,
+                                              "track": None, "rate": None, "t": 0.0, "heard": t, "messages": 0, "trail": []})
+            p["heard"] = max(p["heard"], t)
+            p["messages"] += 1
+            if d.get("callsign"):
+                p["flight"] = d["callsign"].strip("_ ").strip()
+            if d.get("altitude") is not None:
+                p["alt"] = d["altitude"]
+            if d.get("groundspeed") is not None:
+                p["gs"] = round(d["groundspeed"])
+            if d.get("track") is not None:
+                p["track"] = round(d["track"])
+            if d.get("vertical_rate") is not None:
+                p["rate"] = d["vertical_rate"]
+            lat, lon = d.get("latitude"), d.get("longitude")
+            if lat is not None and lon is not None:
+                # a reference too far away decodes into the wrong zone: keep only plausible positions
+                if abs(lat - ADSB_REF[0]) < 4 and abs(lon - ADSB_REF[1]) < 5:
+                    p["lat"], p["lon"], p["t"] = round(lat, 5), round(lon, 5), t
+                    tr = p["trail"]
+                    if not tr or t - tr[-1][0] >= 1:
+                        tr.append([round(t, 1), p["lat"], p["lon"], p["alt"]])
+
+    def write(self, now):
+        with self.lock:
+            for k in [k for k, p in self.planes.items() if now - p["heard"] > self.KEEP_SEC]:
+                del self.planes[k]
+            for p in self.planes.values():
+                p["trail"] = [x for x in p["trail"] if now - x[0] <= self.TRAIL_SEC]
+            snap = {"t": now, "hops": self.hops, "every": self.every, "secs": self.secs, "busy": self.busy,
+                    "plan": self.points, "messages": self.messages,
+                    "aircraft": [dict(p) for p in self.planes.values()]}
+        tmp = self.out / "adsb.json.tmp"
+        tmp.write_text(json.dumps(snap))
+        tmp.replace(self.out / "adsb.json")
+
+
 # ---- the session -------------------------------------------------------------------------
 class Session:
-    def __init__(self, windows: List[Window], minutes, stamp, dwell_sec=300.0, preload=()):
+    def __init__(self, windows: List[Window], minutes, stamp, dwell_sec=300.0, preload=(), adsb_plan=()):
         self.windows = windows
         self.minutes, self.dwell = minutes, dwell_sec
         self.preload = list(preload)
@@ -582,6 +755,10 @@ class Session:
         self.ais = AisReceiver(self.outs["marine"]) if "marine" in self.outs else None
         self.aprs = AprsReceiver(self.outs["aprs"]) if "aprs" in self.outs else None
         self.weather = {}             # NOAA weather radio frequency -> rxapp channel (listen only)
+        air = self.outs.get("air") or CONFIG.data_dir / "airband" / stamp
+        air.mkdir(parents=True, exist_ok=True)
+        self.adsb = AdsbHopper(air, adsb_plan or None) if adsb_plan is not None else None
+        self.activity = deque()       # (frame time, any voice channel on the air) over the last ACTIVITY_SEC
         self.wx_bin = {}              # NOAA frequency -> spectrum bin, while the window covers it
         self.wx_db = {}               # NOAA frequency -> carrier above the floor (dB, smoothed)
         self.healed = 0.0
@@ -607,6 +784,7 @@ class Session:
         now = time.time()
         for f in list(self.keyed_since):
             self.finish(f, self.keyed_since.pop(f), self.last_keyed.get(f, now))
+        self.activity.clear()                             # busyness is per window
         win = self.windows[w]
         if win.band == "vhf":
             call("POST", "/band", {"band": "vhf", "center_hz": win.centre})
@@ -710,6 +888,39 @@ class Session:
         quiet = not self.keyed_since and all(now - t >= 3.0 for t in self.last_keyed.values() if t)
         if quiet or now - self.window_since >= self.dwell + 60:
             self.set_window(nxt)
+
+    ACTIVITY_SEC = 120.0
+    MIN_HISTORY_SEC = 30.0
+    GAP_SEC = 3.0                 # a reply usually comes within this of a transmission's end: don't hop into it
+
+    def busy(self, now) -> float:
+        """Share of the last ACTIVITY_SEC (in this window) that any voice channel was on the air. Under
+        MIN_HISTORY_SEC of history (a window just started, or re-aimed after an rxapp restart) it counts as busy:
+        long hops wait until the window is known to be quiet."""
+        a = self.activity
+        while a and now - a[0][0] > self.ACTIVITY_SEC:
+            a.popleft()
+        if not a or a[-1][0] - a[0][0] < self.MIN_HISTORY_SEC:
+            return 1.0
+        return sum(k for _, k in a) / len(a)
+
+    def maybe_adsb(self, now):
+        """An ADS-B hop (AdsbHopper) during a VHF window: longer and more often while voice is quiet. It waits
+        for a gap (nothing on the air for GAP_SEC), or goes regardless once half an interval overdue."""
+        a = self.adsb
+        if a is None or self.idle or self.win.band != "vhf" or self.win.profile.service == "p25":
+            return                                    # P25: a hop would drop the control channel mid-call
+        a.plan(self.busy(now))
+        if not a.due(now):
+            return
+        last_voice = max((t for t in self.last_keyed.values() if t), default=0.0)
+        quiet = not self.keyed_since and now - last_voice >= self.GAP_SEC
+        if not quiet and now - a.last < a.every * 1.5:
+            return
+        for f in list(self.keyed_since):                  # cut cleanly: the rest arrives as a new transmission
+            self.finish(f, self.keyed_since.pop(f), self.last_keyed.get(f, now))
+        a.hop(self.ctl, self.tuner_hz)
+        self.settle_until = time.time() + 0.5             # spectrum frames from the hop and the retune: skip
 
     def _open_spectrum(self, freq):
         if self.stream is not None:
@@ -881,11 +1092,14 @@ class Session:
             self.read_focus(t)
             self.heal(t)
             self.maybe_switch(t)
+            self.maybe_adsb(time.time())
             if self.idle or t < self.settle_until or not len(self.grid):
                 continue
             self.step(t, db)
 
     def step(self, t, db):
+        if hasattr(self, "activity"):
+            self.activity.append((t, bool(self.keyed_since)))
         prof = self.win.profile
         floor = float(np.median(db))
         bins = np.array([self.bin_of[f] for f in self.grid], dtype=int)
@@ -1026,6 +1240,19 @@ def clean_noise(session_dir: Path) -> int:
     return n
 
 
+def plan_points(text: str):
+    """"0:5:10,15:3:20,30:2:30" -> [(0.0, 5.0, 10.0), (0.15, 3.0, 20.0), (0.3, 2.0, 30.0)]; "off" -> None."""
+    if str(text).strip().lower() in ("off", "0", "none", ""):
+        return None
+    pts = []
+    for part in str(text).split(","):
+        busy, secs, every = (float(x) for x in part.split(":"))
+        if secs <= 0 or every < secs:
+            raise ValueError(f"--adsb-plan {part}: the hop must be positive and fit in its interval")
+        pts.append((busy / 100.0, secs, every))
+    return sorted(pts)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--center", type=float, default=135.7e6, help="one VHF airband window at this centre (Hz)")
@@ -1047,7 +1274,8 @@ def main():
         return retranscribe(args.retranscribe)
     windows = parse_windows(args.windows) or [Window("window", "vhf", args.center, AIR)]
     stamp = time.strftime("%Y%m%d-%H%M%S")
-    s = Session(windows, args.minutes, stamp, args.dwell, [float(x) * 1e6 for x in args.preload.split(",") if x.strip()])
+    s = Session(windows, args.minutes, stamp, args.dwell, [float(x) * 1e6 for x in args.preload.split(",") if x.strip()],
+                adsb_plan=plan_points(args.adsb_plan))
     first = next(iter(s.outs.values()))
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S",
                         handlers=[logging.StreamHandler(), logging.FileHandler(first / "session.log")])

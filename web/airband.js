@@ -299,9 +299,16 @@ function drawMap() {
 // along their track, coloured by altitude, with their recent track as a trail. When the timeline is
 // scrubbed back, planes sit where they were then. A flight named in a transcript ("American 2105") is
 // matched to its ADS-B call sign (AAL2105) and highlighted; its inferred position is dropped.
-const AC = {planes: new Map(), since: 0, show: true, trails: true, fetched: null, error: null};
+const AC = {planes: new Map(), since: 0, show: true, trails: true, fetched: null, error: null, local: null, now: 0};
+// heard by this receiver (voice_session.py's short ADS-B hops to 1090 MHz) recently enough to mark it
+const heardHere = (a) => a.heard_here && AC.now - a.heard_here < Math.max(120, 3 * ((AC.local && AC.local.every) || 30));
 const acLayer = L.layerGroup().addTo(map), trailLayer = L.layerGroup().addTo(map);
-map.attributionControl.addAttribution('Aircraft: <a href="https://adsb.fi" target="_blank">adsb.fi</a> open data');
+const FEED_CREDIT = 'Aircraft: <a href="https://adsb.fi" target="_blank">adsb.fi</a> open data';
+function showFeed(on) {                    // the adsb.fi credit is shown only while its data is
+  if (AC.feed === on) return;
+  AC.feed = on; $('acFeed').checked = on;
+  if (on) map.attributionControl.addAttribution(FEED_CREDIT); else map.attributionControl.removeAttribution(FEED_CREDIT);
+}
 const ALT_BANDS = [[0, '#8A8F98', 'ground'], [1, '#2E9E5B', '< 2,000 ft'], [2000, '#9BBF2E', '2–5,000'], [5000, '#E0A030', '5–10,000'],
                    [10000, '#E0662E', '10–20,000'], [20000, '#3D7FD6', '20–30,000'], [30000, '#7B5BD6', '30,000+']];
 // barometric altitude near sea level can read below zero (-200 ft): that's the lowest airborne band
@@ -311,7 +318,8 @@ const PLANE_PATH = 'M0,-9 L1.6,-3 L9,1.2 L9,3 L1.6,1.2 L1,6.5 L3.5,8.6 L3.5,9.8 
 async function pollAdsb() {
   try {
     const d = await api(`/api/adsb?since=${AC.since}`);
-    AC.fetched = d.fetched; AC.error = d.error;
+    AC.fetched = d.fetched; AC.error = d.error; AC.local = d.local; AC.now = d.now;
+    showFeed(d.feed !== false);
     const here = new Set();
     for (const a of d.aircraft) {
       here.add(a.hex);
@@ -327,7 +335,11 @@ async function pollAdsb() {
     AC.since = d.now - 30;          // a little overlap: a position can arrive a few seconds late
     drawAircraft();
   } catch (e) { AC.error = e.message; }
-  $('acStatus').textContent = AC.error ? `ADS-B: ${AC.error}` : `${AC.planes.size} aircraft · adsb.fi`;
+  const here = [...AC.planes.values()].filter((e) => heardHere(e.a)).length;
+  const loc = AC.local ? ` · ${here} heard here (${hopText(AC.local)})` : '';
+  $('acStatus').textContent = !AC.feed
+    ? `${here} aircraft heard here` + (AC.local ? ` (${hopText(AC.local)})` : ' (no ADS-B hops yet: they run during VHF windows)')
+    : (AC.error ? `ADS-B: ${AC.error}` : `${AC.planes.size} aircraft · adsb.fi`) + loc;
 }
 
 // position at time t: the latest state when live, else the last track point at or before t (within 60 s)
@@ -356,6 +368,12 @@ function acLine(e, st) {
   const gs = e.a.gs != null && (S.follow && S.live) ? `, ${Math.round(e.a.gs)} kt` : '';
   return `${e.a.flight || e.a.hex} ${e.a.type} ${alt}${gs}, ${n.km < 1.5 ? 'at ' + n.a.id : n.km.toFixed(0) + ' km ' + compass(n.brg) + ' of ' + n.a.id}`;
 }
+function heardLine(a) {
+  if (!a.heard_here) return '';
+  const s = Math.max(0, Math.round(AC.now - a.heard_here));
+  return `heard by this receiver ${s < 90 ? s + ' s' : Math.round(s / 60) + ' min'} ago (${a.heard_msgs} message${a.heard_msgs === 1 ? '' : 's'})`
+    + (a.only_here ? ', not in the adsb.fi feed' : '');
+}
 
 // transcript flight id (UAL2105, or a bare number "2105") -> the ADS-B aircraft with that call sign
 function adsbFor(fid) {
@@ -380,20 +398,22 @@ function drawAircraft() {
     if (!st) { if (e.marker) { e.marker.remove(); e.marker = null; } if (e.line) { e.line.remove(); e.line = null; } continue; }
     const f = matched.get(hx), sel = hx === selHex, col = altColor(st);
     const label = f ? f.name : (z >= 11 ? (e.a.flight || '') : '');
-    const key = [Math.round(st.track ?? 0), col, f ? 1 : 0, sel ? 1 : 0, label].join('|');
+    const mine = heardHere(e.a);
+    const key = [Math.round(st.track ?? 0), col, f ? 1 : 0, sel ? 1 : 0, label, mine ? 1 : 0].join('|');
     if (!e.marker) {
       e.marker = L.marker([st.lat, st.lon], {zIndexOffset: f ? 900 : 600}).addTo(acLayer)
         .bindTooltip('', {direction: 'top', offset: [0, -10]})
         .on('click', () => { const f2 = matched.get(hx); if (f2) { const r = S.recs.filter((x) => x.f === f2.id && x.t0 <= S.cursor).pop(); if (r) select(r); } });
     } else e.marker.setLatLng([st.lat, st.lon]);
     if (e.key !== key) {
-      const ring = f ? `<circle r="12" fill="none" stroke="${cssv('--magenta')}" stroke-width="${sel ? 3 : 2}"/>` : '';
+      const ring = (f ? `<circle r="12" fill="none" stroke="${cssv('--magenta')}" stroke-width="${sel ? 3 : 2}"/>` : '')
+        + (mine ? `<circle r="${f ? 15 : 12}" fill="none" stroke="${cssv('--ink')}" stroke-width="1.5" stroke-dasharray="2.5 2"/>` : '');
       e.marker.setIcon(L.divIcon({className: 'ac-ic', iconSize: [26, 26], iconAnchor: [13, 13],
         html: `<svg width="26" height="26" viewBox="-13 -13 26 26">${ring}<path d="${PLANE_PATH}" transform="rotate(${Math.round(st.track ?? 0)})" fill="${col}" stroke="${cssv('--panel')}" stroke-width="0.8"/></svg>`
           + (label ? `<span class="ac-lab${f ? ' m' : ''}">${esc(label)}</span>` : '')}));
       e.key = key;
     }
-    e.marker.setTooltipContent(`${esc(acLine(e, st))}${e.a.reg ? ' · ' + esc(e.a.reg) : ''}${e.a.squawk ? ' · squawk ' + e.a.squawk : ''}${f ? '<br>heard as <b>' + esc(f.name) + '</b>' : ''}`);
+    e.marker.setTooltipContent(`${esc(acLine(e, st))}${e.a.reg ? ' · ' + esc(e.a.reg) : ''}${e.a.squawk ? ' · squawk ' + e.a.squawk : ''}${f ? '<br>heard as <b>' + esc(f.name) + '</b>' : ''}${e.a.heard_here ? '<br>' + esc(heardLine(e.a)) : ''}`);
     // trail: the track up to time t
     if (AC.trails) {
       const pts = e.trail.filter((p) => p[0] <= t + 1).map((p) => [p[1], p[2]]);
@@ -407,8 +427,24 @@ function drawAircraft() {
 }
 $('acShow').addEventListener('change', () => { AC.show = $('acShow').checked; drawAircraft(); });
 $('acTrails').addEventListener('change', () => { AC.trails = $('acTrails').checked; drawAircraft(); });
+$('acFeed').addEventListener('change', async () => {
+  const on = $('acFeed').checked;
+  try {
+    await fetch('/api/adsb/feed', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({on})});
+    AC.since = 0;                          // fetch every trail again: the other source's aircraft come and go
+    for (const e of AC.planes.values()) { e.marker && e.marker.remove(); e.line && e.line.remove(); }
+    AC.planes.clear();
+    await pollAdsb();
+  } catch (e) { $('acFeed').checked = !on; }
+});
+// the latest hop: "6 s at 1090 MHz every 15 s, channels busy 12%" (the hops adapt to how busy voice is)
+function hopText(l) {
+  const busy = l.busy != null ? `, voice busy ${Math.round(100 * l.busy)}%` : '';
+  return `${l.secs} s at 1090 MHz every ${l.every} s${busy}`;
+}
 map.on('zoomend', () => { AC.planes.forEach((e) => { e.key = ''; }); drawAircraft(); });
-$('acLegend').innerHTML = ALT_BANDS.map(([, c, n]) => `<span><i style="background:${c}"></i>${n}</span>`).join('');
+$('acLegend').innerHTML = ALT_BANDS.map(([, c, n]) => `<span><i style="background:${c}"></i>${n}</span>`).join('')
+  + `<span><i style="background:none;border:1.5px dashed var(--ink);border-radius:50%"></i>heard by this receiver</span>`;
 pollAdsb(); setInterval(pollAdsb, 5000);
 
 // ------------------------------------------------------------------ detail, log
@@ -422,7 +458,7 @@ function select(r, moveTime) {
   $('dAtc').textContent = r.text_atc && r.text_atc !== r.text ? `with ATC hint: “${r.text_atc}”` : '';
   $('dMeta').textContent = `${mhz(r.freq_hz)} MHz${freqInfo(r.freq_hz) ? ' (' + freqInfo(r.freq_hz).label + ')' : ''} · ${(r.t1 - r.t0).toFixed(1)} s · carrier +${r.peak_db} dB over the floor`;
   const real = r.f ? adsbFor(r.f) : null, st = real ? acAt(real, r.t0) : null;
-  if (st) $('dMeta').textContent += `\nADS-B (adsb.fi): ${acLine(real, st)}`;
+  if (st) $('dMeta').textContent += `\nADS-B (${real.a.only_here ? 'this receiver' : 'adsb.fi'}): ${acLine(real, st)}${real.a.heard_here ? '; ' + heardLine(real.a) : ''}`;
   $('dMeta').style.whiteSpace = 'pre-line';
   $('clip').disabled = false;
   $('clip').textContent = clips.playing && clips.playing.i === r.i ? 'Stop' : 'Play clip';

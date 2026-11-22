@@ -1044,6 +1044,87 @@ def test_agc_seed_starts_a_new_channel_near_its_neighbours_gain():
     assert agc_seed(Channel(9, 120.5e6, "am", band="vhf"), []) is None  # VHF: no guess
 
 
+# ---- ADS-B from this receiver (voice_session.AdsbHopper) merged into /api/adsb -------------------------
+def test_adsb_hopper_keeps_identity_position_and_trail(tmp_path):
+    h = vs.AdsbHopper(tmp_path)
+    h._ingest({"icao": "A12345", "df": 17, "crc_valid": True, "callsign": "TEST123_"}, 1000.0)
+    h._ingest({"icao": "A12345", "df": 17, "altitude": 4500, "latitude": 37.61, "longitude": -122.38}, 1001.0)
+    h._ingest({"icao": "A12345", "df": 17, "groundspeed": 180.4, "track": 284.6, "vertical_rate": -640}, 1001.5)
+    h._ingest({"icao": "A12345", "df": 17, "altitude": 4300, "latitude": 37.62, "longitude": -122.40}, 1031.0)
+    # a position decoded against a reference too far away lands in the wrong zone: not kept
+    h._ingest({"icao": "A12345", "df": 17, "latitude": 43.0, "longitude": -122.4}, 1032.0)
+    h.write(1040.0)
+    snap = _json.loads((tmp_path / "adsb.json").read_text())
+    (a,) = snap["aircraft"]
+    assert a["hex"] == "a12345" and a["flight"] == "TEST123" and a["messages"] == 5
+    assert (a["lat"], a["lon"], a["alt"], a["gs"], a["track"], a["rate"]) == (37.62, -122.4, 4300, 180, 285, -640)
+    assert [p[0] for p in a["trail"]] == [1001.0, 1031.0] and a["heard"] == 1032.0
+    h.write(1032.0 + h.KEEP_SEC + 1)                   # not heard for 15 min: forgotten
+    assert _json.loads((tmp_path / "adsb.json").read_text())["aircraft"] == []
+
+
+def test_adsb_merge_marks_heard_here_and_adds_unlisted_aircraft():
+    from rxapp.server import merge_adsb
+    feed = {"now": 2000.0, "source": "adsb.fi", "aircraft": [
+        {"hex": "a12345", "flight": "TEST123", "lat": 37.6, "lon": -122.4, "trail": []},
+        {"hex": "b00001", "flight": "OTHER1", "lat": 37.7, "lon": -122.2, "trail": []}]}
+    local = {"t": 1990.0, "hops": 4, "every": 30, "secs": 2, "messages": 9, "aircraft": [
+        {"hex": "a12345", "flight": "TEST123", "lat": 37.61, "lon": -122.41, "heard": 1985.0, "messages": 6, "t": 1985.0, "trail": []},
+        {"hex": "c00002", "flight": "", "lat": 37.5, "lon": -122.1, "alt": 3000, "heard": 1980.0, "messages": 3, "t": 1980.0,
+         "trail": [[1900.0, 37.4, -122.0, 2500], [1980.0, 37.5, -122.1, 3000]]},
+        {"hex": "d00003", "flight": "NOPOS1", "lat": None, "lon": None, "heard": 1988.0, "messages": 1, "t": 0.0, "trail": []}]}
+    out = merge_adsb(feed, local, since=1950.0)
+    by = {a["hex"]: a for a in out["aircraft"]}
+    assert by["a12345"]["heard_here"] == 1985.0 and by["a12345"]["lat"] == 37.6       # the feed's position, marked as heard
+    assert "heard_here" not in by["b00001"]
+    assert by["c00002"]["only_here"] and by["c00002"]["trail"] == [[1980.0, 37.5, -122.1, 3000]]   # trail since `since`
+    assert "d00003" not in by                                                           # no position: not on the map
+    assert out["local"]["hops"] == 4 and merge_adsb(feed, {})["local"] is None
+
+
+def test_adsb_hops_grow_when_voice_is_quiet(tmp_path):
+    h = vs.AdsbHopper(tmp_path)                        # default plan
+    assert h.plan(0.0) == (5.0, 10)                    # silent window: 5 s every 10 s
+    assert h.plan(0.075) == (4.0, 15)                  # in between: interpolated
+    assert h.plan(0.15) == (3.0, 20)
+    assert h.plan(0.225) == (2.5, 25)
+    assert h.plan(0.3) == h.plan(0.9) == (2.0, 30)     # busy: 2 s every 30 s
+    assert vs.plan_points("0:5:10,15:3:20,30:2:30") == vs.AdsbHopper.DEFAULT_PLAN and vs.plan_points("off") is None
+    with pytest.raises(ValueError):
+        vs.plan_points("0:12:10")                      # a hop longer than its interval
+
+
+def test_adsb_waits_for_a_gap_in_voice(tmp_path, monkeypatch):
+    s = vs.Session.__new__(vs.Session)
+    s.adsb = vs.AdsbHopper(tmp_path)
+    s.activity, s.keyed_since, s.last_keyed, s.focus = vs.deque(), {}, {}, "air"
+    s.windows, s.w, s.ctl, s.tuner_hz = [vs.Window("approach", "vhf", 135.7e6, vs.AIR)], 0, None, 135.7e6
+    assert s.busy(1000.0) == 1.0                       # no history yet (a new window): counts as busy
+    hops = []
+    monkeypatch.setattr(s.adsb, "hop", lambda ctl, home: hops.append(home) or setattr(s.adsb, "last", 1e12))
+    now = 1000.0
+    s.adsb.last = now - 30
+    for k in range(1200):                              # the last 2 minutes: on the air a quarter of the time
+        s.activity.append((now - 120 + k * 0.1, k % 4 == 0))
+    s.last_keyed = {135.65e6: now - 1.0}               # a transmission ended a second ago: a reply may follow
+    s.maybe_adsb(now)
+    assert not hops and s.adsb.every == 27            # busy 25%: every 27 s; 30 s since the last hop: due
+    s.adsb.last = now - 30
+    assert not hops                                    # due, but within the gap after the last transmission
+    s.last_keyed = {135.65e6: now - 4.0}
+    s.maybe_adsb(now)
+    assert hops == [135.7e6]
+
+
+def test_adsb_feed_switch_clears_and_stops_the_feed():
+    feed = AdsbFeed(enabled=True)
+    feed.ingest({"ac": [{"hex": "a12345", "lat": 37.6, "lon": -122.4, "alt_baro": 3000}]}, now=1000.0)
+    assert feed.snapshot()["aircraft"] and feed.snapshot()["feed"] is True
+    feed.set_enabled(False)
+    snap = feed.snapshot()
+    assert snap["aircraft"] == [] and snap["feed"] is False and snap["source"] is None
+
+
 def test_voiced_share_tells_speech_from_fm_noise():
     import voice_session as vs
     rate = 12000

@@ -115,7 +115,7 @@ async def lifespan(app):
             except Exception as e:
                 log.warning("could not restart %s: %s", mon.proto.name, e)
     S.jx = Junctions()                  # highway junctions for placing public-safety calls (offline table)
-    S.adsb = AdsbFeed()
+    S.adsb = AdsbFeed(enabled=RUNTIME.adsb_feed)
     S.adsb.start()                      # fetches only while a page is asking for aircraft
     S.sstv = SstvMonitor(S.radio, S.rtp, S.store)
     if RUNTIME.sstv_on:
@@ -874,8 +874,61 @@ async def broadcast_sw_now(band: Optional[str] = None):
 
 @app.get("/api/adsb")
 async def adsb(since: float = 0.0):
-    """Aircraft around the Bay from the adsb.fi open-data feed, with track points newer than `since`."""
-    return S.adsb.snapshot(since)
+    """Aircraft around the Bay from the adsb.fi open-data feed, with track points newer than `since`, merged with
+    the aircraft this receiver heard itself (voice_session.py's ADS-B hops, adsb.json in the airband session):
+    those carry heard_here (when last heard), heard_msgs, and stand on their own when adsb.fi doesn't list them."""
+    snap = S.adsb.snapshot(since)
+    local = _local_adsb()
+    return merge_adsb(snap, local, since)
+
+
+class AdsbFeedSwitch(BaseModel):
+    on: bool
+
+
+@app.post("/api/adsb/feed")
+async def adsb_feed(body: AdsbFeedSwitch):
+    """Turn the adsb.fi online feed on or off (kept across restarts). Off: nothing is fetched, and the map
+    shows only the aircraft this receiver heard itself."""
+    S.adsb.set_enabled(body.on)
+    RUNTIME.adsb_feed = body.on
+    RUNTIME.save()
+    return {"feed": S.adsb.enabled}
+
+
+def _local_adsb() -> dict:
+    """The live airband session's adsb.json, if it was written in the last few minutes."""
+    try:
+        d = _session_dir(AIRBAND_DIR, None)
+        p = d / "adsb.json"
+        if time.time() - p.stat().st_mtime > 300:
+            return {}
+        return json.loads(p.read_text())
+    except (HTTPException, OSError, ValueError):
+        return {}
+
+
+def merge_adsb(snap: dict, local: dict, since: float = 0.0) -> dict:
+    """adsb.fi aircraft plus this receiver's: a match by ICAO address gets heard_here; one adsb.fi doesn't list
+    is added from our own decode (position, altitude, speed, track and trail as heard here)."""
+    out = {**snap, "local": {k: local.get(k) for k in ("t", "hops", "every", "secs", "busy", "plan",
+                                                     "messages")} if local else None}
+    mine = {a["hex"]: a for a in local.get("aircraft", [])} if local else {}
+    planes = []
+    for a in snap.get("aircraft", []):
+        m = mine.pop(a["hex"].lower(), None)
+        if m:
+            a = {**a, "heard_here": m["heard"], "heard_msgs": m["messages"]}
+        planes.append(a)
+    for hx, m in mine.items():
+        if m.get("lat") is None:
+            continue                                    # identity or speed only: nothing to put on the map
+        planes.append({"hex": hx, "flight": m.get("flight") or "", "type": "", "reg": "", "lat": m["lat"], "lon": m["lon"],
+                       "alt": m.get("alt"), "ground": False, "gs": m.get("gs"), "track": m.get("track"), "rate": m.get("rate"),
+                       "squawk": "", "t": m["t"], "heard_here": m["heard"], "heard_msgs": m["messages"], "only_here": True,
+                       "trail": [p for p in m.get("trail", []) if p[0] > since]})
+    out["aircraft"] = planes
+    return out
 
 
 @app.get("/api/health")
