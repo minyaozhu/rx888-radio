@@ -144,11 +144,14 @@ class Radio:
         await asyncio.to_thread(
             self.ctl.create_channel, frequency_hz=freq, preset=preset, sample_rate=rate,
             agc_enable=1, destination=self.pcm_group, ssrc=ch.ssrc, lifetime=LIFETIME_FRAMES)
-        # create_channel's agc flag doesn't take on this radiod; without AGC the audio sits near -55 dBFS
-        await asyncio.to_thread(self.ctl.set_agc, ch.ssrc, True)
+        # a gain command switches radiod's AGC off (manual gain), so the seed goes first and the AGC is switched
+        # on after it, starting from the seed. (The other way round left channels stuck at a fixed gain: AM
+        # broadcast at the 100 dB an SSB neighbour suggests, every sample clipped.) create_channel's agc flag
+        # doesn't take on this radiod either; without AGC the audio sits near -55 dBFS.
         seed = agc_seed(ch, list(self.channels.values()))
         if seed is not None:
             await asyncio.to_thread(self.ctl.set_gain, ch.ssrc, seed)
+        await asyncio.to_thread(self.ctl.set_agc, ch.ssrc, True)
         if ch.filter_hz:
             await asyncio.to_thread(self.ctl.set_filter, ch.ssrc, *ch.filter_hz)
         if ch.mode == "wfm" and ch.stereo:

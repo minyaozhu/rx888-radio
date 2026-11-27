@@ -1085,13 +1085,17 @@ async def channels():
     return [c.to_dict() | {"recording": c.ssrc in S.recorders} for c in S.radio.channels.values()]
 
 
+# who may make a channel here: a page listening ("listen") or a voice_session.py window (its profile's service)
+CHANNEL_KINDS = ("listen", "air", "safety", "marine", "uhf", "aprs", "p25")
+
+
 @app.post("/api/channels")
 async def create_channel(body: NewChannel):
     if (body.band or S.radio.band) == "vhf" and S.radio.band == "vhf":
         await S.spectrum.ensure_live(body.freq_hz)
     try:
-        if body.kind not in ("listen", "air", "safety", "marine"):
-            raise ValueError("kind is listen, air, safety or marine")
+        if body.kind not in CHANNEL_KINDS:
+            raise ValueError(f"kind is one of {', '.join(CHANNEL_KINDS)}")
         ch = await S.radio.create(body.freq_hz, body.mode, body.label, kind=body.kind, band=body.band,
                                   move_tuner=not body.keep_tuner)
     except ValueError as e:
