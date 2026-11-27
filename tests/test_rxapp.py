@@ -1608,3 +1608,63 @@ def test_every_voice_session_service_may_make_channels():
     for prof in (voice_session.AIR, voice_session.SAFETY, voice_session.MARINE, voice_session.APRS,
                  voice_session.UHF, voice_session.P25):
         assert prof.service in CHANNEL_KINDS, prof.service
+
+
+def _stereo(left, right, n=320):
+    a = np.zeros((n, 2), np.int16)
+    a[:, 0] = left
+    a[:, 1] = right
+    return a
+
+
+def test_p25_follow_stays_with_the_talking_slot_then_moves():
+    from rxapp.p25live import Follower
+    f = Follower(None, lambda: {})
+    assert f.pick(_stereo(1000, 1000), 0.0)[0] == 1000              # one voice on both sides: play it
+    assert f.cur == 0 and f.pick(_stereo(1000, 2000), 0.1)[0] == 1000   # two voices: stay with slot 1
+    assert f.pick(_stereo(0, 2000), 0.5)[0] == 0                     # slot 1 pauses briefly: keep waiting
+    assert f.pick(_stereo(0, 2000), 1.2)[0] == 2000 and f.cur == 1   # quiet 0.8 s: move to slot 2
+
+
+def test_p25_talkgroup_listener_plays_only_its_talkgroup():
+    from rxapp.p25live import Follower
+    slots = {"0": {"tg": 2451, "age": 0.5}, "1": {"tg": 2801, "age": 2.0}}
+    f = Follower(2801, lambda: slots)
+    assert f.pick(_stereo(1000, 2000), 0)[0] == 2000                 # slot 2 is TG 2801
+    assert f.pick(_stereo(1000, 1000), 0) is None                    # one voice: slot 1 (named last) talks
+    assert Follower(1234, lambda: slots).pick(_stereo(1000, 2000), 0) is None
+
+
+def test_p25_calls_api_adds_transcripts(tmp_path, monkeypatch):
+    import json
+    from fastapi.testclient import TestClient
+    from rxapp import server
+    d = tmp_path / "20261126-200000"
+    (d / "calls").mkdir(parents=True)
+    names = ["20261126_200101_1_P25_BEE005E45E1_1_GROUP_TGT_2451_SRC_13274234.wav",
+             "20261126_200201_1_P25_BEE005E45E1_1_GROUP_TGT_2801_SRC_13349322.wav"]
+    for n in names:
+        (d / "calls" / n).write_bytes(b"\0" * 16044)
+        os.utime(d / "calls" / n, (time.time() - 60, time.time() - 60))
+    (d / "transcripts.jsonl").write_text(json.dumps({"clip": names[0], "text": "Engine 51 medical aid", "text_atc": ""}) + "\n")
+    monkeypatch.setattr(server, "P25_DIR", tmp_path)
+    got = {c["tg"]: c for c in TestClient(server.app, client=("127.0.0.1", 50000)).get(f"/api/p25/calls?session={d.name}").json()}
+    assert got[2451]["text"] == "Engine 51 medical aid" and got[2451]["transcribed"]
+    assert "transcribed" not in got[2801]
+
+
+def test_p25_other_slots_alg_continuation_doesnt_mark_a_clear_talkgroup():
+    from rxapp.p25 import Trunk
+    tr = Trunk()
+    for i, line in enumerate([
+            " VCH 0 - TG: 4773; SRC: 13425301;  Group Voice - Abbreviated",
+            "        P25p2 LCH 0  MAC_PTT",
+            " VCH 0 - TG 4773 SRC 13425301 ",
+            " VCH 1 - TG: 1651; SRC: 13307879;  Encrypted Group Voice - Abbreviated",
+            " VCH 1 - ALG ID: 0x84 KEY ID: 0xA100 MI: 0x3B4158C32A745EE6 ESSB",
+            "      ALG ID: 0x84 KEY ID: 0xA100 MI(128): 0x3B4158C32A745EE64AA60AE020178BE7",
+            "        P25p2 LCH 1  MAC_PTT",
+            " VCH 1 - TG 1651 SRC 13307739 ",
+            "        ALG ID: 0x84 KEY ID: 0xA100 MI: 0x0B8DB825F77C12E5 MPTT"]):
+        tr.feed(line, 100.0 + i * 0.1)
+    assert {tg for _, tg in tr.enc_calls} == {1651} and tr.snapshot(101)["enc_tgs"] == [1651]

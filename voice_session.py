@@ -95,6 +95,7 @@ class Profile:
     min_frames: int = 1          # spectrum frames (~0.1 s each) a carrier must last before it counts
     sideband_hz: float = 0.0     # a carrier this close to one sideband_db stronger is that one's sideband
     sideband_db: float = 10.0
+    voiced_check: bool = False   # skip Whisper when too little of it is voiced (digital_check does this too)
 
 
 AIR = Profile("air", "am", 25e3, 3, 3, 10.0, 0.0, ((118.0e6, 136.975e6),), ATC_PROMPT, "AIR", False, min_frames=2)
@@ -127,7 +128,10 @@ UHF = Profile("uhf", "nfm", 6.25e3, 2, 5, 10.0, 3e3,
               ((450.0e6, 462.53e6), (462.74e6, 467.53e6), (467.74e6, 470.0e6)), UHF_PROMPT, "UHF", True,
               min_frames=3, sideband_hz=25e3)
 # P25: the 700 MHz trunked system, decoded by dsd-fme (rxapp/p25.py); no spectrum-found voice channels either
-P25 = Profile("p25", "nfm", 25e3, 1, 3, 10.0, 0.0, (), "", "P25", False)
+P25_PROMPT = ("Police, fire and EMS dispatch, San Francisco Bay Area. Engine, Medic, Truck, Battalion, unit, "
+              "copy, 10-4, en route, on scene, medical aid, welfare check, cross streets, Boulevard, Avenue.")
+P25 = Profile("p25", "nfm", 25e3, 1, 3, 10.0, 0.0, (), P25_PROMPT, "P25", False, voiced_check=True)
+P25_MIN_SEC = 0.8                # recorded calls shorter than this aren't transcribed
 PROFILES = {"air": AIR, "safety": SAFETY, "marine": MARINE, "aprs": APRS, "p25": P25, "uhf": UHF}
 APRS_HZ = 144.390e6
 MULTIMON = Path(__file__).resolve().parent / "tools" / "multimon-ng" / "build" / "multimon-ng"
@@ -262,7 +266,7 @@ class Transcriber(threading.Thread):
                     a = np.frombuffer(w.readframes(w.getnframes()), "<i2")
                 if prof.digital_check and looks_digital(a, rate):
                     rec.update(kind="digital", text="", text_atc="")
-                elif prof.digital_check and (v := voiced_share(a, rate)) < VOICED_MIN:
+                elif (prof.digital_check or prof.voiced_check) and (v := voiced_share(a, rate)) < VOICED_MIN:
                     rec.update(kind="voice", text="", text_atc="", voiced=round(v, 3))   # no speech: Whisper would invent some
                 else:
                     rec.update(kind="voice", **transcribe(a, rate, prof.prompt))
@@ -793,6 +797,33 @@ class Session:
     def win(self) -> Window:
         return self.windows[self.w]
 
+    def transcribe_p25(self, now):
+        """Queue each finished, unencrypted P25 call for Whisper (rxapp_data/p25/<stamp>/transcripts.jsonl, by
+        clip name; rxapp's /api/p25/calls adds the text). Encrypted ones decode to noise: skipped."""
+        if now - getattr(self, "_p25_scan", 0) < 2:
+            return
+        self._p25_scan = now
+        from rxapp.p25 import list_calls
+        out = self.p25.out / "transcripts.jsonl"
+        if not hasattr(self, "_p25_seen"):
+            self._p25_seen = set()
+            try:
+                self._p25_seen = {json.loads(line)["clip"] for line in out.read_text().splitlines() if line.strip()}
+            except (OSError, ValueError, KeyError):
+                pass
+        with self.p25.lock:
+            snap = self.p25.trunk.snapshot(now)
+        for c in list_calls(self.p25.calls, now=now, enc_calls=snap["enc_calls"], enc_tgs=set(snap["enc_tgs"])):
+            if c["clip"] in self._p25_seen:
+                continue
+            self._p25_seen.add(c["clip"])
+            if c["enc"] or c["secs"] < P25_MIN_SEC:
+                continue
+            tg = next((g for g in snap["talkgroups"] if g["tg"] == c["tg"]), {})
+            rec = {"t0": c["t"], "t1": c["t"] + c["secs"], "freq_hz": tg.get("hz") or 0.0, "peak_db": 0.0,
+                   "wav": str(self.p25.calls / c["clip"]), "clip": c["clip"], "tg": c["tg"], "src": c["src"]}
+            self.tx.q.put((rec, out, P25, 8000))
+
     # -- setup / teardown ------------------------------------------------------------
     def start(self):
         info = call("GET", "/info")
@@ -1115,6 +1146,7 @@ class Session:
                     self.aprs.write(time.time())
                 if self.p25 is not None and self.p25.running:
                     self.p25.write(time.time())
+                    self.transcribe_p25(time.time())
             if ({"safety", "p25", "uhf"} & set(self.outs)) and time.time() - self.last_prune > 3600:
                 n = (prune(CONFIG.data_dir / "safety", SAFETY_KEEP_DAYS) + prune(CONFIG.data_dir / "uhf", SAFETY_KEEP_DAYS)
                      + prune_p25(SAFETY_KEEP_DAYS))

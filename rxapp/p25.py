@@ -48,6 +48,7 @@ CAPTURE_SEC = 600                  # raw IQ (230 MB) and dsd-fme input (58 MB) k
 FS = 48000                         # IQ and demodulated audio rate
 CC_SYMBOL_RATE, VOICE_SYMBOL_RATE = 4800, 6000      # Phase 1 control channel, Phase 2 TDMA voice channels
 TG_KEEP_SEC = 3600                 # talkgroups listed if heard within the hour
+SLOT_FRESH_SEC = 4.0               # a slot's talkgroup counts as current this long after the channel named it
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
 
@@ -94,6 +95,9 @@ class Trunk:
 
     def feed(self, line: str, now: float):
         line = ANSI.sub("", line).rstrip()
+        # a MAC_PTT's ALG ID is the line right after its "VCH n - TG" line; any later ALG line (e.g. the MI(128)
+        # continuation of the other slot's ESSB) is not about it
+        pending, self._pending_slot = self._pending_slot, None
         m = self.SYNC.search(line)
         if m:
             self.phase = int(m.group(1))
@@ -141,9 +145,8 @@ class Trunk:
                 self._alg(tg, m.group(2), now)
             return
         m = self.ALG.search(line)                     # the line after a MAC_PTT: "ALG ID: 0x84 ... MPTT"
-        if m and self._pending_slot is not None:
-            self._alg(self._slot_tg.get(self._pending_slot, (None, 0))[0], m.group(1), now)
-            self._pending_slot = None
+        if m and pending is not None:
+            self._alg(self._slot_tg.get(pending, (None, 0))[0], m.group(1), now)
             return
         if "Encrypted" in line and "Grant" in line:
             self._enc_next = True
@@ -188,7 +191,9 @@ class Trunk:
             t["src"] = src
 
     def snapshot(self, now: float) -> dict:
-        tgs = sorted((dict(t, active=now - t["last"] < 3, times=self.call_times.get(t["tg"], []))
+        enc = self.enc_tgs()
+        tgs = sorted((dict(t, active=now - t["last"] < 3, times=self.call_times.get(t["tg"], []),
+                           enc=t["tg"] in enc or (t["enc"] and t["tg"] not in self.clear_tgs))
                       for t in self.tgs.values() if now - t["last"] < TG_KEEP_SEC),
                      key=lambda t: -t["last"])
         return {"system": self.system, "phase": self.phase, "locked": now - self.last_sync < 3,
@@ -197,7 +202,10 @@ class Trunk:
                 "talkgroups": [{k: (round(v, 1) if isinstance(v, float) else v) for k, v in t.items()} for t in tgs],
                 "grants": list(self.grants)[-50:][::-1],
                 "enc_calls": [[round(t, 1), tg] for t, tg in self.enc_calls if now - t < TG_KEEP_SEC],
-                "enc_tgs": sorted(self.enc_tgs())}
+                "enc_tgs": sorted(self.enc_tgs()),
+                # each TDMA slot's talkgroup, while the voice channel keeps naming it (for live listening)
+                "slots": {str(k): {"tg": tg, "age": round(now - t, 1), "enc": tg in self.enc_tgs()}
+                          for k, (tg, t) in self._slot_tg.items() if now - t < SLOT_FRESH_SEC}}
 
     def enc_tgs(self) -> set:
         """Talkgroups heard encrypted and never in the clear: all their calls are labelled encrypted."""

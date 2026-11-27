@@ -70,6 +70,14 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid 
 .glog .t{color:var(--muted);margin-right:8px}
 .caveat{color:var(--muted);font-size:13px;max-width:100ch;margin:0}
 .empty{color:var(--muted);padding:10px 4px}
+td.said{white-space:normal;min-width:18ch;font-family:"Barlow",system-ui,sans-serif;font-size:13.5px}
+td.said.none{color:var(--muted);font-style:italic}
+.livebar{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px}
+.livebar select{font:500 13px "IBM Plex Mono",monospace;background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:4px;padding:6px 8px;max-width:100%}
+.livebar input[type=range]{width:110px;accent-color:var(--magenta)}
+button.on{background:var(--magenta);border-color:var(--magenta);color:#fff}
+.lnow{font:500 13px "IBM Plex Mono",monospace;color:var(--muted)}
+.lnow b{color:var(--magenta);font-weight:600}
 </style>
 </head>
 <body>
@@ -90,6 +98,15 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid 
     </div>
   </header>
   <p class="notice" id="notice" style="display:none"></p>
+  <section class="panel" aria-labelledby="liveTitle">
+    <div class="livebar">
+      <h2 id="liveTitle">Live</h2>
+      <button type="button" id="listen">Listen</button>
+      <select id="lchan" aria-label="What to listen to"><option value="">Follow activity</option></select>
+      <label class="lnow">vol <input id="vol" type="range" min="0" max="3" step="0.05" value="1"></label>
+      <span class="lnow" id="lnow"></span>
+    </div>
+  </section>
   <div class="main">
     <section class="panel" aria-labelledby="tgTitle">
       <div class="bar"><h2 id="tgTitle">Talkgroups, last hour</h2><span class="muted" id="tgN" style="font:500 12px 'IBM Plex Mono',monospace"></span></div>
@@ -109,7 +126,7 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid 
       </div>
       <audio id="player" controls preload="none" style="width:100%"></audio>
       <div class="scroll"><table>
-        <thead><tr><th>Time</th><th>Talkgroup</th><th>Radio</th><th class="num">Length</th></tr></thead>
+        <thead><tr><th>Time</th><th>Talkgroup</th><th>Radio</th><th class="num">Length</th><th>Transcript</th></tr></thead>
         <tbody id="calls"></tbody>
       </table></div>
     </section>
@@ -121,11 +138,15 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid 
   <p class="caveat">The control channel is 772.30625 MHz; voice runs on Phase 2 TDMA channels around 772.6–774.7 MHz, all inside the
     tuner's window, so following a call is a retune of one radiod channel. The tab shares the VHF tuner like the Maritime and
     APRS tabs: it decodes only while the receiver is held here. Talkgroups are numbers (names would need the system's talkgroup list).
+    Live listening plays the calls as dsd-fme decodes them: “Follow activity” stays with the call it's playing and moves to
+    the next one when that goes quiet; picking a talkgroup plays only that one. Encrypted calls are never followed, so they stay silent.
     Recordings stay on this computer and are deleted after 7 days, like the public-safety ones.</p>
 </div>
 <script src="audiofocus.js?v=2"></script>
 <script src="statsreset.js?v=2" data-page="p25"></script>
-<script src="p25.js?v=6"></script>
+<script src="p25.js?v=10"></script>
 <script src="focus.js?v=2" data-focus="p25" data-what="the 700 MHz P25 system"></script>
+<script src="spectheme.js?v=3"></script>
+<script src="minispec.js?v=9"></script>
 </body>
 </html>

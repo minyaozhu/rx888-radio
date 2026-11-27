@@ -39,6 +39,7 @@ from .rtp import RtpHub
 from .spectrum import Spectrum
 from .sstvmon import SstvMonitor
 from .ssbvoice import SsbTranscriber
+from .p25live import P25Live
 from .store import Store
 from .supervisor import Supervisor
 
@@ -61,6 +62,7 @@ class State:
     cw: CwMonitor
     sstv: SstvMonitor
     ssbv: SsbTranscriber
+    p25live: P25Live
     adsb: AdsbFeed
     jx: Junctions
     recorders: Dict[int, Recorder] = {}
@@ -122,6 +124,8 @@ async def lifespan(app):
     S.adsb.start()                      # fetches only while a page is asking for aircraft
     S.ssbv = SsbTranscriber(S.radio, S.rtp, CONFIG.data_dir / "ssb", enabled=RUNTIME.ssb_transcribe)
     S.ssbv.start()
+    S.p25live = P25Live(CONFIG.data_dir / "p25")
+    await S.p25live.start()            # dsd-fme's decoded voice, for the P25 page's Listen
     S.sstv = SstvMonitor(S.radio, S.rtp, S.store)
     if RUNTIME.sstv_on:
         try:
@@ -148,6 +152,7 @@ async def lifespan(app):
     await S.cw.stop(save=False)
     await S.sstv.stop(save=False)
     await S.ssbv.stop()
+    S.p25live.stop()
     await S.adsb.stop()
     await S.panels.stop()
     await S.hfgain.stop()
@@ -686,14 +691,24 @@ async def p25_trunk(session: Optional[str] = None):
 
 @app.get("/api/p25/calls")
 async def p25_calls(session: Optional[str] = None, limit: int = 300):
-    """Recorded (unencrypted) calls, newest first: talkgroup, radio ID, length, clip name."""
+    """Recorded calls, newest first: talkgroup, radio ID, length, clip name, encrypted or not, and the
+    transcript once voice_session.py has one (text; transcribed true, even when no words were found)."""
     from .p25 import list_calls
     d = _session_dir(P25_DIR, session)
     try:
         j = json.loads((d / "p25.json").read_text())
     except (OSError, ValueError):
         j = {}
-    return list_calls(d / "calls", limit=min(limit, 2000), enc_calls=j.get("enc_calls", []), enc_tgs=set(j.get("enc_tgs", [])))
+    calls = list_calls(d / "calls", limit=min(limit, 2000), enc_calls=j.get("enc_calls", []), enc_tgs=set(j.get("enc_tgs", [])))
+    text = {}                                    # voice_session.py's Whisper transcripts, by clip
+    for r in _jsonl(d / "transcripts.jsonl"):
+        if r.get("clip"):
+            text[r["clip"]] = r
+    for c in calls:
+        r = text.get(c["clip"])
+        if r is not None:
+            c["text"], c["text_hint"], c["transcribed"] = r.get("text", ""), r.get("text_atc", ""), True
+    return calls
 
 
 @app.get("/api/p25/clip/{session}/{name}")
@@ -1336,6 +1351,22 @@ async def delete_watch(wid: int):
 
 
 # ---------------------------------------------------------------- WebSockets
+@app.websocket("/ws/p25/audio")
+async def ws_p25_audio(ws: WebSocket, tg: Optional[int] = None):
+    """Live P25 voice (rxapp/p25live.py): follows activity, or only talkgroup `tg`. Frames as /ws/audio's."""
+    await ws.accept()
+    try:
+        await S.p25live.serve(ws, tg)
+    except (WebSocketDisconnect, RuntimeError):
+        pass
+
+
+@app.get("/api/p25/live")
+async def p25_live():
+    """Live voice: seconds since dsd-fme last sent audio, listeners, and each slot's current talkgroup."""
+    return S.p25live.status()
+
+
 @app.websocket("/ws/audio/{ssrc}")
 async def ws_audio(ws: WebSocket, ssrc: int):
     """Binary frames: u32 header (LE) + int16 LE PCM. Header: sample rate, with the top bit set when the
