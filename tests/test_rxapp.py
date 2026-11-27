@@ -1733,3 +1733,76 @@ def test_survey_needs_the_voice_session_paused(tmp_path, monkeypatch):
     f.write_text(json.dumps({"focus": "p25"}))
     monkeypatch.setattr(server, "FOCUS_FILE", f)
     assert TestClient(server.app, client=("127.0.0.1", 50000)).post("/api/survey/stream?lo_mhz=450&hi_mhz=470").status_code == 409
+
+
+def _auth_app(tmp_path):
+    from fastapi import FastAPI, WebSocket
+    from rxapp.auth import Auth, AuthMiddleware
+    app = FastAPI()
+
+    @app.get("/api/x")
+    def x():
+        return {"ok": 1}
+
+    @app.get("/page")
+    def page():
+        return {"page": 1}
+
+    @app.websocket("/ws/x")
+    async def wsx(ws: WebSocket):
+        await ws.accept()
+        await ws.send_text("hi")
+        await ws.close()
+    auth = Auth(tmp_path / "auth.json")
+    app.add_middleware(AuthMiddleware, auth=auth)
+    return app, auth
+
+
+def test_auth_local_passes_remote_needs_login(tmp_path):
+    from starlette.testclient import TestClient
+    app, auth = _auth_app(tmp_path)
+    local = TestClient(app, client=("127.0.0.1", 5000), base_url="https://testserver")
+    assert local.get("/api/x").json() == {"ok": 1}                     # straight from the Mac: as before
+    with local.websocket_connect("/ws/x") as ws:
+        assert ws.receive_text() == "hi"
+    fwd = {"X-Forwarded-For": "203.0.113.9"}                           # through Tailscale Funnel / serve
+    assert local.get("/api/x", headers=fwd).status_code == 401
+    r = local.get("/page", headers=fwd, follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"].startswith("/login?next=%2Fpage")
+    assert TestClient(app, client=("10.0.0.5", 1)).get("/api/x").status_code == 401
+    # no password set: login can't succeed
+    r = local.post("/login", headers=fwd, data={"password": "anything-at-all"}, follow_redirects=False)
+    assert r.status_code == 200 and "No password is set" in r.text
+    auth.set_password("correct horse battery")
+    assert "Wrong password" in local.post("/login", headers=fwd, data={"password": "nope"}).text
+    r = local.post("/login", headers=fwd, data={"password": "correct horse battery", "next": "/page"}, follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/page"
+    assert "HttpOnly" in r.headers["set-cookie"] and "Secure" in r.headers["set-cookie"]
+    assert local.get("/api/x", headers=fwd).json() == {"ok": 1}
+    ck = {"Cookie": "rxapp_session=" + local.cookies["rxapp_session"]}  # the test client's ws:// skips Secure cookies
+    with local.websocket_connect("/ws/x", headers={**fwd, **ck}) as ws:
+        assert ws.receive_text() == "hi"
+    # off-site redirects are refused; a new password signs everyone out
+    r = local.post("/login", headers=fwd, data={"password": "correct horse battery", "next": "//evil.example"}, follow_redirects=False)
+    assert r.headers["location"] == "/"
+    auth.set_password("another long password")
+    assert local.get("/api/x", headers=fwd).status_code == 401
+
+
+def test_auth_websocket_refused_without_login(tmp_path):
+    from starlette.testclient import TestClient
+    from starlette.websockets import WebSocketDisconnect
+    app, _ = _auth_app(tmp_path)
+    c = TestClient(app, client=("127.0.0.1", 5000))
+    with pytest.raises(WebSocketDisconnect):
+        with c.websocket_connect("/ws/x", headers={"Tailscale-User-Login": "x"}) as ws:
+            ws.receive_text()
+
+
+def test_auth_rate_limits_guesses(tmp_path):
+    from rxapp.auth import FAIL_MAX, Auth
+    a = Auth(tmp_path / "auth.json")
+    a.set_password("the real password")
+    for _ in range(FAIL_MAX):
+        assert not a.check_password("guess")
+    assert not a.check_password("the real password")                 # locked for the window, even when right

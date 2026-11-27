@@ -22,6 +22,7 @@ from pydantic import BaseModel
 
 from .config import BAND_MODES, CONFIG, MODES, RADIOD_CONFS, RUNTIME, VHF_MAX_HZ, VHF_MIN_HZ
 from .adsb import AdsbFeed
+from .auth import Auth, AuthMiddleware
 from .broadcast import Eibi, stations as broadcast_stations
 from . import ssb
 from .panels import PanelHub
@@ -165,6 +166,7 @@ async def lifespan(app):
 
 
 app = FastAPI(title="rxapp", lifespan=lifespan)
+app.add_middleware(AuthMiddleware, auth=Auth(CONFIG.data_dir / "auth.json"))   # remote (proxied) requests need a login
 
 
 @app.middleware("http")
