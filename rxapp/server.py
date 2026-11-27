@@ -690,10 +690,10 @@ async def p25_calls(session: Optional[str] = None, limit: int = 300):
     from .p25 import list_calls
     d = _session_dir(P25_DIR, session)
     try:
-        enc = json.loads((d / "p25.json").read_text()).get("enc_calls", [])
+        j = json.loads((d / "p25.json").read_text())
     except (OSError, ValueError):
-        enc = []
-    return list_calls(d / "calls", limit=min(limit, 2000), enc_calls=enc)
+        j = {}
+    return list_calls(d / "calls", limit=min(limit, 2000), enc_calls=j.get("enc_calls", []), enc_tgs=set(j.get("enc_tgs", [])))
 
 
 @app.get("/api/p25/clip/{session}/{name}")

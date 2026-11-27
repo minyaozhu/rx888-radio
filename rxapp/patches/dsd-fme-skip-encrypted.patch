@@ -1,0 +1,13 @@
+diff --git a/src/dsd_main.c b/src/dsd_main.c
+index e361b01..890cdb4 100644
+--- a/src/dsd_main.c
++++ b/src/dsd_main.c
+@@ -809,6 +809,8 @@
+  
+    //Trunking - Tune Encrypted Calls (P25 only on applicable grants with svc opts)
+    opts->trunk_tune_enc_calls = 1; //enabled by default
++   //rxapp patch: DSD_FME_SKIP_ENC=1 in the environment disables it (the ncurses 'e' toggle, without ncurses)
++   if (getenv("DSD_FME_SKIP_ENC") != NULL && getenv("DSD_FME_SKIP_ENC")[0] == '1') opts->trunk_tune_enc_calls = 0;
+  
+    opts->dPMR_next_part_of_superframe = 0;
+  

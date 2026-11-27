@@ -1524,3 +1524,56 @@ def test_p25_talkgroups_carry_the_hours_call_times():
     tr._grant(1201, 0, 1100.0)
     g = tr.snapshot(1101.0)["talkgroups"][0]
     assert g["grants"] == 2 and g["times"] == [1000.0, 1100.0]
+
+
+# ---- P25 CQPSK front end (rxapp/p25.py CqpskDemod) -----------------------------------------------
+def _cqpsk(dibit_steps, rate, fs=48000, snr_db=None, seed=0):
+    """pi/4-DQPSK baseband: each symbol turns the phase by one of +-pi/4, +-3pi/4, RRC-shaped."""
+    from rxapp.p25 import rrc_taps
+    sps = fs // rate
+    ph = np.cumsum(np.asarray(dibit_steps) * np.pi / 4)
+    up = np.zeros(len(ph) * sps, complex)
+    up[::sps] = np.exp(1j * ph)
+    x = np.convolve(up, rrc_taps(sps), mode="same")
+    if snr_db is not None:
+        rng = np.random.default_rng(seed)
+        p = np.mean(np.abs(x) ** 2)
+        x = x + np.sqrt(p / 10 ** (snr_db / 10) / 2) * (rng.standard_normal(len(x)) + 1j * rng.standard_normal(len(x)))
+    return x.astype(np.complex64)
+
+
+@pytest.mark.parametrize("rate", [4800, 6000])
+def test_cqpsk_demod_gives_c4fm_levels_at_symbol_centres(rate):
+    from rxapp.p25 import CqpskDemod
+    rng = np.random.default_rng(1)
+    steps = rng.choice([-3, -1, 1, 3], 2000)
+    iq = _cqpsk(steps, rate, snr_db=20)
+    dm = CqpskDemod()
+    a = np.concatenate([dm.process(iq[i:i + 960], rate) for i in range(0, len(iq), 960)]).astype(float)   # 20 ms packets
+    sps = 48000 // rate
+    best = 0
+    for off in range(sps):                                   # the filter delay: find the sampling phase
+        got = np.round(a[off::sps][:len(steps)] / CqpskDemod.SCALE)
+        n = min(len(got), len(steps))
+        for lag in range(0, 40):
+            if n - lag > 1000:
+                best = max(best, np.mean(got[lag:n] == steps[:n - lag]))
+    assert best > 0.97
+
+
+def test_p25_labels_calls_from_the_voice_channels_encryption_flag(tmp_path):
+    from rxapp.p25 import Trunk, list_calls
+    tr = Trunk()
+    tr.feed(" VCH 1 - TG: 1451; SRC: 13180001;  Encrypted Group Voice - Abbreviated", 100.0)
+    tr.feed(" VCH 0 - TG: 2351; SRC: 13180004;  Group Voice - Abbreviated", 101.0)
+    tr.feed(" VCH 0 - ALG ID: 0x84 KEY ID: 0xA100 MI: 0x11FB6307BAC9E4B7 ESSB", 110.0)    # stale slot: ignored
+    snap = tr.snapshot(111.0)
+    assert snap["enc_tgs"] == [1451] and tr.clear_tgs == {2351}
+    calls = tmp_path / "calls"
+    calls.mkdir()
+    for name in ("20261126_190526_1_P25_BEE005E45E1_1_GROUP_TGT_1451_SRC_13180001.wav",
+                 "20261126_190358_1_P25_BEE005E45E1_1_GROUP_TGT_2351_SRC_13180004.wav"):
+        (calls / name).write_bytes(b"\0" * 1000)
+    got = {c["tg"]: c["enc"] for c in list_calls(calls, now=time.time() + 10, enc_calls=snap["enc_calls"],
+                                                    enc_tgs=set(snap["enc_tgs"]))}
+    assert got == {1451: True, 2351: False}

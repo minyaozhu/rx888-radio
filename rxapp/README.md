@@ -363,7 +363,7 @@ A VHF window held on demand (`p25:vhf:773.45:p25:hold`; the page's "Switch recei
 heard here (WACN BEE00, SYSID 5E4, NAC 5E1, site 1) is Motorola simulcast: control channel 772.30625 MHz,
 voice on Phase 2 TDMA channels (identifier 3: 762.00625 MHz + 12.5 kHz steps, two slots per carrier),
 seen at 772.606, 772.906, 773.181, 774.406 and 774.681 MHz. With the tuner at 773.45 MHz all of these are in
-its window (the bridge accepts retunes within ±1.95 MHz of the centre). `rxapp/p25.py` (P25Receiver) opens a radiod `nfm` channel (flat FM discriminator, 48 kHz) and
+its window (the bridge accepts retunes within ±1.95 MHz of the centre). `rxapp/p25.py` (P25Receiver) opens a radiod IQ channel, demodulates it itself (`CqpskDemod`: matched filter and the phase change per symbol; radiod's FM discriminator gave 16% error-free voice frames on this simulcast system, this gives 94%; dsd-fme then runs with `-mc`). Previously it opened a radiod `nfm` channel (flat FM discriminator, 48 kHz) and
 serves it on TCP 127.0.0.1:17355 to [dsd-fme](https://github.com/lwvmobile/dsd-fme) (`-i tcp -ft -mq -T`),
 whose rigctl client (127.0.0.1:14532) asks for voice channels: each `F <Hz>` retunes that radiod channel. On
 the air, `-mq` (CQPSK, for simulcast) cut frame errors from about 40% (C4FM, `-mc`) to under 10%.
@@ -378,7 +378,7 @@ published. `/api/p25`, `/api/p25/trunk`, `/api/p25/calls`, `/api/p25/clip/{sessi
 Build (macOS): `brew install libsndfile pulseaudio`, then
 `git clone --depth 1 https://github.com/szechyjs/mbelib.git tools/mbelib`,
 `cmake -S tools/mbelib -B tools/mbelib/build -DCMAKE_INSTALL_PREFIX=$PWD/tools/local -DCMAKE_POLICY_VERSION_MINIMUM=3.5 && cmake --build tools/mbelib/build -j && cmake --install tools/mbelib/build`,
-`git clone --depth 1 https://github.com/lwvmobile/dsd-fme.git tools/dsd-fme`, and
+`git clone --depth 1 https://github.com/lwvmobile/dsd-fme.git tools/dsd-fme`, `git -C tools/dsd-fme apply ../../rxapp/patches/dsd-fme-skip-encrypted.patch` (lets `DSD_FME_SKIP_ENC=1` stop it following encrypted calls; unpatched, they are followed and only labelled), and
 `cmake -S tools/dsd-fme -B tools/dsd-fme/build -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DMBE_INCLUDE_DIR=$PWD/tools/local/include -DMBE_LIBRARY=$PWD/tools/local/lib/libmbe.dylib -DPULSEAUDIO_INCLUDE_DIR=/opt/homebrew/opt/pulseaudio/include -DPULSEAUDIO_LIBRARY=/opt/homebrew/opt/pulseaudio/lib/libpulse.dylib -DPULSEAUDIO_SIMPLE_LIBRARY=/opt/homebrew/opt/pulseaudio/lib/libpulse-simple.dylib -DPULSEAUDIO_MAINLOOP_LIBRARY=/opt/homebrew/opt/pulseaudio/lib/libpulse-mainloop-glib.dylib -DCURSES_INCLUDE_PATH=/opt/homebrew/opt/ncurses/include -DCURSES_LIBRARY=/opt/homebrew/opt/ncurses/lib/libncursesw.dylib && cmake --build tools/dsd-fme/build -j`.
 
 ## UHF business and public safety

@@ -5,9 +5,20 @@ The region's 700 MHz system (heard here as WACN BEE00, SYSID 5E4, NAC 5E1) is a 
 a control channel on 772.30625 MHz, voice on Phase 2 TDMA channels around 772.6-774.7 MHz. Everything fits
 in the RX-888's ~4 MHz tuner window centred on 773.45 MHz, so following a call is only a radiod retune.
 
-    radiod "nfm" channel (flat FM discriminator, 48 kHz)  --TCP-->  dsd-fme -i tcp  (-mq: simulcast CQPSK)
+    radiod "iq" channel (48 kHz complex)  -> CqpskDemod  --TCP-->  dsd-fme -i tcp -mc  (48 kHz s16)
     dsd-fme rigctl client ("F <Hz>")                       --TCP-->  P25Receiver: retunes that channel
     dsd-fme per-call WAVs (-P -7 calls/), event log (-J), console (stderr)  -> parsed here -> p25.json
+
+The demodulator is ours, not radiod's FM discriminator: the system is simulcast (several transmitters on one
+frequency, so the received phase wanders between symbols), and the discriminator's instantaneous frequency
+read that as symbol errors. A matched (root-raised-cosine) filter and the phase change over one symbol period
+turn CQPSK into the four C4FM-like levels dsd-fme slices with -mc. On the same 10-minute capture (rxapp_data/p25/
+20261126-180346): error-free voice frames 16% -> 94%, voice frames decoded +78%, control-channel messages
+395 -> 4131 and call grants 5 -> 213 (most calls were never followed before).
+
+dsd-fme skips encrypted calls when DSD_FME_SKIP_ENC=1 (rxapp/patches/dsd-fme-skip-encrypted.patch: its own
+"don't tune encrypted" option, otherwise only in its ncurses UI): they can't be heard, and while it sits on one
+it misses the clear calls. Unpatched, it still follows them and they are only labelled.
 
 Calls on encrypted talkgroups are granted on the control channel (so they show in the activity) but can't be
 heard. Recordings stay in rxapp_data/p25 (pruned like the public-safety ones) and are never published.
@@ -33,7 +44,9 @@ DSD_FME = ROOT / "tools" / "dsd-fme" / "build" / "dsd-fme"
 CC_HZ = 772.30625e6                # control channel
 CENTRE_HZ = 773.45e6               # tuner centre: control channel and every voice channel seen inside
 AUDIO_PORT, RIG_PORT, VOICE_PORT = 17355, 14532, 23471   # local only; off SDR++'s defaults (7355, 4532)
-CAPTURE_SEC = 600                  # raw input kept per session (57.6 MB), for offline decoder comparisons
+CAPTURE_SEC = 600                  # raw IQ (230 MB) and dsd-fme input (58 MB) kept per session, for offline tests
+FS = 48000                         # IQ and demodulated audio rate
+CC_SYMBOL_RATE, VOICE_SYMBOL_RATE = 4800, 6000      # Phase 1 control channel, Phase 2 TDMA voice channels
 TG_KEEP_SEC = 3600                 # talkgroups listed if heard within the hour
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
@@ -49,6 +62,7 @@ class Trunk:
     GRANT = re.compile(r"SVC \[(\w+)\] CHAN \[(\w+)\] Group \[(\d+)\] Source \[(\d+)\]")
     UPDATE = re.compile(r"Channel \d \[(\w+)\] Group \d \[(\d+)\]")
     VCH = re.compile(r"VCH (\d) - TG (\d+) SRC (\d+)")
+    VCH_SVC = re.compile(r"VCH (\d) - TG: (\d+); SRC: \d+;\s+(Encrypted )?Group Voice")    # MAC_ACTIVE / MAC_PTT
     VCH_ALG = re.compile(r"VCH (\d) - ALG ID: 0x([0-9A-F]{2})")
     ALG = re.compile(r"ALG ID: 0x([0-9A-F]{2})")
 
@@ -64,7 +78,8 @@ class Trunk:
         self.call_times = {}                     # talkgroup -> call start times within TG_KEEP_SEC
         self.grants = deque(maxlen=200)          # recent grants, newest last
         self.enc_calls = deque(maxlen=2000)      # (t, talkgroup) seen encrypted on a voice channel
-        self._slot_tg = {}                       # TDMA slot -> the talkgroup its last MAC_PTT named
+        self._slot_tg = {}                       # TDMA slot -> (talkgroup its last MAC message named, when)
+        self.clear_tgs = set()                   # talkgroups seen with a clear (not encrypted) voice call
         self._pending_slot = None                # a MAC_PTT whose ALG ID line comes next
 
     def freq(self, chan: int) -> Optional[float]:
@@ -101,19 +116,33 @@ class Trunk:
             self.iden[ident] = {"base": float(m.group(2)), "spacing": int(m.group(1), 16) * 125.0, "tdma": tdma}
             self._iden_pending = None
             return
+        # the voice channel's own word on encryption: "VCH 1 - TG: 1451; SRC: ...; Encrypted Group Voice"
+        m = self.VCH_SVC.search(line)
+        if m:
+            slot, tg = int(m.group(1)), int(m.group(2))
+            if tg:
+                self._slot_tg[slot] = (tg, now)
+                if m.group(3):
+                    self._alg(tg, "84", now)
+                else:
+                    self.clear_tgs.add(tg)
+            return
         m = self.VCH.search(line)
         if m:
             slot = int(m.group(1))
-            self._slot_tg[slot] = int(m.group(2))
+            if int(m.group(2)):
+                self._slot_tg[slot] = (int(m.group(2)), now)
             self._pending_slot = slot
             return
         m = self.VCH_ALG.search(line)                 # "VCH 1 - ALG ID: 0x84 ..." (from the call's ESS)
         if m:
-            self._alg(self._slot_tg.get(int(m.group(1))), m.group(2), now)
+            tg, t = self._slot_tg.get(int(m.group(1)), (None, 0))
+            if now - t < 3:                           # only a slot named just now: an older name may be stale
+                self._alg(tg, m.group(2), now)
             return
         m = self.ALG.search(line)                     # the line after a MAC_PTT: "ALG ID: 0x84 ... MPTT"
         if m and self._pending_slot is not None:
-            self._alg(self._slot_tg.get(self._pending_slot), m.group(1), now)
+            self._alg(self._slot_tg.get(self._pending_slot, (None, 0))[0], m.group(1), now)
             self._pending_slot = None
             return
         if "Encrypted" in line and "Grant" in line:
@@ -167,13 +196,18 @@ class Trunk:
                 "syncs_per_min": len(self.syncs), "channel_plan": len(self.iden),
                 "talkgroups": [{k: (round(v, 1) if isinstance(v, float) else v) for k, v in t.items()} for t in tgs],
                 "grants": list(self.grants)[-50:][::-1],
-                "enc_calls": [[round(t, 1), tg] for t, tg in self.enc_calls if now - t < TG_KEEP_SEC]}
+                "enc_calls": [[round(t, 1), tg] for t, tg in self.enc_calls if now - t < TG_KEEP_SEC],
+                "enc_tgs": sorted(self.enc_tgs())}
+
+    def enc_tgs(self) -> set:
+        """Talkgroups heard encrypted and never in the clear: all their calls are labelled encrypted."""
+        return ({tg for tg, t in self.tgs.items() if t["enc"]} | {tg for _, tg in self.enc_calls}) - self.clear_tgs
 
 
 CALL_RE = re.compile(r"(\d{8}_\d{6})_\d+_P25_\w*?_GROUP_TGT_(\d+)_SRC_(\d+)\.wav$")
 
 
-def list_calls(calls_dir: Path, now: Optional[float] = None, limit: int = 300, enc_calls=()):
+def list_calls(calls_dir: Path, now: Optional[float] = None, limit: int = 300, enc_calls=(), enc_tgs=()):
     """Finished per-call recordings (dsd-fme -P), newest first. A file still being written (changed in the last
     2 s) isn't finished; dsd-fme's catch-all file for calls it couldn't attribute (TGT_0) is left out."""
     now = now or time.time()
@@ -188,15 +222,58 @@ def list_calls(calls_dir: Path, now: Optional[float] = None, limit: int = 300, e
         tg = int(m.group(2))
         # encrypted: the voice channel named this talkgroup with a non-clear ALG ID during the call. dsd-fme
         # often learns that a few frames in, so the recording is noise; such calls are listed, not played.
-        enc = any(etg == tg and t0 - 3 <= et <= t0 + secs + 3 for et, etg in enc_calls)
+        enc = tg in enc_tgs or any(etg == tg and t0 - 3 <= et <= t0 + secs + 3 for et, etg in enc_calls)
         out.append({"t": t0, "tg": tg, "src": int(m.group(3)), "secs": secs, "clip": p.name, "enc": enc})
     return sorted(out, key=lambda c: -c["t"])[:limit]
 
 
+# ---- demodulator ----------------------------------------------------------------------------
+def rrc_taps(sps: int, alpha: float = 0.5, span: int = 6) -> np.ndarray:
+    """Root-raised-cosine, unit energy. alpha 0.5 measured best here (0.2: 91% error-free voice frames, 0.5: 94%)."""
+    t = np.arange(-span * sps, span * sps + 1) / sps
+    h = np.empty_like(t)
+    for i, x in enumerate(t):
+        if x == 0:
+            h[i] = 1 - alpha + 4 * alpha / np.pi
+        elif abs(abs(4 * alpha * x) - 1) < 1e-9:
+            h[i] = alpha / np.sqrt(2) * ((1 + 2 / np.pi) * np.sin(np.pi / (4 * alpha)) + (1 - 2 / np.pi) * np.cos(np.pi / (4 * alpha)))
+        else:
+            h[i] = (np.sin(np.pi * x * (1 - alpha)) + 4 * alpha * x * np.cos(np.pi * x * (1 + alpha))) / (np.pi * x * (1 - (4 * alpha * x) ** 2))
+    return h / np.sqrt((h ** 2).sum())
+
+
+class CqpskDemod:
+    """Streaming CQPSK demodulator: IQ in, dsd-fme's "audio" out. Matched filter, then the phase change over one
+    symbol: +-pi/4 and +-3pi/4 come out as +-1 and +-3 (times SCALE), the levels of a C4FM signal, at FS."""
+    SCALE = 5000
+
+    def __init__(self, fs: int = FS):
+        self.fs = fs
+        self.sps = None
+        self.taps = {}
+
+    def process(self, iq: np.ndarray, symbol_rate: int) -> np.ndarray:
+        from scipy.signal import lfilter
+        sps = self.fs // symbol_rate
+        if sps != self.sps:                               # retuned between control and voice: start afresh
+            self.sps = sps
+            if sps not in self.taps:
+                self.taps[sps] = rrc_taps(sps)
+            self.zi = np.zeros(len(self.taps[sps]) - 1, complex)
+            self.tail = np.zeros(sps, complex)
+        iq = np.nan_to_num(np.asarray(iq, np.complex64))
+        y, self.zi = lfilter(self.taps[sps], 1, iq, zi=self.zi)
+        full = np.concatenate([self.tail, y])
+        self.tail = full[-sps:]
+        d = full[sps:] * np.conj(full[:-sps])
+        s = np.angle(d) * (4 / np.pi) * self.SCALE
+        return np.clip(s, -32000, 32000).astype(np.int16)
+
+
 # ---- the receiver ---------------------------------------------------------------------------
 class P25Receiver:
-    """While the P25 window is on: a radiod flat-FM channel at the control channel, streamed to dsd-fme over
-    TCP; dsd-fme's rigctl commands retune it to voice channels and back."""
+    """While the P25 window is on: a radiod IQ channel at the control channel, demodulated here (CqpskDemod) and
+    streamed to dsd-fme over TCP; dsd-fme's rigctl commands retune it to voice channels and back."""
 
     def __init__(self, out_dir: Path, ctl_factory=None):
         self.out = out_dir
@@ -215,7 +292,9 @@ class P25Receiver:
         self.restarts = 0
         self.gen = 0
         self.capture, self.capture_left = None, 0
-        self.iq_ssrc, self.iq_file, self.iq_left = None, None, 0
+        self.iq_file, self.iq_left = None, 0
+        self.demod = CqpskDemod()
+        self.symbol_rate = CC_SYMBOL_RATE
         self.lvl_n = self.lvl_clip = 0
         self.lvl_sq = 0.0
         self.lost = 0
@@ -245,21 +324,16 @@ class P25Receiver:
         rig_srv = self._listen(RIG_PORT)
         self.socks = [s, audio_srv, rig_srv]
         self.tuned_hz = CC_HZ
-        ctl.create_channel(frequency_hz=self._if(CC_HZ), preset="nfm", sample_rate=48000, destination=group,
-                           ssrc=self.ssrc, lifetime=1500)
-        # no squelch: radiod's FM squelch cut the audio 9-13% of the time here, and dsd-fme lost the frames in
-        # those gaps. radiod clamps its FM SNR estimate at 0, and simulcast (several transmitters, so the
-        # envelope varies) often reads 0, which is below any finite dB threshold; -1000 dB underflows to a
-        # threshold of exactly 0, which a 0 estimate never falls below.
-        ctl.set_squelch(self.ssrc, enable=False, open_snr_db=-1000.0, close_snr_db=-1000.0)
-        # the same channel as raw IQ (24 kHz complex float, retuned in step), captured for offline tests of
-        # filters and demodulators; only while the capture runs
-        self.iq_ssrc = self.ssrc + 1
+        self.symbol_rate = CC_SYMBOL_RATE
+        self.demod = CqpskDemod()
+        # raw IQ (complex float32), no squelch (an IQ channel has none; the FM squelch used to cut 9-13% here)
+        ctl.create_channel(frequency_hz=self._if(CC_HZ), preset="iq", sample_rate=FS, destination=group,
+                           ssrc=self.ssrc, lifetime=1500, encoding=4, low_edge=-12000, high_edge=12000)
+        # the first CAPTURE_SEC of each session's IQ (48 kHz complex64, retunes included), for offline tests of
+        # the demodulator (see the module docstring)
         if not (self.out / "iq.raw").exists():
-            ctl.create_channel(frequency_hz=self._if(CC_HZ), preset="iq", sample_rate=24000, destination=group,
-                               ssrc=self.iq_ssrc, lifetime=1500, encoding=4, low_edge=-12000, high_edge=12000)
             self.iq_file = open(self.out / "iq.raw", "wb")
-            self.iq_left = int(CAPTURE_SEC * 24000)
+            self.iq_left = int(CAPTURE_SEC * FS)
         self.clients = []
         # the first CAPTURE_SEC of each session's input (48 kHz s16le, retunes included), for A/B tests of
         # decoder settings on the same signal: dsd-fme -i input.wav ... (header written at the end)
@@ -272,12 +346,19 @@ class P25Receiver:
         threading.Thread(target=self._accept_audio, args=(audio_srv, g), daemon=True).start()
         threading.Thread(target=self._accept_rig, args=(rig_srv, g), daemon=True).start()
         threading.Thread(target=self._pump, args=(g,), daemon=True).start()
+        import os
         self.proc = subprocess.Popen(
-            [str(DSD_FME), "-i", f"tcp:127.0.0.1:{AUDIO_PORT}", "-U", str(RIG_PORT), "-T", "-ft", "-mq",
+            [str(DSD_FME), "-i", f"tcp:127.0.0.1:{AUDIO_PORT}", "-U", str(RIG_PORT), "-T", "-ft", "-mc",
              "-o", f"udp:127.0.0.1:{VOICE_PORT}", "-P", "-7", str(self.calls), "-J", str(self.out / "events.log")],
-            cwd=self.out, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            cwd=self.out, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+            env={**os.environ, "DSD_FME_SKIP_ENC": "1"})
         threading.Thread(target=self._read, args=(self.proc, g), daemon=True).start()
         log.info("P25: control channel %.5f MHz, tuner %.3f MHz", CC_HZ / 1e6, tuner_hz / 1e6)
+
+    @staticmethod
+    def _rate(rf):
+        """The control channel is Phase 1 (4800 symbols/s); every voice channel seen here is Phase 2 TDMA."""
+        return CC_SYMBOL_RATE if abs(rf - CC_HZ) < 1 else VOICE_SYMBOL_RATE
 
     def _if(self, rf):
         return self.if_hz - (rf - self.tuner_hz)            # the tuner inverts: IF = IF_centre - (RF - tuner)
@@ -332,9 +413,8 @@ class P25Receiver:
                     rf = float(cmd.split()[1])
                     if abs(rf - self.tuner_hz) < 1.95e6:
                         self.ctl.set_frequency(self.ssrc, self._if(rf))
-                        if self.iq_left > 0:
-                            self.ctl.set_frequency(self.iq_ssrc, self._if(rf))
                         self.tuned_hz, self.tunes = rf, self.tunes + 1
+                        self.symbol_rate = self._rate(rf)
                         c.sendall(b"RPRT 0\n")
                     else:
                         log.info("P25: %.5f MHz is outside the tuner window", rf / 1e6)
@@ -358,8 +438,6 @@ class P25Receiver:
             if time.time() - last_keep > 10:
                 try:
                     self.ctl.set_channel_lifetime(self.ssrc, 1500)
-                    if self.iq_left > 0:
-                        self.ctl.set_channel_lifetime(self.iq_ssrc, 1500)
                 except Exception:
                     pass
                 last_keep = time.time()
@@ -372,13 +450,12 @@ class P25Receiver:
             if len(d) < 12:
                 continue
             ssrc = struct.unpack("!I", d[8:12])[0]
-            if ssrc == self.ssrc:
-                seq = struct.unpack("!H", d[2:4])[0]
-                if last_seq is not None:
-                    self.lost += (seq - last_seq - 1) & 0xFFFF
-                last_seq = seq
-            elif ssrc != self.iq_ssrc:
+            if ssrc != self.ssrc:
                 continue
+            seq = struct.unpack("!H", d[2:4])[0]
+            if last_seq is not None:
+                self.lost += (seq - last_seq - 1) & 0xFFFF
+            last_seq = seq
             q.put((ssrc, d))
         q.put(None)
 
@@ -396,29 +473,28 @@ class P25Receiver:
             if items[-1] is None or not self._live(g):
                 break
             self.backlog = max(self.backlog, len(items))
-            pcm_parts, iq_parts = [], []
+            parts = []
             for ssrc, d in items:
                 h = 12 + 4 * (d[0] & 15)
                 if d[0] & 0x10:
                     h += 4 + 4 * struct.unpack("!H", d[h + 2:h + 4])[0]
-                (iq_parts if ssrc == self.iq_ssrc else pcm_parts).append(d[h:])
-            if iq_parts and self.iq_left > 0:
+                parts.append(d[h:])
+            blob = b"".join(parts)
+            blob = blob[:len(blob) // 8 * 8]
+            if not blob:
+                continue
+            if self.iq_left > 0:
                 try:
-                    blob = b"".join(iq_parts)
                     self.iq_file.write(blob)               # complex float32 (I, Q), little-endian
                     self.iq_left -= len(blob) // 8
                     if self.iq_left <= 0:
                         self.iq_file.close()
-                        self.ctl.set_channel_lifetime(self.iq_ssrc, 1)
-                        self.ctl.remove_channel(self.iq_ssrc)
                 except (OSError, ValueError):
                     self.iq_left = 0
-            if not pcm_parts:
-                continue
-            a = np.frombuffer(b"".join(pcm_parts), ">i2")
+            a = self.demod.process(np.frombuffer(blob, "<c8"), self.symbol_rate)
             self.lvl_n += len(a)
             self.lvl_sq += float(np.dot(a.astype(np.float64), a.astype(np.float64)))
-            self.lvl_clip += int(np.count_nonzero(np.abs(a.astype(np.int32)) >= 32700))
+            self.lvl_clip += int(np.count_nonzero(np.abs(a.astype(np.int32)) >= 32000))
             pcm = a.astype("<i2").tobytes()
             if self.capture_left > 0:                  # the input as dsd-fme gets it, to replay offline
                 try:
@@ -469,9 +545,7 @@ class P25Receiver:
         if self.tuned_hz and self.tuned_hz != CC_HZ and now - last > self.VOICE_LOST_SEC:
             try:
                 self.ctl.set_frequency(self.ssrc, self._if(CC_HZ))
-                if self.iq_left > 0:
-                    self.ctl.set_frequency(self.iq_ssrc, self._if(CC_HZ))
-                self.tuned_hz = CC_HZ
+                self.tuned_hz, self.symbol_rate = CC_HZ, CC_SYMBOL_RATE
                 log.info("P25: no sync on the voice channel for %.0f s: back to the control channel", now - last)
             except Exception as e:
                 log.warning("P25: retune to the control channel: %s", e)
@@ -504,7 +578,6 @@ class P25Receiver:
             return
         self.running = False
         for f in (lambda: self.ctl.set_channel_lifetime(self.ssrc, 1), lambda: self.ctl.remove_channel(self.ssrc),
-                  lambda: self.ctl.set_channel_lifetime(self.iq_ssrc, 1), lambda: self.ctl.remove_channel(self.iq_ssrc),
                   lambda: self.capture.close(), lambda: self.iq_file.close(),
                   lambda: self.proc.terminate(), lambda: self.proc.wait(3)):
             try:
