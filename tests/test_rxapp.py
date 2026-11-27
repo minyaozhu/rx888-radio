@@ -1579,37 +1579,7 @@ def test_p25_labels_calls_from_the_voice_channels_encryption_flag(tmp_path):
     assert got == {1451: True, 2351: False}
 
 
-def test_new_channel_switches_agc_on_after_the_seed_gain():
-    """radiod treats a gain command as manual gain (AGC off): the seed must come before the AGC is switched on,
-    or the channel stays at the seed (AM broadcast stuck at 100 dB, every sample clipped)."""
-    import asyncio
-    from rxapp.radio import Radio
-    calls = []
-
-    class Ctl:
-        def __getattr__(self, name):
-            return lambda *a, **k: calls.append(name)
-    r = Radio()
-    r.ctl = Ctl()
-    ssb = Channel(1, 7.2e6, "lsb", gain_db=95.0)
-    am = Channel(2, 810e3, "am")
-    r.channels = {1: ssb, 2: am}
-    asyncio.run(r._open(am))
-    assert "set_gain" in calls and "set_agc" in calls
-    assert calls.index("set_gain") < calls.index("set_agc")
-    assert calls[-1] != "set_gain"
-
-
-def test_every_voice_session_service_may_make_channels():
-    """voice_session.py makes its channels with kind = the profile's service; rxapp refused "uhf" (and "aprs"),
-    so the UHF radio tab never got a channel."""
-    import voice_session
-    from rxapp.server import CHANNEL_KINDS
-    for prof in (voice_session.AIR, voice_session.SAFETY, voice_session.MARINE, voice_session.APRS,
-                 voice_session.UHF, voice_session.P25):
-        assert prof.service in CHANNEL_KINDS, prof.service
-
-
+# ---- P25 live listening and transcripts (rxapp/p25live.py) ---------------------------------------
 def _stereo(left, right, n=320):
     a = np.zeros((n, 2), np.int16)
     a[:, 0] = left
@@ -1694,8 +1664,6 @@ def test_scanner_state_is_the_band_and_the_window_being_captured():
 
 
 # ---- live UHF survey (rxapp/jobs.py Scanner.survey) ----------------------------------------------
-
-
 def test_survey_steps_the_tuner_and_reports_100khz_cells(monkeypatch):
     import asyncio
     from rxapp.jobs import Scanner
@@ -1806,3 +1774,34 @@ def test_auth_rate_limits_guesses(tmp_path):
     for _ in range(FAIL_MAX):
         assert not a.check_password("guess")
     assert not a.check_password("the real password")                 # locked for the window, even when right
+
+
+def test_new_channel_switches_agc_on_after_the_seed_gain():
+    """radiod treats a gain command as manual gain (AGC off): the seed must come before the AGC is switched on,
+    or the channel stays at the seed (AM broadcast stuck at 100 dB, every sample clipped)."""
+    import asyncio
+    from rxapp.radio import Radio
+    calls = []
+
+    class Ctl:
+        def __getattr__(self, name):
+            return lambda *a, **k: calls.append(name)
+    r = Radio()
+    r.ctl = Ctl()
+    ssb = Channel(1, 7.2e6, "lsb", gain_db=95.0)
+    am = Channel(2, 810e3, "am")
+    r.channels = {1: ssb, 2: am}
+    asyncio.run(r._open(am))
+    assert "set_gain" in calls and "set_agc" in calls
+    assert calls.index("set_gain") < calls.index("set_agc")
+    assert calls[-1] != "set_gain"
+
+
+def test_every_voice_session_service_may_make_channels():
+    """voice_session.py makes its channels with kind = the profile's service; rxapp refused "uhf" (and "aprs"),
+    so the UHF radio tab never got a channel."""
+    import voice_session
+    from rxapp.server import CHANNEL_KINDS
+    for prof in (voice_session.AIR, voice_session.SAFETY, voice_session.MARINE, voice_session.APRS,
+                 voice_session.UHF, voice_session.P25):
+        assert prof.service in CHANNEL_KINDS, prof.service
