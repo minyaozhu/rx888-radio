@@ -23,7 +23,7 @@ $('legend').innerHTML = BANDS.map((b) => `<span><i style="background:${bandColor
 
 function draw() {
   const cut = Date.now() / 1000 - +$('hours').value * 3600, band = $('band').value;
-  const spots = S.spots.filter((s) => s.t > cut && (!band || s.band === band));
+  const spots = S.spots.filter((s) => s.t > cut && (!band || s.band === band) && (!window.statsReset || statsReset.keep(s.t)));
   const best = new Map();                                  // one line per station and band: its best SNR
   for (const s of spots) { const k = s.call + '|' + s.band; if (!best.has(k) || s.snr > best.get(k).snr) best.set(k, s); }
   const heard = new Map();                                 // spots per station, for the dot size
@@ -53,6 +53,7 @@ $('spots').addEventListener('click', (e) => {
   S.sel = tr.dataset.id; draw(); map.focus(gridLL(tr.dataset.grid));
 });
 $('hours').addEventListener('change', draw);
+if (window.statsReset) statsReset.onChange(draw);
 $('band').addEventListener('change', draw);
 
 async function conditions() {

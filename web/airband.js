@@ -105,9 +105,16 @@ function derive() {
   if (flights.has('?')) list.push(flights.get('?'));
   S.flights = list;
   S.fIndex = new Map(list.map((f, i) => [f.id, i]));
-  $('nTx').textContent = S.recs.length;
-  $('nFlights').textContent = list.filter((f) => f.id !== '?').length;
+  drawCounts();
 }
+// Reset stats: the counts start from the reset; the timeline and transcript keep everything
+function drawCounts() {
+  const counted = window.statsReset ? S.recs.filter((r) => statsReset.keep(r.t0)) : S.recs;
+  $('nTx').textContent = counted.length;
+  $('nFlights').textContent = new Set(counted.map((r) => r.f).filter((f) => f && f !== '?')).size;
+}
+
+if (window.statsReset) statsReset.onChange(drawCounts);
 
 // ------------------------------------------------------------------ timeline
 const tl = $('timeline');

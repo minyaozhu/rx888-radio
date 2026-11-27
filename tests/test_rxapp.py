@@ -1482,3 +1482,45 @@ def test_ssb_transcriber_autotunes_the_channel(tmp_path):
     asyncio.run(go())
     assert tuned == [7240000.0] and tr.busy == 0                      # retuned, nothing sent to Whisper
     assert tr.status()["autotune"]["last"]["snapped"]
+
+
+# ---- Reset stats (web/statsreset.js) -------------------------------------------------------------
+def test_stats_reset_api_sets_and_clears_a_page(monkeypatch, tmp_path):
+    from fastapi.testclient import TestClient
+    from rxapp import server
+    from rxapp.config import Runtime
+    rt = Runtime(tmp_path / "settings.json")
+    monkeypatch.setattr(server, "RUNTIME", rt)
+    c = TestClient(server.app)
+    t = c.post("/api/stats/reset", json={"page": "ft8"}).json()["ft8"]
+    assert abs(t - time.time()) < 5 and Runtime(tmp_path / "settings.json").stats_reset["ft8"] == t   # kept
+    assert c.get("/api/stats/reset").json() == {"ft8": t}
+    assert c.post("/api/stats/reset", json={"page": "ft8", "on": False}).json() == {}
+    assert c.post("/api/stats/reset", json={"page": "nope"}).status_code == 400
+
+
+def test_aprs_stations_since_counts_only_later_packets(tmp_path, monkeypatch):
+    import json
+    from fastapi.testclient import TestClient
+    from rxapp import server
+    d = tmp_path / "20261126-100000"
+    d.mkdir()
+    (d / "stations.json").write_text(json.dumps({"t": 300, "packets": 3, "stations": [
+        {"name": "K6ABC", "last": 250, "packets": 2}, {"name": "W6OLD", "last": 50, "packets": 1}]}))
+    (d / "packets.jsonl").write_text("".join(json.dumps(p) + "\n" for p in
+                                             [{"t": 50, "from": "W6OLD"}, {"t": 60, "from": "K6ABC"}, {"t": 250, "from": "K6ABC"}]))
+    monkeypatch.setattr(server, "APRS_DIR", tmp_path)
+    c = TestClient(server.app)
+    assert c.get(f"/api/aprs/stations?session={d.name}").json()["packets"] == 3
+    r = c.get(f"/api/aprs/stations?session={d.name}&since=100").json()
+    assert r["packets"] == 1 and [(s["name"], s["packets"]) for s in r["stations"]] == [("K6ABC", 1)]
+
+
+def test_p25_talkgroups_carry_the_hours_call_times():
+    from rxapp.p25 import Trunk
+    tr = Trunk()
+    tr._grant(1201, 0, 1000.0)
+    tr._grant(1201, 0, 1002.0, update=True)        # the same call
+    tr._grant(1201, 0, 1100.0)
+    g = tr.snapshot(1101.0)["talkgroups"][0]
+    assert g["grants"] == 2 and g["times"] == [1000.0, 1100.0]

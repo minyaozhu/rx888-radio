@@ -33,10 +33,11 @@ $('legend').innerHTML = BANDS.map((b) => `<span><i style="background:${bandColor
   '<span><i class="hollow"></i>placed by call prefix</span><span><i style="background:none;border:1.4px solid var(--p-cq)"></i>on the air now</span>';
 
 // Stations spotted in the window (and band): newest spot of each call, placed by its prefix
+const counted = (t) => !window.statsReset || statsReset.keep(t);    // Reset stats
 function buildStations() {
   const cut = Date.now() / 1000 - +$('win').value, out = new Map();
   for (const sp of S.spots) {                                   // newest first
-    if (sp.t <= cut || (S.band && sp.band !== S.band)) continue;
+    if (sp.t <= cut || !counted(sp.t) || (S.band && sp.band !== S.band)) continue;
     const st = out.get(sp.call);
     if (st) { st.n++; st.first = sp.t; continue; }
     const p = typeof prefixInfo === 'function' ? prefixInfo(sp.call) : null, j = callJitter(sp.call);
@@ -133,7 +134,7 @@ $('sigs').addEventListener('click', (e) => { const r = e.target.closest('[data-f
 
 function drawSpots() {
   const cut = Date.now() / 1000 - 3600;
-  const hour = S.spots.filter((s) => s.t > cut);
+  const hour = S.spots.filter((s) => s.t > cut && counted(s.t));
   $('fSpots').textContent = hour.length;
   $('fSt').textContent = new Set(hour.map((s) => s.call)).size;
   const rows = S.spots.filter((s) => !S.band || s.band === S.band).slice(0, 300);
@@ -150,6 +151,7 @@ $('spots').addEventListener('click', (e) => {
   const r = e.target.closest('[data-f]'); if (!r) return;
   select(r.dataset.call, true); listen(+r.dataset.f);
 });
+if (window.statsReset) statsReset.onChange(drawSpots);
 $('log').addEventListener('click', (e) => { const r = e.target.closest('[data-f]'); if (r) listen(+r.dataset.f); });
 
 function drawMonitor() {

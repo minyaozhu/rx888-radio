@@ -78,8 +78,12 @@ function drawShips() {
   }
 }
 map.on('zoomend', drawShips);
+function drawCounts() {
+  $('nTx').textContent = S.recs.filter((r) => r.text && (!window.statsReset || statsReset.keep(r.t0))).length;
+}
+if (window.statsReset) statsReset.onChange(() => { drawCounts(); drawVesselList(); });
 function drawVesselList() {
-  $('fVes').textContent = S.vessels.length;
+  $('fVes').textContent = window.statsReset ? S.vessels.filter((v) => statsReset.keep(v.last)).length : S.vessels.length;   // Reset stats
   $('vlist').innerHTML = S.vessels.slice(0, 80).map((v) => `<li data-mmsi="${v.mmsi}"><span><b>${esc(v.shipname || 'MMSI ' + v.mmsi)}</b>
       <span style="color:${(CATS[v.category] || CATS.other)[0]}">●</span> ${esc((CATS[v.category] || CATS.other)[1])}</span>
       <span>${v.speed != null && v.speed < 102 ? v.speed.toFixed(1) + ' kn · ' : ''}${ago(v.last)}</span></li>`).join('')
@@ -302,7 +306,7 @@ async function poll() {
     $('notice').textContent = notice; $('notice').style.display = notice ? '' : 'none';
     const add = await api(`/api/marine/transmissions?session=${S.session}&after=${S.after}`);
     if (add.length) { S.recs.push(...add); S.after = S.recs[S.recs.length - 1].i; }
-    $('nTx').textContent = S.recs.filter((r) => r.text).length;
+    drawCounts();
     drawLog();
     const ves = await api(`/api/marine/vessels?session=${S.session}`);
     S.vessels = ves.vessels || [];

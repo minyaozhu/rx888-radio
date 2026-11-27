@@ -20,8 +20,11 @@ function drawFacts() {
   $('fNow').textContent = !t.running ? '–' : t.on_voice ? `voice ${mhz(t.tuned_hz)}${act ? ' · TG ' + act.tg : ''}` : act ? `TG ${act.tg} granted` : 'quiet';
 }
 
+// Reset stats: talkgroups heard since the reset, their calls counted from then (g.times: the hour's call starts)
+const counted = (t) => !window.statsReset || statsReset.keep(t);
 function drawTgs() {
-  const tgs = S.trunk.talkgroups || [];
+  const tgs = (S.trunk.talkgroups || []).filter((g) => counted(g.last))
+    .map((g) => (window.statsReset && statsReset.since() && g.times ? {...g, grants: g.times.filter(counted).length} : g));
   $('tgN').textContent = tgs.length ? `${tgs.length} heard · ${tgs.filter((g) => g.enc).length} encrypted` : '';
   $('tgs').innerHTML = tgs.map((g) => `<tr data-tg="${g.tg}" class="${S.tg === g.tg ? 'sel' : ''}">
       <td>${g.tg}</td><td>${g.active ? '<span class="badge b-live">on air</span>' : ago(g.last)}</td><td class="num">${g.grants}</td>
@@ -66,6 +69,7 @@ $('tgs').addEventListener('click', (e) => {
 });
 $('clearTg').addEventListener('click', () => { S.tg = null; drawTgs(); drawCalls(); });
 $('showEnc').addEventListener('change', drawCalls);
+if (window.statsReset) statsReset.onChange(drawTgs);
 // "play new calls" is listening live: it switches the receiver here (focus.js); unticking doesn't release it
 $('auto').addEventListener('change', () => { if ($('auto').checked && window.receiverFocus) receiverFocus.ensure((f) => f === 'p25' || f === 'window:p25'); });
 

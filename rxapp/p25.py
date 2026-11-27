@@ -61,6 +61,7 @@ class Trunk:
         self._iden_pending = None                # (identifier, tdma) waiting for its base frequency line
         self._enc_next = False
         self.tgs = {}                            # talkgroup -> {"tg", "first", "last", "grants", "enc", "src", "hz"}
+        self.call_times = {}                     # talkgroup -> call start times within TG_KEEP_SEC
         self.grants = deque(maxlen=200)          # recent grants, newest last
         self.enc_calls = deque(maxlen=2000)      # (t, talkgroup) seen encrypted on a voice channel
         self._slot_tg = {}                       # TDMA slot -> the talkgroup its last MAC_PTT named
@@ -147,6 +148,10 @@ class Trunk:
         # an update repeats a grant while the call goes on: count it once per call (a gap of 5 s or more)
         if new or not update or now - t["last"] > 5:
             t["grants"] += 1
+            times = self.call_times.setdefault(tg, [])        # the hour's call starts, for counts since a reset
+            times.append(round(now, 1))
+            while times and now - times[0] > TG_KEEP_SEC:
+                times.pop(0)
             self.grants.append({"t": round(now, 1), "tg": tg, "src": src, "hz": hz, "enc": enc})
         t["last"], t["enc"] = now, t["enc"] or enc
         t["hz"] = hz or t["hz"]
@@ -154,7 +159,8 @@ class Trunk:
             t["src"] = src
 
     def snapshot(self, now: float) -> dict:
-        tgs = sorted((dict(t, active=now - t["last"] < 3) for t in self.tgs.values() if now - t["last"] < TG_KEEP_SEC),
+        tgs = sorted((dict(t, active=now - t["last"] < 3, times=self.call_times.get(t["tg"], []))
+                      for t in self.tgs.values() if now - t["last"] < TG_KEEP_SEC),
                      key=lambda t: -t["last"])
         return {"system": self.system, "phase": self.phase, "locked": now - self.last_sync < 3,
                 "sync_age": round(now - self.last_sync, 1) if self.last_sync else None,

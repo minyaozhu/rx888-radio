@@ -94,13 +94,15 @@ class Runtime:
         self.qth = d.get("qth", "CM87")              # receiver's Maidenhead locator (FT8 map, distances)
         self.adsb_feed = bool(d.get("adsb_feed", True))      # aircraft from the adsb.fi online feed (else only our own)
         self.ssb_transcribe = bool(d.get("ssb_transcribe", True))   # transcribe what the SSB Voice page plays
+        self.stats_reset = dict(d.get("stats_reset") or {})        # page -> time its counts start from (web/statsreset.js)
 
     def save(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(json.dumps({"adc_rate_hz": self.adc_rate_hz, "vga": self.vga,
                                          "hf_gain_db": self.hf_gain_db, "band": self.band,
                                          "vhf_center_hz": self.vhf_center_hz, "ft8_bands": self.ft8_bands, "ft4_bands": self.ft4_bands, "wspr_bands": self.wspr_bands, "cw_bands": self.cw_bands, "qth": self.qth, "sstv_on": self.sstv_on,
-                                         "adsb_feed": self.adsb_feed, "ssb_transcribe": self.ssb_transcribe}))
+                                         "adsb_feed": self.adsb_feed, "ssb_transcribe": self.ssb_transcribe,
+                                         "stats_reset": self.stats_reset}))
 
 
 RUNTIME = Runtime(CONFIG.data_dir / "settings.json")

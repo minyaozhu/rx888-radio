@@ -92,7 +92,8 @@ const S = {
 };
 
 function derive() {
-  const rows = S.band ? S.all.filter((r) => r.band === S.band) : S.all;
+  const counted = window.statsReset ? S.all.filter((r) => statsReset.keep(r.t)) : S.all;   // Reset stats
+  const rows = S.band ? counted.filter((r) => r.band === S.band) : counted;
   S.rows = rows;
   for (const r of rows) r.ph ??= phase(r);
   const st = new Map();
@@ -155,6 +156,7 @@ function renderLists() {
     <span>${s.approx ? '~' : ''}${Math.round(s.dist).toLocaleString()} km</span></li>`).join('') || '<li><span class="meta">nothing yet</span></li>';
   const byBand = new Map();
   for (const r of S.all) {
+    if (window.statsReset && !statsReset.keep(r.t)) continue;
     const b = byBand.get(r.band) || {n: 0, calls: new Set()};
     b.n++; if (r.from_call) b.calls.add(r.from_call);
     byBand.set(r.band, b);
@@ -488,6 +490,7 @@ async function main() {
   });
   $('win').addEventListener('change', () => { S.win = +$('win').value; load(); });
   $('band').addEventListener('change', () => { S.band = $('band').value; derive(); draw(); });
+  if (window.statsReset) statsReset.onChange(() => { derive(); draw(); });
   $('find').addEventListener('input', () => { S.find = $('find').value.trim().toUpperCase(); derive(); draw(); });
   $('qth').addEventListener('change', async () => {
     try { await api(`${API}/qth`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({grid: $('qth').value})}); }

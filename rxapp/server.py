@@ -9,6 +9,7 @@ import json
 import logging
 import re
 import time
+from collections import Counter
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -626,13 +627,21 @@ async def aprs_info(session: Optional[str] = None):
 
 
 @app.get("/api/aprs/stations")
-async def aprs_stations(session: Optional[str] = None):
-    """APRS stations heard on 144.390 MHz (multimon-ng + aprslib via voice_session.py), with tracks."""
+async def aprs_stations(session: Optional[str] = None, since: float = 0.0):
+    """APRS stations heard on 144.390 MHz (multimon-ng + aprslib via voice_session.py), with tracks.
+    since (the page's Reset stats): only stations heard since then, with their packets since then."""
     d = _session_dir(APRS_DIR, session)
     try:
-        return json.loads((d / "stations.json").read_text())
+        out = json.loads((d / "stations.json").read_text())
     except (OSError, ValueError):
         return {"t": None, "packets": 0, "stations": [], "running": False, "error": None}
+    if since:
+        pk = [p for p in _jsonl(d / "packets.jsonl") if (p.get("t") or 0) >= since]
+        n = Counter((p.get("object_name") or p.get("from") or "").strip() for p in pk)
+        out["packets"] = len(pk)
+        out["stations"] = [{**s, "packets": n.get(s["name"], 0)} for s in out.get("stations", [])
+                           if (s.get("last") or 0) >= since]
+    return out
 
 
 @app.get("/api/aprs/packets")
@@ -786,6 +795,33 @@ class SsbBeat(BaseModel):
     ssrc: int
     transcribe: bool = True
     autotune: bool = False
+
+
+class StatsReset(BaseModel):
+    page: str
+    on: bool = True                       # false: count everything again
+
+
+STATS_PAGES = {"airband", "safety", "uhf", "marine", "aprs", "p25", "ft8", "ft4", "wspr", "cw", "sstv"}
+
+
+@app.get("/api/stats/reset")
+async def stats_reset_get():
+    """When each page's counts were last reset ({page: unix time}); pages count only what came after."""
+    return RUNTIME.stats_reset
+
+
+@app.post("/api/stats/reset")
+async def stats_reset_set(body: StatsReset):
+    """Reset a page's counts (start counting now), or undo that. Nothing is deleted: pages filter by time."""
+    if body.page not in STATS_PAGES:
+        raise HTTPException(400, f"unknown page {body.page!r}")
+    if body.on:
+        RUNTIME.stats_reset[body.page] = round(time.time(), 1)
+    else:
+        RUNTIME.stats_reset.pop(body.page, None)
+    RUNTIME.save()
+    return RUNTIME.stats_reset
 
 
 class SsbTranscribeSet(BaseModel):

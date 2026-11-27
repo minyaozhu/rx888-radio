@@ -86,11 +86,12 @@ async function poll() {
     const notice = !S.live ? 'No APRS session is running. Start voice_session.py with an aprs window (see README).'
       : a.error ? a.error : !st.listening ? 'The receiver is on another window right now; APRS is decoded during its turn in the rotation. “Switch receiver here” keeps it on 144.390 MHz.' : '';
     $('notice').textContent = notice; $('notice').style.display = notice ? '' : 'none';
-    const [stn, pk] = await Promise.all([api(`/api/aprs/stations?session=${S.session}`), api(`/api/aprs/packets?session=${S.session}&limit=300`)]);
+    const [stn, pk] = await Promise.all([api(`/api/aprs/stations?session=${S.session}&since=${window.statsReset ? statsReset.since() : 0}`), api(`/api/aprs/packets?session=${S.session}&limit=300`)]);
     S.stations = stn.stations || []; S.packets = pk;
     $('fPk').textContent = stn.packets ?? S.packets.length;
     drawMap(); drawList(); drawLog();
   } catch (e) { $('notice').textContent = `No APRS session yet (${e.message}).`; $('notice').style.display = ''; }
 }
 $('session').addEventListener('change', () => loadSession($('session').value));
+if (window.statsReset) statsReset.onChange(() => poll());
 loadSession().catch(() => poll()).finally(() => setInterval(poll, 4000));

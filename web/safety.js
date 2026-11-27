@@ -96,9 +96,17 @@ function select(r, pan) {
 }
 $('clip').addEventListener('click', () => { if (S.sel) clips.toggle(S.sel); });
 
+// Reset stats: the counts and codes start from the reset; the transcript and timeline keep everything
+const counted = () => (window.statsReset ? S.recs.filter((r) => statsReset.keep(r.t0)) : S.recs);
+function drawCounts() {
+  const recs = counted();
+  $('nTx').textContent = recs.length;
+  $('nCh').textContent = new Set(recs.map((r) => Math.round(r.freq_hz))).size;
+}
+if (window.statsReset) statsReset.onChange(() => { drawCounts(); drawCodes(); });
 function drawCodes() {
   const seen = new Map();
-  for (const r of S.recs) for (const [, k, m] of [...psCodes(r.text), ...psCodes(r.text_atc)]) seen.set(k, [m, (seen.get(k)?.[1] || 0) + 1]);
+  for (const r of counted()) for (const [, k, m] of [...psCodes(r.text), ...psCodes(r.text_atc)]) seen.set(k, [m, (seen.get(k)?.[1] || 0) + 1]);
   $('codes').innerHTML = [...seen.entries()].sort((a, b) => b[1][1] - a[1][1]).slice(0, 14)
     .map(([k, [m, n]]) => `<li><b>${esc(k)}</b>${esc(m)} <span style="color:var(--muted)">×${n}</span></li>`).join('')
     || '<li style="color:var(--muted)">none yet</li>';
@@ -454,9 +462,8 @@ async function poll(full) {
     if (add.length || full) {
       S.recs.push(...add);
       S.after = S.recs.length ? S.recs[S.recs.length - 1].i : -1;
-      $('nTx').textContent = S.recs.length;
+      drawCounts();
       const freqs = [...new Set(S.recs.map((r) => Math.round(r.freq_hz)))].sort((a, b) => a - b);
-      $('nCh').textContent = freqs.length;
       setOptions($('fCh'), '<option value="">all channels</option>' + freqs.map((f) => `<option value="${f}">${esc(chName(f))}</option>`).join(''));
       drawLog(); drawCodes();
     }
