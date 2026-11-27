@@ -1,13 +1,18 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""700 MHz P25 trunked radio: dsd-fme fed from radiod, following the trunk.
+"""700 MHz P25 trunked radio: dsd-fme fed from radiod, every call decoded.
 
 The region's 700 MHz system (heard here as WACN BEE00, SYSID 5E4, NAC 5E1) is a Motorola simulcast system:
 a control channel on 772.30625 MHz, voice on Phase 2 TDMA channels around 772.6-774.7 MHz. Everything fits
-in the RX-888's ~4 MHz tuner window centred on 773.45 MHz, so following a call is only a radiod retune.
+in the RX-888's ~4 MHz tuner window centred on 773.45 MHz, so radiod can give each one its own channel.
 
-    radiod "iq" channel (48 kHz complex)  -> CqpskDemod  --TCP-->  dsd-fme -i tcp -mc  (48 kHz s16)
-    dsd-fme rigctl client ("F <Hz>")                       --TCP-->  P25Receiver: retunes that channel
-    dsd-fme per-call WAVs (-P -7 calls/), event log (-J), console (stderr)  -> parsed here -> p25.json
+    radiod "iq" channel on the control channel -> CqpskDemod --TCP--> dsd-fme -ft -mc (grants; doesn't follow them)
+    a grant to a clear call on a voice channel with no decoder yet -> a decoder for it:
+    radiod "iq" channel on that frequency      -> CqpskDemod --TCP--> dsd-fme -f2 -X <wacn sysid nac> -mc
+        per-call WAVs (-P -7 calls/), audio to UDP VOICE_PORT + k (rxapp/p25live.py), console -> Trunk -> p25.json
+
+Voice decoders stay up while their channel is used (closed after VOICE_IDLE_SEC without a grant). One dsd-fme
+following the trunk (the earlier design) could decode one call at a time and missed every grant while on a call:
+in two minutes of the same traffic it recorded 4 calls, three fixed voice decoders 15.
 
 The demodulator is ours, not radiod's FM discriminator: the system is simulcast (several transmitters on one
 frequency, so the received phase wanders between symbols), and the discriminator's instantaneous frequency
@@ -16,9 +21,8 @@ turn CQPSK into the four C4FM-like levels dsd-fme slices with -mc. On the same 1
 20261126-180346): error-free voice frames 16% -> 94%, voice frames decoded +78%, control-channel messages
 395 -> 4131 and call grants 5 -> 213 (most calls were never followed before).
 
-dsd-fme skips encrypted calls when DSD_FME_SKIP_ENC=1 (rxapp/patches/dsd-fme-skip-encrypted.patch: its own
-"don't tune encrypted" option, otherwise only in its ncurses UI): they can't be heard, and while it sits on one
-it misses the clear calls. Unpatched, it still follows them and they are only labelled.
+Encrypted calls decode to noise until dsd-fme learns their ALG ID; they are labelled from the voice channel's
+own messages (Trunk), not transcribed, and never played live.
 
 Calls on encrypted talkgroups are granted on the control channel (so they show in the activity) but can't be
 heard. Recordings stay in rxapp_data/p25 (pruned like the public-safety ones) and are never published.
@@ -43,7 +47,7 @@ ROOT = Path(__file__).resolve().parent.parent
 DSD_FME = ROOT / "tools" / "dsd-fme" / "build" / "dsd-fme"
 CC_HZ = 772.30625e6                # control channel
 CENTRE_HZ = 773.45e6               # tuner centre: control channel and every voice channel seen inside
-AUDIO_PORT, RIG_PORT, VOICE_PORT = 17355, 14532, 23471   # local only; off SDR++'s defaults (7355, 4532)
+AUDIO_PORT, VOICE_PORT = 17355, 23471   # local only: dsd-fme inputs AUDIO_PORT (+1+k), voice outputs VOICE_PORT (+k)
 CAPTURE_SEC = 600                  # raw IQ (230 MB) and dsd-fme input (58 MB) kept per session, for offline tests
 FS = 48000                         # IQ and demodulated audio rate
 CC_SYMBOL_RATE, VOICE_SYMBOL_RATE = 4800, 6000      # Phase 1 control channel, Phase 2 TDMA voice channels
@@ -82,6 +86,8 @@ class Trunk:
         self._slot_tg = {}                       # TDMA slot -> (talkgroup its last MAC message named, when)
         self.clear_tgs = set()                   # talkgroups seen with a clear (not encrypted) voice call
         self._pending_slot = None                # a MAC_PTT whose ALG ID line comes next
+        self.voice_sync = {}                     # voice decoder -> when it last synced (it carries a call)
+        self.on_grant = None                     # fn(tg, hz, enc, now), called for every grant and update
 
     def freq(self, chan: int) -> Optional[float]:
         """Channel number (4-bit identifier, 12-bit channel) to Hz, once that identifier's update was heard."""
@@ -93,12 +99,17 @@ class Trunk:
             n //= 2                              # two TDMA slots per carrier
         return i["base"] + n * i["spacing"]
 
-    def feed(self, line: str, now: float):
+    def feed(self, line: str, now: float, chan=None):
+        """One console line. chan: the voice decoder it came from (None: the control channel). TDMA slots are
+        per voice channel, so they are kept as "<chan>:<slot>"."""
         line = ANSI.sub("", line).rstrip()
         # a MAC_PTT's ALG ID is the line right after its "VCH n - TG" line; any later ALG line (e.g. the MI(128)
         # continuation of the other slot's ESSB) is not about it
         pending, self._pending_slot = self._pending_slot, None
         m = self.SYNC.search(line)
+        if m and chan is not None:
+            self.voice_sync[chan] = now
+            return
         if m:
             self.phase = int(m.group(1))
             self.system = dict(zip(("wacn", "sysid", "nac", "rfss", "site"), m.groups()[1:]))
@@ -121,9 +132,10 @@ class Trunk:
             self._iden_pending = None
             return
         # the voice channel's own word on encryption: "VCH 1 - TG: 1451; SRC: ...; Encrypted Group Voice"
+        key = (lambda n: n if chan is None else f"{chan}:{n}")
         m = self.VCH_SVC.search(line)
         if m:
-            slot, tg = int(m.group(1)), int(m.group(2))
+            slot, tg = key(int(m.group(1))), int(m.group(2))
             if tg:
                 self._slot_tg[slot] = (tg, now)
                 if m.group(3):
@@ -133,14 +145,14 @@ class Trunk:
             return
         m = self.VCH.search(line)
         if m:
-            slot = int(m.group(1))
+            slot = key(int(m.group(1)))
             if int(m.group(2)):
                 self._slot_tg[slot] = (int(m.group(2)), now)
             self._pending_slot = slot
             return
         m = self.VCH_ALG.search(line)                 # "VCH 1 - ALG ID: 0x84 ..." (from the call's ESS)
         if m:
-            tg, t = self._slot_tg.get(int(m.group(1)), (None, 0))
+            tg, t = self._slot_tg.get(key(int(m.group(1))), (None, 0))
             if now - t < 3:                           # only a slot named just now: an older name may be stale
                 self._alg(tg, m.group(2), now)
             return
@@ -189,6 +201,8 @@ class Trunk:
         t["hz"] = hz or t["hz"]
         if src:
             t["src"] = src
+        if self.on_grant:
+            self.on_grant(tg, hz, enc, now)
 
     def snapshot(self, now: float) -> dict:
         enc = self.enc_tgs()
@@ -235,6 +249,34 @@ def list_calls(calls_dir: Path, now: Optional[float] = None, limit: int = 300, e
     return sorted(out, key=lambda c: -c["t"])[:limit]
 
 
+THREAD_GAP_SEC = 30.0               # calls on one talkgroup this close together: one conversation
+
+
+def threads(calls, now: Optional[float] = None, gap: float = THREAD_GAP_SEC):
+    """Calls (list_calls, newest first) grouped into conversations: one talkgroup, each call starting less than
+    `gap` seconds after the previous one ended. Newest first; a thread's calls oldest first. live: its last call
+    ended less than `gap` ago (a reply may still come)."""
+    now = now or time.time()
+    open_by_tg, out = {}, []
+    for c in sorted(calls, key=lambda c: c["t"]):
+        th = open_by_tg.get(c["tg"])
+        if th is None or c["t"] - th["end"] > gap:
+            th = {"tg": c["tg"], "start": c["t"], "end": c["t"], "calls": []}
+            open_by_tg[c["tg"]] = th
+            out.append(th)
+        th["calls"].append(c)
+        th["end"] = max(th["end"], c["t"] + c["secs"])
+    for th in out:
+        cs = th["calls"]
+        th["id"] = f'{th["tg"]}-{cs[0]["clip"]}'
+        th["n"] = len(cs)
+        th["secs"] = round(sum(c["secs"] for c in cs), 1)
+        th["srcs"] = sorted({c["src"] for c in cs})
+        th["enc"] = all(c["enc"] for c in cs)
+        th["live"] = now - th["end"] < gap
+    return sorted(out, key=lambda th: -th["end"])
+
+
 # ---- demodulator ----------------------------------------------------------------------------
 def rrc_taps(sps: int, alpha: float = 0.5, span: int = 6) -> np.ndarray:
     """Root-raised-cosine, unit energy. alpha 0.5 measured best here (0.2: 91% error-free voice frames, 0.5: 94%)."""
@@ -279,38 +321,63 @@ class CqpskDemod:
 
 
 # ---- the receiver ---------------------------------------------------------------------------
+MAX_VOICE = 8                      # voice decoders at most (six voice frequencies seen on this system)
+VOICE_IDLE_SEC = 900.0             # a voice decoder whose frequency had no grant for this long is stopped
+VOICE_SYNC_SEC = 2.0               # a voice decoder synced this recently is carrying a call
+
+
+class _Decoder:
+    """One radiod IQ channel, demodulated here (CqpskDemod) and streamed over TCP to its own dsd-fme."""
+
+    def __init__(self, key, rf: float, symbol_rate: int, port: int, ssrc: int):
+        import queue
+        self.key, self.rf, self.symbol_rate, self.port, self.ssrc = key, rf, symbol_rate, port, ssrc
+        self.demod = CqpskDemod()
+        self.q = queue.SimpleQueue()
+        self.clients, self.srv, self.proc = [], None, None
+        self.started = self.last_grant = time.time()
+        self.last_seq, self.lost = None, 0
+        self.open = True
+
+
 class P25Receiver:
-    """While the P25 window is on: a radiod IQ channel at the control channel, demodulated here (CqpskDemod) and
-    streamed to dsd-fme over TCP; dsd-fme's rigctl commands retune it to voice channels and back."""
+    """While the P25 window is on: a decoder that stays on the control channel (dsd-fme reading grants, not
+    following them), and one decoder per voice channel in use (dsd-fme on that frequency, Phase 2 with the
+    system's WACN / SYSID / NAC given), started when the control channel first grants a clear call there.
+    So every call on the system is decoded, however many happen at once, and no grant is missed while a call
+    is being decoded (one dsd-fme following the trunk could do one call at a time)."""
 
     def __init__(self, out_dir: Path, ctl_factory=None):
+        import queue
         self.out = out_dir
         self.calls = out_dir / "calls"
         self.calls.mkdir(parents=True, exist_ok=True)
         self.trunk = Trunk()
+        self.trunk.on_grant = self._on_grant
         self.lock = threading.Lock()
+        self.log_lock = threading.Lock()
         self.running = False
         self.error = None
         self.last_write = 0.0
-        self.tuned_hz = None
-        self.tunes = 0
-        self.proc = None
-        self.socks = []
+        self.decs = {}                     # key ("cc", or voice decoder number 0..MAX_VOICE-1) -> _Decoder
+        self.by_ssrc = {}
+        self.want = queue.Queue()          # voice frequencies granted that have no decoder yet
+        self.voice_started = 0
         self.started = 0.0
         self.restarts = 0
         self.gen = 0
         self.capture, self.capture_left = None, 0
         self.iq_file, self.iq_left = None, 0
-        self.demod = CqpskDemod()
-        self.symbol_rate = CC_SYMBOL_RATE
         self.lvl_n = self.lvl_clip = 0
         self.lvl_sq = 0.0
-        self.lost = 0
         self.backlog = 0
+        self.rtp = None
+        self.dec_lock = threading.RLock()  # opening / closing decoders (the manager thread and the watchdog)
 
+    # ---- start / stop -------------------------------------------------------------------------------
     def start(self, ctl, tuner_hz: float, if_hz: float, maddr_fn, rtp_port: int, iface: str):
         if self.running:
-            self.stop()                           # back in the window: a fresh channel at the current IF
+            self.stop()                           # back in the window: fresh channels at the current IF
         if not DSD_FME.exists():
             self.error = f"dsd-fme not built ({DSD_FME}); see rxapp/README.md"
             log.warning(self.error)
@@ -318,55 +385,107 @@ class P25Receiver:
         self.ctl, self.tuner_hz, self.if_hz = ctl, tuner_hz, if_hz
         self._net = (maddr_fn, rtp_port, iface)
         self.started = time.time()
-        group = maddr_fn("voice-p25.local")
-        self.ssrc = int(time.time()) % 1_000_000_000 + 9_100_000
+        self.group = maddr_fn("voice-p25.local")
+        self.ssrc_base = int(time.time()) % 100_000_000 * 16 + 9_100_000
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 8 << 20)
-        s.bind((group, rtp_port))
-        s.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, socket.inet_aton(group) + socket.inet_aton(iface))
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 16 << 20)
+        s.bind((self.group, rtp_port))
+        s.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, socket.inet_aton(self.group) + socket.inet_aton(iface))
         s.settimeout(1.0)
         self.rtp = s
-        audio_srv = self._listen(AUDIO_PORT)
-        rig_srv = self._listen(RIG_PORT)
-        self.socks = [s, audio_srv, rig_srv]
-        self.tuned_hz = CC_HZ
-        self.symbol_rate = CC_SYMBOL_RATE
-        self.demod = CqpskDemod()
-        # raw IQ (complex float32), no squelch (an IQ channel has none; the FM squelch used to cut 9-13% here)
-        ctl.create_channel(frequency_hz=self._if(CC_HZ), preset="iq", sample_rate=FS, destination=group,
-                           ssrc=self.ssrc, lifetime=1500, encoding=4, low_edge=-12000, high_edge=12000)
-        # the first CAPTURE_SEC of each session's IQ (48 kHz complex64, retunes included), for offline tests of
-        # the demodulator (see the module docstring)
+        # the first CAPTURE_SEC of the control channel's IQ (48 kHz complex64) and of dsd-fme's input (48 kHz
+        # s16le), for offline tests of the demodulator and of decoder settings
         if not (self.out / "iq.raw").exists():
             self.iq_file = open(self.out / "iq.raw", "wb")
             self.iq_left = int(CAPTURE_SEC * FS)
-        self.clients = []
-        # the first CAPTURE_SEC of each session's input (48 kHz s16le, retunes included), for A/B tests of
-        # decoder settings on the same signal: dsd-fme -i input.wav ... (header written at the end)
         if not (self.out / "input.raw").exists():
             self.capture = open(self.out / "input.raw", "wb")
             self.capture_left = int(CAPTURE_SEC * 48000)
         self.running, self.error = True, None
         self.gen += 1                                   # threads of an earlier start see this and leave
         g = self.gen
-        threading.Thread(target=self._accept_audio, args=(audio_srv, g), daemon=True).start()
-        threading.Thread(target=self._accept_rig, args=(rig_srv, g), daemon=True).start()
+        self.decs, self.by_ssrc = {}, {}
+        self._open("cc", CC_HZ, CC_SYMBOL_RATE, AUDIO_PORT, g,
+                   ["-ft", "-mc", "-o", "null", "-J", str(self.out / "events.log")])
         threading.Thread(target=self._pump, args=(g,), daemon=True).start()
-        import os
-        self.proc = subprocess.Popen(
-            [str(DSD_FME), "-i", f"tcp:127.0.0.1:{AUDIO_PORT}", "-U", str(RIG_PORT), "-T", "-ft", "-mc",
-             "-o", f"udp:127.0.0.1:{VOICE_PORT}", "-P", "-7", str(self.calls), "-J", str(self.out / "events.log")],
-            cwd=self.out, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
-            env={**os.environ, "DSD_FME_SKIP_ENC": "1"})
-        threading.Thread(target=self._read, args=(self.proc, g), daemon=True).start()
+        threading.Thread(target=self._manage, args=(g,), daemon=True).start()
         log.info("P25: control channel %.5f MHz, tuner %.3f MHz", CC_HZ / 1e6, tuner_hz / 1e6)
 
-    @staticmethod
-    def _rate(rf):
-        """The control channel is Phase 1 (4800 symbols/s); every voice channel seen here is Phase 2 TDMA."""
-        return CC_SYMBOL_RATE if abs(rf - CC_HZ) < 1 else VOICE_SYMBOL_RATE
+    def _open(self, key, rf, symbol_rate, port, g, args):
+        import os
+        ssrc = self.ssrc_base + (0 if key == "cc" else 1 + key)
+        dec = _Decoder(key, rf, symbol_rate, port, ssrc)
+        dec.srv = self._listen(port)
+        # raw IQ (complex float32), no squelch (an IQ channel has none; the FM squelch used to cut 9-13% here)
+        self.ctl.create_channel(frequency_hz=self._if(rf), preset="iq", sample_rate=FS, destination=self.group,
+                                ssrc=ssrc, lifetime=1500, encoding=4, low_edge=-12000, high_edge=12000)
+        self.decs[key], self.by_ssrc[ssrc] = dec, dec
+        threading.Thread(target=self._accept, args=(dec, g), daemon=True).start()
+        threading.Thread(target=self._feed, args=(dec, g), daemon=True).start()
+        dec.proc = subprocess.Popen([str(DSD_FME), "-i", f"tcp:127.0.0.1:{port}", *args],
+                                    cwd=self.out, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                                    env={**os.environ, "DSD_FME_SKIP_ENC": "1"})
+        threading.Thread(target=self._read, args=(dec, g), daemon=True).start()
+        return dec
+
+    def _open_voice(self, rf, g):
+        """A decoder for voice channel rf: dsd-fme on Phase 2 only, with the system's TDMA parameters (it can't
+        learn them on a voice channel alone), recording each call (-P) and sending its audio to VOICE_PORT + k."""
+        with self.dec_lock:
+            if not self._live(g) or any(d.key != "cc" and abs(d.rf - rf) < 1 for d in list(self.decs.values())):
+                return None
+            return self._open_voice_locked(rf, g)
+
+    def _open_voice_locked(self, rf, g):
+        sysinfo = self.trunk.system
+        if not all(sysinfo.get(k) for k in ("wacn", "sysid", "nac")):
+            return None
+        k = next((i for i in range(MAX_VOICE) if i not in self.decs), None)
+        if k is None:
+            return None
+        p2 = f"{sysinfo['wacn']}{sysinfo['sysid']}{sysinfo['nac']}"
+        dec = self._open(k, rf, VOICE_SYMBOL_RATE, AUDIO_PORT + 1 + k, g,
+                         ["-f2", "-X", p2, "-mc", "-o", f"udp:127.0.0.1:{VOICE_PORT + k}", "-P", "-7", str(self.calls)])
+        self.voice_started += 1
+        log.info("P25: voice decoder %d on %.5f MHz", k, rf / 1e6)
+        return dec
+
+    def _close(self, dec):
+        with self.dec_lock:
+            self._close_locked(dec)
+
+    def _close_locked(self, dec):
+        dec.open = False
+        self.decs.pop(dec.key, None)
+        self.by_ssrc.pop(dec.ssrc, None)
+        for f in (lambda: self.ctl.set_channel_lifetime(dec.ssrc, 1), lambda: self.ctl.remove_channel(dec.ssrc),
+                  lambda: dec.proc.terminate(), lambda: dec.proc.wait(3), lambda: dec.srv.close()):
+            try:
+                f()
+            except Exception:
+                pass
+        for c in dec.clients:
+            try:
+                c.close()
+            except OSError:
+                pass
+        dec.q.put(None)
+
+    def stop(self):
+        if not self.running:
+            return
+        self.running = False
+        for dec in list(self.decs.values()):
+            self._close(dec)
+        for f in (lambda: self.capture.close(), lambda: self.iq_file.close(), lambda: self.rtp.close()):
+            try:
+                f()
+            except Exception:
+                pass
+        log.info("P25: stopped")
+        self.write(time.time() + 3)
 
     def _if(self, rf):
         return self.if_hz - (rf - self.tuner_hz)            # the tuner inverts: IF = IF_centre - (RF - tuner)
@@ -380,74 +499,59 @@ class P25Receiver:
         srv.settimeout(1.0)
         return srv
 
-    def _live(self, g):
-        return self.running and g == self.gen
+    def _live(self, g, dec=None):
+        return self.running and g == self.gen and (dec is None or dec.open)
 
-    def _accept_audio(self, srv, g):
-        while self._live(g):
+    def _accept(self, dec, g):
+        while self._live(g, dec):
             try:
-                c, _ = srv.accept()
+                c, _ = dec.srv.accept()
             except socket.timeout:
                 continue
             except OSError:
                 break
-            self.clients.append(c)
+            dec.clients.append(c)
 
-    def _accept_rig(self, srv, g):
-        while self._live(g):
-            try:
-                c, _ = srv.accept()
-            except socket.timeout:
-                continue
-            except OSError:
-                break
-            threading.Thread(target=self._rig, args=(c, g), daemon=True).start()
+    # ---- the voice decoders: started on a grant, stopped when idle ----------------------------------
+    def _on_grant(self, tg, hz, enc, now):
+        """Trunk, for every grant (under self.lock): note it on that frequency's decoder, or ask for one."""
+        if not hz or not self.running:
+            return
+        for dec in self.decs.values():
+            if dec.key != "cc" and abs(dec.rf - hz) < 1:
+                dec.last_grant = now
+                return
+        if not enc and abs(hz - self.tuner_hz) < 1.95e6:
+            self.want.put(hz)
 
-    def _rig(self, c, g):
-        """The bit of the hamlib rigctl protocol dsd-fme uses: f (get), F <Hz> (set), M (mode), l (level)."""
-        f = c.makefile("rb", buffering=0)
-        while self._live(g):
-            try:
-                line = f.readline()
-            except OSError:
-                break
-            if not line:
-                break
-            cmd = line.decode("ascii", "replace").strip()
-            try:
-                if cmd == "f":
-                    c.sendall(f"{int(self.tuned_hz or 0)}\n".encode())
-                elif cmd.startswith("F "):
-                    rf = float(cmd.split()[1])
-                    if abs(rf - self.tuner_hz) < 1.95e6:
-                        self.ctl.set_frequency(self.ssrc, self._if(rf))
-                        self.tuned_hz, self.tunes = rf, self.tunes + 1
-                        self.symbol_rate = self._rate(rf)
-                        c.sendall(b"RPRT 0\n")
-                    else:
-                        log.info("P25: %.5f MHz is outside the tuner window", rf / 1e6)
-                        c.sendall(b"RPRT 1\n")
-                elif cmd == "l":
-                    c.sendall(b"-40.0\n")
-                else:
-                    c.sendall(b"RPRT 0\n")
-            except OSError:
-                break
-
-    def _pump(self, g):
-        """Receive only: radiod's packets into a queue. Writing the captures and feeding dsd-fme (which can
-        block when dsd-fme reads slowly) happen in _feed, so the socket is always drained (a blocked receive
-        loop let the UDP buffer overflow: 5-7% of the input lost, frames and calls broken)."""
+    def _manage(self, g):
         import queue
-        self.q = q = queue.SimpleQueue()
-        threading.Thread(target=self._feed, args=(q, g), daemon=True).start()
-        last_keep, last_seq = time.time(), None
+        while self._live(g):
+            try:
+                hz = self.want.get(timeout=1.0)
+            except queue.Empty:
+                continue
+            if not self._live(g) or any(d.key != "cc" and abs(d.rf - hz) < 1 for d in list(self.decs.values())):
+                continue
+            try:
+                if self._open_voice(hz, g) is None and len(self.decs) > MAX_VOICE:
+                    log.info("P25: %.5f MHz granted but all %d voice decoders are busy", hz / 1e6, MAX_VOICE)
+            except Exception as e:
+                log.warning("P25: voice decoder on %.5f MHz: %s", hz / 1e6, e)
+
+    # ---- data path ----------------------------------------------------------------------------------
+    def _pump(self, g):
+        """Receive only: every decoder's packets (one multicast group, told apart by SSRC) into its queue.
+        Demodulating and feeding dsd-fme (which can block when it reads slowly) happen in _feed, so the socket is
+        always drained (a blocked receive loop let the UDP buffer overflow: frames and calls lost)."""
+        last_keep = time.time()
         while self._live(g):
             if time.time() - last_keep > 10:
-                try:
-                    self.ctl.set_channel_lifetime(self.ssrc, 1500)
-                except Exception:
-                    pass
+                for dec in list(self.decs.values()):
+                    try:
+                        self.ctl.set_channel_lifetime(dec.ssrc, 1500)
+                    except Exception:
+                        pass
                 last_keep = time.time()
             try:
                 d, _ = self.rtp.recvfrom(65536)
@@ -457,20 +561,22 @@ class P25Receiver:
                 break
             if len(d) < 12:
                 continue
-            ssrc = struct.unpack("!I", d[8:12])[0]
-            if ssrc != self.ssrc:
+            dec = self.by_ssrc.get(struct.unpack("!I", d[8:12])[0])
+            if dec is None:
                 continue
             seq = struct.unpack("!H", d[2:4])[0]
-            if last_seq is not None:
-                self.lost += (seq - last_seq - 1) & 0xFFFF
-            last_seq = seq
-            q.put((ssrc, d))
-        q.put(None)
+            if dec.last_seq is not None:
+                dec.lost += (seq - dec.last_seq - 1) & 0xFFFF
+            dec.last_seq = seq
+            dec.q.put(d)
+        for dec in list(self.decs.values()):
+            dec.q.put(None)
 
-    def _feed(self, q, g):
-        """Everything waiting in the queue at once: one conversion, one capture write and one send per batch
-        (per packet, Python fell ~5% behind real time, so dsd-fme's input lagged further and further)."""
+    def _feed(self, dec, g):
+        """Everything waiting in the queue at once: one conversion and one send per batch (per packet, Python
+        fell ~5% behind real time, so dsd-fme's input lagged further and further)."""
         import queue as _q
+        q = dec.q
         while True:
             items = [q.get()]
             try:
@@ -478,11 +584,11 @@ class P25Receiver:
                     items.append(q.get_nowait())
             except _q.Empty:
                 pass
-            if items[-1] is None or not self._live(g):
+            if items[-1] is None or not self._live(g, dec):
                 break
             self.backlog = max(self.backlog, len(items))
             parts = []
-            for ssrc, d in items:
+            for d in items:
                 h = 12 + 4 * (d[0] & 15)
                 if d[0] & 0x10:
                     h += 4 + 4 * struct.unpack("!H", d[h + 2:h + 4])[0]
@@ -491,7 +597,8 @@ class P25Receiver:
             blob = blob[:len(blob) // 8 * 8]
             if not blob:
                 continue
-            if self.iq_left > 0:
+            cc = dec.key == "cc"
+            if cc and self.iq_left > 0:
                 try:
                     self.iq_file.write(blob)               # complex float32 (I, Q), little-endian
                     self.iq_left -= len(blob) // 8
@@ -499,12 +606,13 @@ class P25Receiver:
                         self.iq_file.close()
                 except (OSError, ValueError):
                     self.iq_left = 0
-            a = self.demod.process(np.frombuffer(blob, "<c8"), self.symbol_rate)
-            self.lvl_n += len(a)
-            self.lvl_sq += float(np.dot(a.astype(np.float64), a.astype(np.float64)))
-            self.lvl_clip += int(np.count_nonzero(np.abs(a.astype(np.int32)) >= 32000))
+            a = dec.demod.process(np.frombuffer(blob, "<c8"), dec.symbol_rate)
+            if cc:
+                self.lvl_n += len(a)
+                self.lvl_sq += float(np.dot(a.astype(np.float64), a.astype(np.float64)))
+                self.lvl_clip += int(np.count_nonzero(np.abs(a.astype(np.int32)) >= 32000))
             pcm = a.astype("<i2").tobytes()
-            if self.capture_left > 0:                  # the input as dsd-fme gets it, to replay offline
+            if cc and self.capture_left > 0:          # the input as dsd-fme gets it, to replay offline
                 try:
                     self.capture.write(pcm)
                     self.capture_left -= len(a)
@@ -512,55 +620,58 @@ class P25Receiver:
                         self.capture.close()
                 except (OSError, ValueError):
                     self.capture_left = 0
-            for c in list(self.clients):
+            for c in list(dec.clients):
                 try:
                     c.sendall(pcm)
                 except OSError:
-                    self.clients.remove(c)
+                    dec.clients.remove(c)
 
-    CONSOLE_MAX = 20 << 20             # dsd-fme's console, kept for diagnosis (console.log, then .1)
+    CONSOLE_MAX = 20 << 20             # the decoders' console, kept for diagnosis (console.log, then .1)
 
-    def _read(self, proc, g):
+    def _read(self, dec, g):
         path = self.out / "console.log"
-        logf = open(path, "a")
-        for raw in proc.stderr:
+        tag = "cc" if dec.key == "cc" else f"v{dec.key} {dec.rf / 1e6:.5f}"
+        chan = None if dec.key == "cc" else dec.key
+        for raw in dec.proc.stderr:
             line = raw.decode("latin-1", "replace")
             with self.lock:
-                self.trunk.feed(line, time.time())
-            try:
-                logf.write(time.strftime("%H:%M:%S ") + ANSI.sub("", line))
-                if logf.tell() > self.CONSOLE_MAX:
-                    logf.close()
-                    path.replace(path.with_suffix(".log.1"))
-                    logf = open(path, "a")
-            except OSError:
-                pass
-        logf.close()
-        if self._live(g):
-            self.error = f"dsd-fme exited ({proc.poll()})"
-            log.warning("P25: %s", self.error)
+                self.trunk.feed(line, time.time(), chan=chan)
+            with self.log_lock:
+                try:
+                    with open(path, "a") as logf:
+                        logf.write(f"{time.strftime('%H:%M:%S')} [{tag}] " + ANSI.sub("", line))
+                    if path.stat().st_size > self.CONSOLE_MAX:
+                        path.replace(path.with_suffix(".log.1"))
+                except OSError:
+                    pass
+        if self._live(g, dec):
+            if dec.key == "cc":
+                self.error = f"dsd-fme exited ({dec.proc.poll()})"
+            log.warning("P25: dsd-fme [%s] exited (%s)", tag, dec.proc.poll())
 
-    VOICE_LOST_SEC = 5.0               # on a voice channel without sync this long: back to the control channel
-    RESTART_SEC = 30.0                 # no sync at all this long: restart dsd-fme
+    RESTART_SEC = 30.0                 # no control-channel sync this long: restart everything
 
     def watchdog(self, now):
-        """dsd-fme can be left waiting on a voice channel (seen after the tuner was moved away for a few
-        seconds): it never asks for the control channel again. Take it back there ourselves, and restart
-        dsd-fme if even that brings no sync."""
+        """The control channel unheard for RESTART_SEC: start over. A voice decoder whose dsd-fme died is
+        reopened; one whose frequency had no grant for VOICE_IDLE_SEC is closed."""
         if not self.running:
             return
         last = self.trunk.last_sync or self.started
-        if self.tuned_hz and self.tuned_hz != CC_HZ and now - last > self.VOICE_LOST_SEC:
-            try:
-                self.ctl.set_frequency(self.ssrc, self._if(CC_HZ))
-                self.tuned_hz, self.symbol_rate = CC_HZ, CC_SYMBOL_RATE
-                log.info("P25: no sync on the voice channel for %.0f s: back to the control channel", now - last)
-            except Exception as e:
-                log.warning("P25: retune to the control channel: %s", e)
-        elif now - last > self.RESTART_SEC and now - self.started > self.RESTART_SEC:
-            log.warning("P25: no sync for %.0f s: restarting dsd-fme", now - last)
+        if now - last > self.RESTART_SEC and now - self.started > self.RESTART_SEC:
+            log.warning("P25: no control-channel sync for %.0f s: restarting", now - last)
             self.restarts += 1
             self.start(self.ctl, self.tuner_hz, self.if_hz, *self._net)
+            return
+        for dec in list(self.decs.values()):
+            if dec.key == "cc":
+                continue
+            if now - dec.last_grant > VOICE_IDLE_SEC:
+                log.info("P25: voice decoder %d (%.5f MHz) idle: closed", dec.key, dec.rf / 1e6)
+                self._close(dec)
+            elif dec.proc.poll() is not None:
+                rf = dec.rf
+                self._close(dec)
+                self._open_voice(rf, self.gen)
 
     def write(self, now):
         if now - self.last_write < 1:
@@ -569,34 +680,17 @@ class P25Receiver:
         self.last_write = now
         with self.lock:
             snap = self.trunk.snapshot(now)
+            vsync = dict(self.trunk.voice_sync)
         if self.lvl_n:
             snap["input"] = {"rms": round((self.lvl_sq / self.lvl_n) ** 0.5), "clip": round(self.lvl_clip / self.lvl_n, 5),
-                             "lost_packets": self.lost, "max_batch": self.backlog}
+                             "lost_packets": sum(d.lost for d in self.decs.values()), "max_batch": self.backlog}
             self.backlog = 0
             self.lvl_n = self.lvl_clip = 0
             self.lvl_sq = 0.0
-        snap.update(t=round(now, 1), running=self.running, error=self.error, cc_hz=CC_HZ,
-                    tuned_hz=self.tuned_hz, tunes=self.tunes, restarts=self.restarts, on_voice=bool(self.tuned_hz and self.tuned_hz != CC_HZ))
+        voice = [{"k": d.key, "hz": d.rf, "active": now - vsync.get(d.key, 0) < VOICE_SYNC_SEC,
+                  "up": round(now - d.started)} for d in sorted(self.decs.values(), key=lambda d: d.rf) if d.key != "cc"]
+        snap.update(t=round(now, 1), running=self.running, error=self.error, cc_hz=CC_HZ, tuned_hz=CC_HZ if self.running else None,
+                    tunes=self.voice_started, restarts=self.restarts, voice=voice, on_voice=any(v["active"] for v in voice))
         tmp = self.out / "p25.json.tmp"
         tmp.write_text(json.dumps(snap))
         tmp.replace(self.out / "p25.json")
-
-    def stop(self):
-        if not self.running:
-            return
-        self.running = False
-        for f in (lambda: self.ctl.set_channel_lifetime(self.ssrc, 1), lambda: self.ctl.remove_channel(self.ssrc),
-                  lambda: self.capture.close(), lambda: self.iq_file.close(),
-                  lambda: self.proc.terminate(), lambda: self.proc.wait(3)):
-            try:
-                f()
-            except Exception:
-                pass
-        for s in self.socks + getattr(self, "clients", []):
-            try:
-                s.close()
-            except Exception:
-                pass
-        self.tuned_hz = None
-        log.info("P25: stopped")
-        self.write(time.time() + 3)

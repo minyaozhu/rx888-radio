@@ -72,6 +72,27 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid 
 .empty{color:var(--muted);padding:10px 4px}
 td.said{white-space:normal;min-width:18ch;font-family:"Barlow",system-ui,sans-serif;font-size:13.5px}
 td.said.none{color:var(--muted);font-style:italic}
+.thread{border-top:1px solid var(--line);padding:8px 2px 10px}
+.thread:first-child{border-top:0}
+.thread.following{box-shadow:inset 3px 0 0 var(--magenta);padding-left:10px;background:color-mix(in srgb,var(--magenta) 6%,transparent)}
+.th-head{display:flex;flex-wrap:wrap;align-items:center;gap:4px 10px;font:500 12.5px "IBM Plex Mono",monospace}
+.th-head .tg{font:700 16px "Barlow Condensed",sans-serif;letter-spacing:.02em}
+.th-head button{padding:4px 8px;margin-left:auto}
+.conv{margin-top:6px}
+.conv-head{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;font:500 12px "IBM Plex Mono",monospace}
+button.mini{padding:2px 7px;font-size:11px}
+.gap{font:500 11px "IBM Plex Mono",monospace;color:var(--muted);margin:6px 0 0 4px;padding-left:8px;border-left:2px dotted var(--line)}
+button.older{margin-top:6px;padding:3px 8px;font-size:11px}
+.b-follow{color:var(--magenta)}
+.overs{list-style:none;margin:6px 0 0;padding:0;display:grid;gap:2px}
+.overs li{display:grid;grid-template-columns:auto auto minmax(0,1fr) auto;gap:4px 10px;align-items:baseline;padding:3px 4px;border-radius:3px;cursor:pointer}
+.overs li:hover{background:var(--bg)}
+.overs li.playing{color:var(--magenta);font-weight:600}
+.overs li.enc{cursor:default;color:var(--muted)}
+.overs .t,.overs .src,.overs .len{font:500 12px "IBM Plex Mono",monospace;color:var(--muted)}
+.overs .said{font-size:14px;line-height:1.4}
+.overs .said.none{color:var(--muted);font-style:italic}
+@media (max-width:600px){.overs li{grid-template-columns:auto minmax(0,1fr)}.overs .src,.overs .len{display:none}}
 .livebar{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px}
 .livebar select{font:500 13px "IBM Plex Mono",monospace;background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:4px;padding:6px 8px;max-width:100%}
 .livebar input[type=range]{width:110px;accent-color:var(--magenta)}
@@ -117,7 +138,7 @@ button.on{background:var(--magenta);border-color:var(--magenta);color:#fff}
     </section>
     <section class="panel" aria-labelledby="callTitle">
       <div class="bar">
-        <h2 id="callTitle">Recorded calls</h2>
+        <h2 id="callTitle">Conversations</h2>
         <span style="display:inline-flex;gap:12px;align-items:center;flex-wrap:wrap">
           <label><input type="checkbox" id="auto"> play new calls</label>
           <label title="Encrypted calls decode to noise; they're hidden unless this is on"><input type="checkbox" id="showEnc" checked> show encrypted</label>
@@ -125,10 +146,9 @@ button.on{background:var(--magenta);border-color:var(--magenta);color:#fff}
         </span>
       </div>
       <audio id="player" controls preload="none" style="width:100%"></audio>
-      <div class="scroll"><table>
-        <thead><tr><th>Time</th><th>Talkgroup</th><th>Radio</th><th class="num">Length</th><th>Transcript</th></tr></thead>
-        <tbody id="calls"></tbody>
-      </table></div>
+      <p class="muted" style="margin:0;font-size:13px">Grouped by talkgroup, the most recently heard first. Within one, calls less than
+        30 s apart make a conversation; conversations run oldest to newest. Click a line to play it, ▶ to play a conversation.</p>
+      <div class="scroll" id="threads"></div>
     </section>
   </div>
   <section class="panel" aria-labelledby="gTitle">
@@ -136,15 +156,17 @@ button.on{background:var(--magenta);border-color:var(--magenta);color:#fff}
     <ul class="glog" id="grants"></ul>
   </section>
   <p class="caveat">The control channel is 772.30625 MHz; voice runs on Phase 2 TDMA channels around 772.6–774.7 MHz, all inside the
-    tuner's window, so following a call is a retune of one radiod channel. The tab shares the VHF tuner like the Maritime and
+    tuner's window. One decoder stays on the control channel and every voice channel in use gets its own decoder, so calls at the
+    same time are all recorded and no grant is missed while a call is decoded. The tab shares the VHF tuner like the Maritime and
     APRS tabs: it decodes only while the receiver is held here. Talkgroups are numbers (names would need the system's talkgroup list).
-    Live listening plays the calls as dsd-fme decodes them: “Follow activity” stays with the call it's playing and moves to
-    the next one when that goes quiet; picking a talkgroup plays only that one. Encrypted calls are never followed, so they stay silent.
+    Live listening plays the calls as dsd-fme decodes them: “Follow activity” stays with the conversation (talkgroup) it's
+    playing, waiting up to 5 s for a reply on any voice channel, and moves to the next one when that goes quiet; picking a talkgroup
+    plays only that one. A voice channel's first call can lose its first second while its decoder starts. Encrypted calls are never followed, so they stay silent.
     Recordings stay on this computer and are deleted after 7 days, like the public-safety ones.</p>
 </div>
 <script src="audiofocus.js?v=2"></script>
 <script src="statsreset.js?v=2" data-page="p25"></script>
-<script src="p25.js?v=10"></script>
+<script src="p25.js?v=14"></script>
 <script src="focus.js?v=2" data-focus="p25" data-what="the 700 MHz P25 system"></script>
 <script src="spectheme.js?v=3"></script>
 <script src="minispec.js?v=10"></script>

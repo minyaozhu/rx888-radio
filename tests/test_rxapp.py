@@ -1281,18 +1281,65 @@ def test_p25_api_reads_the_latest_session(tmp_path, monkeypatch):
     assert c.get("/api/p25/clip/20261108-2000/..%2Fp25.json").status_code == 404
 
 
-def test_p25_watchdog_takes_a_stranded_decoder_back_to_the_control_channel(tmp_path):
-    from rxapp.p25 import CC_HZ, P25Receiver
-    calls = []
+def _p25_rx(tmp_path, opened):
+    from rxapp.p25 import P25Receiver, _Decoder
     rx = P25Receiver(tmp_path)
-    rx.ctl = SimpleNamespace(set_frequency=lambda ssrc, f: calls.append((ssrc, f)))
-    rx.running, rx.ssrc, rx.tuner_hz, rx.if_hz, rx.started = True, 7, 773.45e6, 4.57e6, 100.0
-    rx.tuned_hz = 774.68125e6                       # left on a voice channel
-    rx.trunk.last_sync = 100.0
-    rx.watchdog(103.0)                              # 3 s: still fine
-    assert not calls
-    rx.watchdog(106.0)                              # 6 s without sync: back to the control channel
-    assert rx.tuned_hz == CC_HZ and calls == [(7, 4.57e6 - (CC_HZ - 773.45e6))]
+    rx.running, rx.tuner_hz, rx.if_hz, rx.started, rx.gen = True, 773.45e6, 4.57e6, 100.0, 1
+    rx.ctl = SimpleNamespace(set_channel_lifetime=lambda *a: None, remove_channel=lambda *a: None)
+    rx.trunk.system = {"wacn": "BEE00", "sysid": "5E4", "nac": "5E1"}
+    def fake_open(key, rf, rate, port, g, args):
+        d = _Decoder(key, rf, rate, port, 1000 + (0 if key == "cc" else 1 + key))
+        d.proc = SimpleNamespace(poll=lambda: None, terminate=lambda: None, wait=lambda t: None)
+        d.srv = SimpleNamespace(close=lambda: None)
+        rx.decs[key], rx.by_ssrc[d.ssrc] = d, d
+        opened.append((key, rf, args))
+        return d
+    rx._open = fake_open
+    return rx
+
+
+def test_p25_a_clear_grant_opens_a_voice_decoder_on_its_channel(tmp_path):
+    opened = []
+    rx = _p25_rx(tmp_path, opened)
+    rx._on_grant(1501, 774.68125e6, False, 200.0)
+    rx._on_grant(1801, 773.93125e6, True, 200.0)                 # encrypted: not worth a decoder
+    rx._on_grant(1501, 780.0e6, False, 200.0)                    # outside the tuner window
+    hz = rx.want.get_nowait()
+    assert rx.want.empty() and hz == 774.68125e6
+    rx._open_voice(hz, 1)
+    (key, rf, args), = opened
+    assert key == 0 and rf == hz and args[:3] == ["-f2", "-X", "BEE005E45E1"] and "-P" in args
+    rx._on_grant(2451, 774.68125e6, False, 250.0)                # the same channel again: no second decoder
+    assert rx.want.empty() and rx.decs[0].last_grant == 250.0
+    rx._open_voice(hz, 1)
+    assert len(opened) == 1
+
+
+def test_p25_idle_voice_decoders_close_and_dead_ones_reopen(tmp_path):
+    from rxapp.p25 import VOICE_IDLE_SEC
+    opened = []
+    rx = _p25_rx(tmp_path, opened)
+    rx.trunk.last_sync = time.time()
+    a, b = rx._open_voice(772.60625e6, 1), rx._open_voice(774.40625e6, 1)
+    assert (a.key, b.key) == (0, 1)
+    now = time.time()
+    a.last_grant, b.last_grant = now - VOICE_IDLE_SEC - 1, now
+    b.proc = SimpleNamespace(poll=lambda: 1, terminate=lambda: None, wait=lambda t: None)    # its dsd-fme died
+    rx.watchdog(now)
+    (d,) = rx.decs.values()                                  # the idle one closed; the dead one reopened
+    assert d.rf == 774.40625e6 and d is not b and len(opened) == 3
+
+
+def test_p25_trunk_keeps_slots_per_voice_channel_and_their_syncs():
+    from rxapp.p25 import Trunk
+    t = Trunk()
+    t.feed(" VCH 0 - TG: 1501; SRC: 13190001;  Group Voice", 10.0, chan=0)
+    t.feed(" VCH 0 - TG: 1801; SRC: 13331865;  Encrypted Group Voice - Abbreviated", 10.0, chan=2)
+    t.feed("Sync: +P25p2 ... WACN: BEE00; SYS: 5E4; NAC/CC: 5E1; RFSS: 001; Site: 001;", 10.0, chan=2)
+    s = t.snapshot(11.0)
+    assert s["slots"]["0:0"]["tg"] == 1501 and not s["slots"]["0:0"]["enc"]
+    assert s["slots"]["2:0"] == {"tg": 1801, "age": 1.0, "enc": True}
+    assert t.voice_sync == {2: 10.0} and not t.last_sync          # a voice channel's sync isn't the control channel's
 
 
 def test_uhf_profile_leaves_out_frs_gmrs_and_parses_as_a_window():
@@ -1593,6 +1640,20 @@ def test_p25_labels_calls_from_the_voice_channels_encryption_flag(tmp_path):
 
 
 # ---- P25 live listening and transcripts (rxapp/p25live.py) ---------------------------------------
+def test_p25_live_fills_short_holes_and_keeps_real_silence():
+    from rxapp.p25live import Concealer
+    c = Concealer()
+    voice = (np.sin(np.arange(160) / 3) * 3000).astype(np.int16)
+    hole = np.zeros(160 * 2, np.int16)                      # 40 ms the decoder dropped
+    out = np.concatenate([c.process(x) for x in (voice, voice, hole, voice)])
+    assert len(out) == 160 * 5 and np.abs(out[320:640]).max() > 1000      # filled, fading
+    assert np.abs(out[480:640]).max() < np.abs(out[320:480]).max()
+    long = c.process(np.zeros(160 * 10, np.int16))         # a real pause: only the first 3 frames filled
+    assert np.abs(long[:480]).max() > 0 and not long[480:].any()
+    odd = c.process(np.zeros(100, np.int16))                # packets not on frame boundaries: held back, not lost
+    assert len(odd) == 0 and len(c.process(np.zeros(60, np.int16))) == 160
+
+
 def _stereo(left, right, n=320):
     a = np.zeros((n, 2), np.int16)
     a[:, 0] = left
@@ -1603,19 +1664,44 @@ def _stereo(left, right, n=320):
 def test_p25_follow_stays_with_the_talking_slot_then_moves():
     from rxapp.p25live import Follower
     f = Follower(None, lambda: {})
-    assert f.pick(_stereo(1000, 1000), 0.0)[0] == 1000              # one voice on both sides: play it
-    assert f.cur == 0 and f.pick(_stereo(1000, 2000), 0.1)[0] == 1000   # two voices: stay with slot 1
-    assert f.pick(_stereo(0, 2000), 0.5)[0] == 0                     # slot 1 pauses briefly: keep waiting
-    assert f.pick(_stereo(0, 2000), 1.2)[0] == 2000 and f.cur == 1   # quiet 0.8 s: move to slot 2
+    assert f.pick(0, _stereo(1000, 1000), 0.0)[0] == 1000              # one voice on both sides: play it
+    assert f.pick(0, _stereo(1000, 2000), 0.1)[0] == 1000              # two voices: stay with the one playing
+    assert f.pick(0, _stereo(0, 2000), 0.5)[0] == 0                     # it pauses briefly: keep waiting
+    assert f.pick(0, _stereo(0, 2000), 1.2)[0] == 2000 and f.cur == (0, 1)   # quiet 0.8 s: move to slot 2
+
+
+def test_p25_follow_stays_with_a_conversation_until_it_goes_quiet():
+    from rxapp.p25live import Follower, HOLD_SEC
+    slots = {"0:0": {"tg": 2451, "age": 0.1}, "0:1": {"tg": 2801, "age": 0.5}}
+    f = Follower(None, lambda: slots)
+    assert f.pick(0, _stereo(1000, 2000), 0.0)[0] == 1000 and f.following == 2451
+    assert f.pick(0, _stereo(0, 2000), 2.0)[0] == 0                     # TG 2451 between overs: wait for its reply
+    slots["0:1"] = {"tg": 2451, "age": 0.1}                             # its reply comes on the other slot
+    slots["0:0"] = {"tg": 2801, "age": 0.2}
+    assert f.pick(0, _stereo(2000, 1000), 2.5)[0] == 1000 and f.cur == (0, 1)   # followed there
+    assert f.pick(0, _stereo(2000, 0), 2.6)[0] == 0
+    assert f.pick(0, _stereo(2000, 0), 2.6 + HOLD_SEC)[0] == 2000 and f.following == 2801   # quiet: move on
+
+
+def test_p25_follow_finds_the_reply_on_another_voice_channel_and_skips_encrypted():
+    from rxapp.p25live import Follower
+    slots = {"0:0": {"tg": 1501, "age": 0.1}, "3:1": {"tg": 4772, "age": 0.1}, "5:0": {"tg": 1801, "age": 0.1, "enc": True}}
+    f = Follower(None, lambda: slots)
+    assert f.pick(0, _stereo(1000, 1000), 0.0)[0] == 1000 and f.following == 1501
+    assert f.pick(5, _stereo(3000, 3000), 1.0) is None                 # encrypted, on another channel: never played
+    assert f.pick(3, _stereo(0, 2000), 1.5) is None                     # another talkgroup, during 1501's pause: wait
+    slots["2:0"] = {"tg": 1501, "age": 0.1}
+    assert f.pick(2, _stereo(1500, 1500), 2.0)[0] == 1500 and f.cur == (2, "m")   # 1501's reply, on channel 2
 
 
 def test_p25_talkgroup_listener_plays_only_its_talkgroup():
     from rxapp.p25live import Follower
-    slots = {"0": {"tg": 2451, "age": 0.5}, "1": {"tg": 2801, "age": 2.0}}
+    slots = {"0:0": {"tg": 2451, "age": 0.5}, "0:1": {"tg": 2801, "age": 2.0}, "4:0": {"tg": 1501, "age": 0.1}}
     f = Follower(2801, lambda: slots)
-    assert f.pick(_stereo(1000, 2000), 0)[0] == 2000                 # slot 2 is TG 2801
-    assert f.pick(_stereo(1000, 1000), 0) is None                    # one voice: slot 1 (named last) talks
-    assert Follower(1234, lambda: slots).pick(_stereo(1000, 2000), 0) is None
+    assert f.pick(0, _stereo(1000, 2000), 0)[0] == 2000                 # slot 2 is TG 2801
+    assert f.pick(0, _stereo(1000, 1000), 0) is None                    # one voice: slot 1 (named last) talks
+    assert Follower(1501, lambda: slots).pick(4, _stereo(700, 700), 0)[0] == 700      # on voice decoder 4
+    assert Follower(1234, lambda: slots).pick(0, _stereo(1000, 2000), 0) is None
 
 
 def test_p25_calls_api_adds_transcripts(tmp_path, monkeypatch):
@@ -1714,6 +1800,20 @@ def test_survey_needs_the_voice_session_paused(tmp_path, monkeypatch):
     f.write_text(json.dumps({"focus": "p25"}))
     monkeypatch.setattr(server, "FOCUS_FILE", f)
     assert TestClient(server.app, client=("127.0.0.1", 50000)).post("/api/survey/stream?lo_mhz=450&hi_mhz=470").status_code == 409
+
+
+def test_each_survey_page_keeps_its_own_last_survey(tmp_path, monkeypatch):
+    import json
+    from fastapi.testclient import TestClient
+    from rxapp import server
+    monkeypatch.setattr(server, "SURVEY_LAST", tmp_path / "survey_last.json")
+    (tmp_path / "survey_last.json").write_text(json.dumps({"range_mhz": [200, 1000]}))
+    c = TestClient(server.app, client=("127.0.0.1", 50000))
+    assert c.get("/api/survey/last").json()["range_mhz"] == [200, 1000]
+    assert c.get("/api/survey/last?page=lband").json() is None
+    (tmp_path / "survey_last_lband.json").write_text(json.dumps({"range_mhz": [1000, 1700]}))
+    assert c.get("/api/survey/last?page=lband").json()["range_mhz"] == [1000, 1700]
+    assert c.get("/api/survey/last?page=../x").status_code == 404
 
 
 def _auth_app(tmp_path):

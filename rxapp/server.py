@@ -714,6 +714,15 @@ async def p25_calls(session: Optional[str] = None, limit: int = 300):
     return calls
 
 
+@app.get("/api/p25/threads")
+async def p25_threads(session: Optional[str] = None, limit: int = 600):
+    """Recorded calls as conversations (rxapp/p25.py threads): one talkgroup, calls less than 30 s apart."""
+    from .p25 import threads
+    calls = await p25_calls(session, limit)
+    live = _session_info(P25_DIR, session).get("live")
+    return threads(calls, now=None if live else (max((c["t"] + c["secs"] for c in calls), default=0) + 1e6))
+
+
 @app.get("/api/p25/clip/{session}/{name}")
 async def p25_clip(session: str, name: str):
     path = _session_dir(P25_DIR, session) / "calls" / Path(name).name
@@ -1272,7 +1281,7 @@ async def survey_stream(lo_mhz: float = 200.0, hi_mhz: float = 1000.0, secs: flo
 
     async def run(emit):
         r = await S.scanner.survey(lo_mhz * 1e6, hi_mhz * 1e6, secs, on_window=emit)
-        SURVEY_LAST.write_text(json.dumps(r))
+        out.write_text(json.dumps(r))
         return {k: v for k, v in r.items() if k not in ("av", "mx")}
     return _ndjson(run)
 
