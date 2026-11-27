@@ -44,7 +44,7 @@ function drawCalls() {
 }
 
 function drawGrants() {
-  $('grants').innerHTML = (S.trunk.grants || []).map((g) => `<li><span class="t">${hms(g.t)}</span>TG ${g.tg} → ${mhz(g.hz)}${g.src ? ' · radio ' + g.src : ''}${g.enc ? ' · encrypted' : ''}</li>`).join('')
+  $('grants').innerHTML = (S.trunk.grants || []).filter((g) => counted(g.t)).map((g) => `<li><span class="t">${hms(g.t)}</span>TG ${g.tg} → ${mhz(g.hz)}${g.src ? ' · radio ' + g.src : ''}${g.enc ? ' · encrypted' : ''}</li>`).join('')
     || '<li class="muted">No grants yet.</li>';
 }
 
@@ -69,7 +69,7 @@ $('tgs').addEventListener('click', (e) => {
 });
 $('clearTg').addEventListener('click', () => { S.tg = null; drawTgs(); drawCalls(); });
 $('showEnc').addEventListener('change', drawCalls);
-if (window.statsReset) statsReset.onChange(drawTgs);
+if (window.statsReset) statsReset.onChange(() => poll());
 // "play new calls" is listening live: it switches the receiver here (focus.js); unticking doesn't release it
 $('auto').addEventListener('change', () => { if ($('auto').checked && window.receiverFocus) receiverFocus.ensure((f) => f === 'p25' || f === 'window:p25'); });
 
@@ -88,7 +88,7 @@ async function poll() {
     $('fLive').className = 'live' + (S.live && st.listening ? '' : ' off');
     $('fLive').lastChild.textContent = !S.live ? 'recorded' : st.listening ? 'decoding' : `away on ${st.window}`;
     const [trunk, calls] = await Promise.all([api('/api/p25/trunk' + q), api('/api/p25/calls' + q)]);
-    S.trunk = trunk; S.calls = calls;
+    S.trunk = trunk; S.calls = calls.filter((c) => counted(c.t));       // Reset stats: calls after it
     const err = trunk.error || (st.p25 && st.p25.error);
     const notice = !S.live ? 'No P25 session is running: start voice_session.py with a p25 window (see rxapp/README.md).'
       : err ? err

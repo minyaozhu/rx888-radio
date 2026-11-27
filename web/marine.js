@@ -27,7 +27,7 @@ const chLabel = (f) => { const k = Math.round(f / 25000) * 25000; return MARINE_
 const NOAA = {162400000: 'WX2 162.400', 162425000: 'WX4 162.425', 162450000: 'WX5 162.450', 162475000: 'WX3 162.475',
   162500000: 'WX6 162.500', 162525000: 'WX7 162.525', 162550000: 'WX1 162.550'};
 
-const S = {session: null, status: {}, live: false, recs: [], after: -1, vessels: [], sel: null, playing: null};
+const S = {session: null, status: {}, live: false, raw: [], recs: [], allVessels: [], after: -1, vessels: [], sel: null, playing: null};
 
 // ------------------------------------------------------------------ map
 const CATS = {cargo: ['#2A7DE1', 'Cargo'], tanker: ['#C0392B', 'Tanker'], passenger: ['#8E44AD', 'Passenger / ferry'],
@@ -78,12 +78,17 @@ function drawShips() {
   }
 }
 map.on('zoomend', drawShips);
+// Reset stats: the page shows only what came after the reset (S.raw / S.allVessels keep everything fetched)
+function afterReset(xs, key) { return window.statsReset ? xs.filter((x) => statsReset.keep(x[key])) : xs; }
 function drawCounts() {
-  $('nTx').textContent = S.recs.filter((r) => r.text && (!window.statsReset || statsReset.keep(r.t0))).length;
+  $('nTx').textContent = S.recs.filter((r) => r.text).length;
 }
-if (window.statsReset) statsReset.onChange(() => { drawCounts(); drawVesselList(); });
+if (window.statsReset) statsReset.onChange(() => {
+  S.recs = afterReset(S.raw || [], 't0'); S.vessels = afterReset(S.allVessels || [], 'last');
+  drawCounts(); drawLog(); drawShips(); drawVesselList();
+});
 function drawVesselList() {
-  $('fVes').textContent = window.statsReset ? S.vessels.filter((v) => statsReset.keep(v.last)).length : S.vessels.length;   // Reset stats
+  $('fVes').textContent = S.vessels.length;
   $('vlist').innerHTML = S.vessels.slice(0, 80).map((v) => `<li data-mmsi="${v.mmsi}"><span><b>${esc(v.shipname || 'MMSI ' + v.mmsi)}</b>
       <span style="color:${(CATS[v.category] || CATS.other)[0]}">●</span> ${esc((CATS[v.category] || CATS.other)[1])}</span>
       <span>${v.speed != null && v.speed < 102 ? v.speed.toFixed(1) + ' kn · ' : ''}${ago(v.last)}</span></li>`).join('')
@@ -287,7 +292,7 @@ $('chans').addEventListener('click', (e) => {
 // ------------------------------------------------------------------ data
 async function loadSession(name) {
   const info = await api('/api/marine' + (name ? `?session=${name}` : ''));
-  S.session = info.session; S.recs = []; S.after = -1;
+  S.session = info.session; S.raw = []; S.recs = []; S.after = -1;
   $('session').innerHTML = info.sessions.map((s) => `<option ${s === info.session ? 'selected' : ''}>${s}</option>`).join('');
   await poll();
 }
@@ -305,11 +310,13 @@ async function poll() {
       : '';
     $('notice').textContent = notice; $('notice').style.display = notice ? '' : 'none';
     const add = await api(`/api/marine/transmissions?session=${S.session}&after=${S.after}`);
-    if (add.length) { S.recs.push(...add); S.after = S.recs[S.recs.length - 1].i; }
+    if (add.length) { S.raw.push(...add); S.after = S.raw[S.raw.length - 1].i; }
+    S.recs = afterReset(S.raw, 't0');
     drawCounts();
     drawLog();
     const ves = await api(`/api/marine/vessels?session=${S.session}`);
-    S.vessels = ves.vessels || [];
+    S.allVessels = ves.vessels || [];
+    S.vessels = afterReset(S.allVessels, 'last');
     drawShips(); drawVesselList(); drawChans();
   } catch (e) {
     $('notice').textContent = `No marine session yet (${e.message}). Start voice_session.py with a marine window.`;

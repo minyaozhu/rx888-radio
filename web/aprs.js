@@ -64,7 +64,7 @@ function drawList() {
 }
 $('list').addEventListener('click', (e) => { const tr = e.target.closest('tr[data-name]'); if (tr) select(tr.dataset.name, true); });
 function drawLog() {
-  $('log').innerHTML = S.packets.slice(0, 300).map((p) => `<li data-name="${esc(p.object_name || p.from || '')}"><span class="t">${hms(p.t)}</span>${esc(p.raw)}${p.error ? ' <span style="color:var(--c-alt)">(not parsed)</span>' : ''}</li>`).join('')
+  $('log').innerHTML = S.packets.filter((p) => !window.statsReset || statsReset.keep(p.t)).slice(0, 300).map((p) => `<li data-name="${esc(p.object_name || p.from || '')}"><span class="t">${hms(p.t)}</span>${esc(p.raw)}${p.error ? ' <span style="color:var(--c-alt)">(not parsed)</span>' : ''}</li>`).join('')
     || '<li style="color:var(--muted)">No packets yet.</li>';
 }
 $('log').addEventListener('click', (e) => { const li = e.target.closest('li[data-name]'); if (li) select(li.dataset.name.trim(), true); });

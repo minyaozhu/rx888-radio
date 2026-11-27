@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// "Reset stats": a page counts only what came after the reset. Nothing is deleted; the reset time is kept in rxapp
-// (POST /api/stats/reset), so every browser sees the same counts, and "count all" undoes it.
+// "Reset stats": a page shows and counts only what came after the reset: counts, timelines, transcripts, logs,
+// maps and galleries alike. Nothing is deleted; the reset time is kept in rxapp (POST /api/stats/reset), so every
+// browser sees the same thing, and "show all" undoes it.
 // Include before the page's script: <script src="statsreset.js" data-page="ft8"></script>. The button goes at the
 // end of the page's .facts row (or into #statsBox). The page reads statsReset.since() (unix s, 0 = no reset) and
 // redraws on statsReset.onChange(fn).
@@ -21,14 +22,14 @@
   note.style.opacity = '.75';
   const undo = document.createElement('a');
   undo.href = '#';
-  undo.textContent = 'count all';
+  undo.textContent = 'show all';
   undo.style.color = 'inherit';
   box.append(btn, note, undo);
   function render() {
     const d = since ? new Date(since * 1000) : null;
-    note.textContent = d ? `counting since ${d.toLocaleString([], {month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false})}` : '';
+    note.textContent = d ? `showing since ${d.toLocaleString([], {month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false})}` : '';
     undo.style.display = d ? '' : 'none';
-    btn.title = 'Count only what is heard from now on (nothing is deleted)';
+    btn.title = 'Show and count only what is heard from now on: counts, timeline, transcript (nothing is deleted)';
   }
   function set(t) {
     t = +t || 0;

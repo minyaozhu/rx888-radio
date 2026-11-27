@@ -137,13 +137,13 @@ function drawSpots() {
   const hour = S.spots.filter((s) => s.t > cut && counted(s.t));
   $('fSpots').textContent = hour.length;
   $('fSt').textContent = new Set(hour.map((s) => s.call)).size;
-  const rows = S.spots.filter((s) => !S.band || s.band === S.band).slice(0, 300);
+  const rows = S.spots.filter((s) => counted(s.t) && (!S.band || s.band === S.band)).slice(0, 300);
   setHTML($('spots'), rows.map((s) => { const p = typeof prefixInfo === 'function' ? prefixInfo(s.call) : null;
     return `<tr data-f="${s.freq_hz}" data-call="${esc(s.call)}"><td>${utcPtCell(s.t)}</td><td>${esc(s.band)}</td><td>${khz(s.freq_hz)}</td><td class="c">${esc(s.call)}</td>
       <td class="m">${esc(p ? p.name : '')}</td><td>${Math.round(s.wpm)}</td><td>${Math.round(s.snr)}</td></tr>`; }).join('')
     || `<tr><td colspan="7" class="m">No spots yet${S.band ? ' on ' + S.band : ''}.</td></tr>`);
   buildStations(); drawMap();
-  const log = S.log.filter((x) => !S.band || x.band === S.band).slice(0, 120);
+  const log = S.log.filter((x) => counted(x.t) && (!S.band || x.band === S.band)).slice(0, 120);
   setHTML($('log'), log.map((x) => `<li data-f="${x.freq_hz}"><span class="h">${utc(x.t)}–${utc(x.t_end)} UTC · ${ptParts(x.t).hm}–${ptTime(x.t_end)} · ${esc(x.band)} ${khz(x.freq_hz)} · ${Math.round(x.wpm)} wpm</span>${marked(x.text)}</li>`).join('')
     || '<li class="m" style="cursor:default;color:var(--muted)">Transmissions land here when a station goes quiet.</li>');
 }

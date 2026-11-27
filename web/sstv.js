@@ -108,11 +108,12 @@ function drawLive() {
 if (window.statsReset) statsReset.onChange(() => drawGallery());
 function drawGallery() {
   const band = $('fBand').value;
-  const pics = S.pics.filter((p) => !band || p.band === band);
-  $('fPics').textContent = window.statsReset ? S.pics.filter((p) => statsReset.keep(p.t)).length : S.pics.length;   // Reset stats: the gallery stays
-  $('fLast').textContent = S.pics.length ? when(S.pics[0].t) : '–';
+  const all = window.statsReset ? S.pics.filter((p) => statsReset.keep(p.t)) : S.pics;   // Reset stats: pictures after it
+  const pics = all.filter((p) => !band || p.band === band);
+  $('fPics').textContent = all.length;
+  $('fLast').textContent = all.length ? when(all[0].t) : '–';
   $('count').textContent = pics.length ? `${pics.length} picture${pics.length > 1 ? 's' : ''}` : '';
-  const bands = [...new Set(S.pics.map((p) => p.band))].sort();
+  const bands = [...new Set(all.map((p) => p.band))].sort();
   const prev = $('fBand').value;
   $('fBand').innerHTML = '<option value="">all bands</option>' + bands.map((b) => `<option>${esc(b)}</option>`).join('');
   $('fBand').value = bands.includes(prev) ? prev : '';

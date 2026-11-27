@@ -29,7 +29,7 @@ const chName = (f) => `${mhz(f)}${psLabel(f) ? ' ' + psLabel(f) : ''}`;
 // The same page serves public safety (safety.html) and UHF business radio (uhfvoice.html): <html data-service>.
 const SVC = document.documentElement.dataset.service || 'safety';
 const INCIDENTS = SVC === 'safety';             // incidents: police and CHP codes and highway places
-const S = {session: null, recs: [], after: -1, status: {}, live: false, sel: null};
+const S = {session: null, raw: [], recs: [], after: -1, status: {}, live: false, sel: null};
 const clips = clipPlayer({
   url: (r) => `/api/${SVC}/clip/${S.session}/${r.clip}`,
   next: (r) => S.recs.find((x) => x.t0 > r.t0 && visible(x)) || null,      // play on: the next one in time
@@ -96,14 +96,19 @@ function select(r, pan) {
 }
 $('clip').addEventListener('click', () => { if (S.sel) clips.toggle(S.sel); });
 
-// Reset stats: the counts and codes start from the reset; the transcript and timeline keep everything
-const counted = () => (window.statsReset ? S.recs.filter((r) => statsReset.keep(r.t0)) : S.recs);
+// Reset stats: the page shows only what came after the reset (S.raw keeps everything fetched, S.recs is shown)
+const afterReset = (raw) => (window.statsReset ? raw.filter((r) => statsReset.keep(r.t0)) : raw);
+const counted = () => S.recs;
 function drawCounts() {
-  const recs = counted();
-  $('nTx').textContent = recs.length;
-  $('nCh').textContent = new Set(recs.map((r) => Math.round(r.freq_hz))).size;
+  $('nTx').textContent = S.recs.length;
+  $('nCh').textContent = new Set(S.recs.map((r) => Math.round(r.freq_hz))).size;
 }
-if (window.statsReset) statsReset.onChange(() => { drawCounts(); drawCodes(); });
+if (window.statsReset) statsReset.onChange(() => {
+  S.recs = afterReset(S.raw);
+  if (S.sel && !S.recs.includes(S.sel)) S.sel = null;
+  drawCounts(); drawCodes(); drawLog(); drawChans(); drawTimeline();
+  if (INCIDENTS) drawIncidents();
+});
 function drawCodes() {
   const seen = new Map();
   for (const r of counted()) for (const [, k, m] of [...psCodes(r.text), ...psCodes(r.text_atc)]) seen.set(k, [m, (seen.get(k)?.[1] || 0) + 1]);
@@ -322,7 +327,8 @@ async function pollIncidents() {
 function shown() {
   const h = $('incWin').value;
   const ref = S.live ? Date.now() / 1000 : Math.max(0, ...I.list.map((x) => x.t1));
-  return I.list.filter((x) => h === 'all' || x.t1 >= ref - +h * 3600 || x.id === I.sel);
+  return I.list.filter((x) => (h === 'all' || x.t1 >= ref - +h * 3600 || x.id === I.sel)
+    && (!window.statsReset || statsReset.keep(x.t1)));           // Reset stats: incidents still going after it
 }
 
 function drawIncidents() {
@@ -413,7 +419,7 @@ $('incWin').addEventListener('change', () => { $('incWin').blur(); drawIncidents
 // ------------------------------------------------------------------ data
 async function loadSession(name) {
   const info = await api(`/api/${SVC}` + (name ? `?session=${name}` : ''));
-  S.session = info.session; S.recs = []; S.after = -1; S.sel = null;
+  S.session = info.session; S.raw = []; S.recs = []; S.after = -1; S.sel = null;
   $('session').innerHTML = info.sessions.map((s) => `<option ${s === info.session ? 'selected' : ''}>${s}</option>`).join('');
   await poll(true);
 }
@@ -460,8 +466,9 @@ async function poll(full) {
       : `<span class="away">away on ${esc(st.window)} (${esc(st.window_service)})${clock ? ' · next switch in ' + clock : ''}</span>`;
     const add = await api(`/api/${SVC}/transmissions?session=${S.session}&after=${S.after}`);
     if (add.length || full) {
-      S.recs.push(...add);
-      S.after = S.recs.length ? S.recs[S.recs.length - 1].i : -1;
+      S.raw.push(...add);
+      S.after = S.raw.length ? S.raw[S.raw.length - 1].i : -1;
+      S.recs = afterReset(S.raw);
       drawCounts();
       const freqs = [...new Set(S.recs.map((r) => Math.round(r.freq_hz)))].sort((a, b) => a - b);
       setOptions($('fCh'), '<option value="">all channels</option>' + freqs.map((f) => `<option value="${f}">${esc(chName(f))}</option>`).join(''));

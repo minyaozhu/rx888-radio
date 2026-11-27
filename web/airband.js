@@ -76,7 +76,7 @@ function callsignOf(texts) {
 }
 
 // ------------------------------------------------------------------ state
-const S = {session: null, recs: [], after: -1, status: {}, live: false, follow: true, cursor: null, sel: null,
+const S = {session: null, raw: [], recs: [], after: -1, status: {}, live: false, follow: true, cursor: null, sel: null,
            flights: [], fIndex: new Map()};
 const clips = clipPlayer({
   url: (r) => `/api/airband/clip/${S.session}/${r.clip}`,
@@ -107,14 +107,18 @@ function derive() {
   S.fIndex = new Map(list.map((f, i) => [f.id, i]));
   drawCounts();
 }
-// Reset stats: the counts start from the reset; the timeline and transcript keep everything
+// Reset stats: the page shows only what came after the reset (S.raw keeps everything fetched, S.recs is shown)
+function shown(raw) { return window.statsReset ? raw.filter((r) => statsReset.keep(r.t0)) : raw; }
 function drawCounts() {
-  const counted = window.statsReset ? S.recs.filter((r) => statsReset.keep(r.t0)) : S.recs;
-  $('nTx').textContent = counted.length;
-  $('nFlights').textContent = new Set(counted.map((r) => r.f).filter((f) => f && f !== '?')).size;
+  $('nTx').textContent = S.recs.length;
+  $('nFlights').textContent = new Set(S.recs.map((r) => r.f).filter((f) => f && f !== '?')).size;
 }
 
-if (window.statsReset) statsReset.onChange(drawCounts);
+if (window.statsReset) statsReset.onChange(() => {
+  S.recs = shown(S.raw || []);
+  if (S.sel && !S.recs.includes(S.sel)) S.sel = null;
+  derive(); drawLog(); drawChans(); render();
+});
 
 // ------------------------------------------------------------------ timeline
 const tl = $('timeline');
@@ -618,7 +622,7 @@ $('chans').addEventListener('click', (e) => {
 // ------------------------------------------------------------------ data
 async function loadSession(name) {
   const info = await api('/api/airband' + (name ? `?session=${name}` : ''));
-  S.session = info.session; S.recs = []; S.after = -1; S.sel = null;
+  S.session = info.session; S.raw = []; S.recs = []; S.after = -1; S.sel = null;
   for (const id in pl) { pl[id].remove(); delete pl[id]; }
   $('session').innerHTML = info.sessions.map((s) => `<option ${s === info.session ? 'selected' : ''}>${s}</option>`).join('');
   await poll(true);
@@ -638,8 +642,9 @@ async function poll(full) {
     }
     const add = await api(`/api/airband/transmissions?session=${S.session}&after=${S.after}`);
     if (add.length || full) {
-      S.recs.push(...add);
-      S.after = S.recs.length ? S.recs[S.recs.length - 1].i : -1;
+      S.raw.push(...add);
+      S.after = S.raw.length ? S.raw[S.raw.length - 1].i : -1;
+      S.recs = shown(S.raw);
       derive(); drawLog();
       if (S.follow && add.length) select(add[add.length - 1]);
       if (S.cursor == null) S.cursor = S.live ? Date.now() / 1000 : (S.recs.length ? S.recs[S.recs.length - 1].t1 : Date.now() / 1000);
