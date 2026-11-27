@@ -8,26 +8,16 @@
 const PANEL_PRESETS = [
   {lo: 0, hi: 2e6, label: '0–2 MHz (LF / MW)'},
   {lo: 2e6, hi: 30e6, label: '2–30 MHz (HF)'},
-  {lo: 530e3, hi: 1.71e6, label: 'AM broadcast'},
-  {lo: 3.5e6, hi: 4e6, label: '80 / 75 m'},
-  {lo: 5.9e6, hi: 6.2e6, label: '49 m shortwave'},
-  {lo: 7e6, hi: 7.3e6, label: '40 m'},
-  {lo: 9.4e6, hi: 9.9e6, label: '31 m shortwave'},
-  {lo: 14e6, hi: 14.35e6, label: '20 m'},
   {lo: 26.96e6, hi: 27.41e6, label: 'CB'},
-  {lo: 28e6, hi: 29.7e6, label: '10 m'},
-  {lo: 50e6, hi: 54e6, label: '6 m'},
   {lo: 88e6, hi: 108e6, label: 'FM broadcast'},
   {lo: 118e6, hi: 137e6, label: 'Airband'},
   {lo: 144e6, hi: 148e6, label: '2 m'},
   {lo: 150e6, hi: 174e6, label: 'VHF-high (public safety, marine)'},
-  {lo: 156e6, hi: 163e6, label: 'Marine VHF'},
-  {lo: 162.3e6, hi: 162.6e6, label: 'NOAA weather'},
   {lo: 400e6, hi: 470e6, label: 'UHF 400–470 MHz'},
   {lo: 420e6, hi: 450e6, label: '70 cm'},
   {lo: 462e6, hi: 468e6, label: 'FRS / GMRS'},
 ];
-const PANEL_DEFAULTS = [0, 1, 12, 17].map((i) => PANEL_PRESETS[i]);
+const PANEL_DEFAULTS = ['0–2 MHz (LF / MW)', '2–30 MHz (HF)', 'Airband', '70 cm'].map((l) => PANEL_PRESETS.find((p) => p.label === l));
 const PANEL_LIVE_S = 3;                     // a column counts as live if updated this recently
 const PG = {panels: [], ws: null, info: null, feedOf: {}};   // feedOf: "lo:hi" -> feed id
 
