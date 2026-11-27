@@ -1260,7 +1260,7 @@ def test_p25_api_reads_the_latest_session(tmp_path, monkeypatch):
     wav.write_bytes(b"RIFF" + b"\0" * 100)
     os.utime(wav, (1000, 1000))
     monkeypatch.setattr(server, "P25_DIR", tmp_path / "p25")
-    c = TestClient(server.app)
+    c = TestClient(server.app, client=("127.0.0.1", 50000))
     assert c.get("/api/p25/trunk").json()["system"]["wacn"] == "BEE00"
     calls = c.get("/api/p25/calls").json()
     assert calls[0]["tg"] == 1001
@@ -1302,7 +1302,7 @@ def test_uhf_api_serves_transmissions(tmp_path, monkeypatch):
                                                        "text": "copy", "wav": str(d / "a.wav")}) + "\n")
     (d / "a.wav").write_bytes(b"RIFF" + b"\0" * 40)
     monkeypatch.setattr(server, "UHF_DIR", tmp_path / "uhf")
-    c = TestClient(server.app)
+    c = TestClient(server.app, client=("127.0.0.1", 50000))
     tx = c.get("/api/uhf/transmissions").json()
     assert tx[0]["text"] == "copy" and tx[0]["clip"] == "a.wav"
     assert c.get("/api/uhf/clip/20261108-2100/a.wav").status_code == 200
@@ -1416,7 +1416,7 @@ def test_ssb_transcripts_api(tmp_path, monkeypatch):
     (day / "transcripts.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
     (day / "b.wav").write_bytes(b"RIFF" + b"\0" * 40)
     monkeypatch.setattr(server.S, "ssbv", tr, raising=False)
-    c = TestClient(server.app)
+    c = TestClient(server.app, client=("127.0.0.1", 50000))
     assert [r["text"] for r in c.get("/api/ssb/transcripts").json()] == ["CQ CQ this is W6ABC"]   # no-words hidden
     assert len(c.get("/api/ssb/transcripts?empty=true").json()) == 2
     assert c.get("/api/ssb/transcripts?after=15&empty=true").json()[0]["t0"] == 20.0
@@ -1491,7 +1491,7 @@ def test_stats_reset_api_sets_and_clears_a_page(monkeypatch, tmp_path):
     from rxapp.config import Runtime
     rt = Runtime(tmp_path / "settings.json")
     monkeypatch.setattr(server, "RUNTIME", rt)
-    c = TestClient(server.app)
+    c = TestClient(server.app, client=("127.0.0.1", 50000))
     t = c.post("/api/stats/reset", json={"page": "ft8"}).json()["ft8"]
     assert abs(t - time.time()) < 5 and Runtime(tmp_path / "settings.json").stats_reset["ft8"] == t   # kept
     assert c.get("/api/stats/reset").json() == {"ft8": t}
@@ -1510,7 +1510,7 @@ def test_aprs_stations_since_counts_only_later_packets(tmp_path, monkeypatch):
     (d / "packets.jsonl").write_text("".join(json.dumps(p) + "\n" for p in
                                              [{"t": 50, "from": "W6OLD"}, {"t": 60, "from": "K6ABC"}, {"t": 250, "from": "K6ABC"}]))
     monkeypatch.setattr(server, "APRS_DIR", tmp_path)
-    c = TestClient(server.app)
+    c = TestClient(server.app, client=("127.0.0.1", 50000))
     assert c.get(f"/api/aprs/stations?session={d.name}").json()["packets"] == 3
     r = c.get(f"/api/aprs/stations?session={d.name}&since=100").json()
     assert r["packets"] == 1 and [(s["name"], s["packets"]) for s in r["stations"]] == [("K6ABC", 1)]
@@ -1668,3 +1668,68 @@ def test_p25_other_slots_alg_continuation_doesnt_mark_a_clear_talkgroup():
             "        ALG ID: 0x84 KEY ID: 0xA100 MI: 0x0B8DB825F77C12E5 MPTT"]):
         tr.feed(line, 100.0 + i * 0.1)
     assert {tg for _, tg in tr.enc_calls} == {1651} and tr.snapshot(101)["enc_tgs"] == [1651]
+
+
+def test_panels_describe_reports_the_range_a_scan_is_capturing():
+    from rxapp.panels import PanelHub
+    radio = SimpleNamespace(band="hf", vhf=SimpleNamespace(center_hz=None))
+    hub = PanelHub.__new__(PanelHub)
+    hub.radio, hub.hf, hub._next = radio, {}, 1
+    hub.scan_state = lambda: None
+    assert hub.describe([])["scan"] is None
+    st = {"band_lo": 88.1e6, "band_hi": 107.9e6, "lo": 92e6, "hi": 96.6e6}
+    hub.scan_state = lambda: st
+    assert hub.describe([])["scan"] == st
+
+
+def test_scanner_state_is_the_band_and_the_window_being_captured():
+    from rxapp.jobs import Scanner
+    sc = Scanner.__new__(Scanner)
+    sc.active = sc.band_range = None
+    assert sc.state() is None
+    sc.band_range, sc.active = (88.1e6, 107.9e6), (92e6, 96.6e6)
+    assert sc.state() == {"band_lo": 88.1e6, "band_hi": 107.9e6, "lo": 92e6, "hi": 96.6e6}
+    sc.active = None                                  # between two windows: still scanning the band
+    assert sc.state() == {"band_lo": 88.1e6, "band_hi": 107.9e6, "lo": None, "hi": None}
+
+
+# ---- live UHF survey (rxapp/jobs.py Scanner.survey) ----------------------------------------------
+
+
+def test_survey_steps_the_tuner_and_reports_100khz_cells(monkeypatch):
+    import asyncio
+    from rxapp.jobs import Scanner
+    moves, seen = [], []
+    vhf = SimpleNamespace(center_hz=773.45e6, if_hz=10e6)
+    vhf.to_rf = lambda f: f - vhf.if_hz + vhf.center_hz            # (the real tuner inverts; the cells don't care)
+
+    async def move(c):
+        moves.append(c)
+        vhf.center_hz = c
+    radio = SimpleNamespace(band="vhf", vhf=vhf, move_tuner=move)
+    sc = Scanner(SimpleNamespace(radio=radio, bins=2048, sweeping=False), None)
+
+    async def capture(center, bin_hz, secs):
+        f = center + (np.arange(2048) - 1024) * bin_hz
+        a = np.full(2048, -120.0)
+        a[np.argmin(np.abs(f - vhf.if_hz + vhf.center_hz - 462.5625e6))] = -95    # one carrier, +25 dB
+        seen.append(sc.state())
+        return f, a, a + 3
+    monkeypatch.setattr(sc, "_capture_peak", capture)
+    parts = []
+    r = asyncio.run(sc.survey(450e6, 470e6, 0.5, on_window=parts.append))
+    assert len(r["av"]) == 200 and r["windows"] == len(parts) == 3
+    i = int((462.5625e6 - 450e6) // 100e3)
+    assert r["av"][i] == 25.0 and r["mx"][i] == 28.0 and max(v for v in r["av"] if v is not None) == 25.0
+    assert seen[0]["band_lo"] == 450e6 and seen[0]["lo"] is not None             # the tiles see the survey
+    assert moves[-1] == 773.45e6 and sc.state() is None                          # the tuner back home
+
+
+def test_survey_needs_the_voice_session_paused(tmp_path, monkeypatch):
+    import json
+    from fastapi.testclient import TestClient
+    from rxapp import server
+    f = tmp_path / "voice_control.json"
+    f.write_text(json.dumps({"focus": "p25"}))
+    monkeypatch.setattr(server, "FOCUS_FILE", f)
+    assert TestClient(server.app, client=("127.0.0.1", 50000)).post("/api/survey/stream?lo_mhz=450&hi_mhz=470").status_code == 409

@@ -55,6 +55,11 @@ h3{font:700 22px/1.1 "Barlow Condensed",sans-serif;margin:0}
 .legend .l-go{background:var(--band-go);border:1px solid var(--band-go-edge)}
 .legend .l-no{background:var(--band-no);border:1px dashed var(--magenta)}
 .zoombtns{display:flex;flex-wrap:wrap;gap:6px}
+.livebar{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px;margin-top:8px;font:500 13px "IBM Plex Mono",monospace}
+.livebar select{font:500 13px "IBM Plex Mono",monospace;background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:4px;padding:4px 6px}
+.livebar .note{color:var(--muted)}
+#survey.on{background:var(--magenta);border-color:var(--magenta);color:#fff}
+.chart .sweep{fill:var(--magenta);opacity:.12}
 button{font:600 12px/1 "Barlow Condensed",sans-serif;letter-spacing:.08em;text-transform:uppercase;background:transparent;color:var(--ink);
   border:1px solid var(--line);border-radius:4px;padding:6px 9px;cursor:pointer}
 button:hover{border-color:var(--magenta);color:var(--magenta)}
@@ -112,8 +117,10 @@ tr.k-spur td,tr.k-tv td,tr.k-local td{color:var(--muted)}
     <div class="facts" id="facts"></div>
   </header>
 
-  <p class="notice">A survey, not a live page: these are the measurements from one morning. Repeating it needs the receiver for about
-    15 minutes (the recorder paused, and no page listening meanwhile).</p>
+  <p class="notice">The chart starts from the survey of one morning (the cards and the signals table below are from it). “Survey live”
+    sweeps the range on the chart again now and redraws it window by window: it needs the receiver, so it pauses the voice session
+    (pages listening on VHF lose their audio meanwhile). The whole 200–1000 MHz takes about 3 minutes at 1.5 s per window; a zoomed
+    range only its part.</p>
 
   <section class="panel" aria-labelledby="chartTitle">
     <div class="chartbar">
@@ -124,6 +131,12 @@ tr.k-spur td,tr.k-tv td,tr.k-local td{color:var(--muted)}
       </div>
     </div>
     <div class="zoombtns" id="zooms" role="group" aria-label="Chart range"></div>
+    <div class="livebar">
+      <button type="button" id="survey">Survey live</button>
+      <label>look <select id="secs" aria-label="Seconds per tuner window"><option value="1">1 s</option><option value="1.5" selected>1.5 s</option><option value="3">3 s</option><option value="6">6 s</option></select> per window</label>
+      <span id="surveyNote" class="note"></span>
+      <span id="focusBox"></span>
+    </div>
     <div class="chart" id="chart"><div class="tip" id="tip" role="status"></div></div>
     <p class="caption" id="caption"></p>
   </section>
@@ -150,6 +163,10 @@ tr.k-spur td,tr.k-tv td,tr.k-local td{color:var(--muted)}
       occasional traffic; the 20-second looks cover 432–436, 450–471, 769–776, 851–869 and 902–929 MHz.</p>
   </section>
 </div>
-<script src="uhf.js?v=2"></script>
+<script src="ndjson.js?v=1"></script>
+<script src="uhf.js?v=4"></script>
+<script src="focus.js?v=2" data-focus="pause" data-what="the UHF survey (the voice session paused)"></script>
+<script src="spectheme.js?v=3"></script>
+<script src="minispec.js?v=9"></script>
 </body>
 </html>

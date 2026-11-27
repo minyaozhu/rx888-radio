@@ -155,3 +155,19 @@ async function refresh() {
   } catch (e) { $('fMon').lastChild.textContent = 'rxapp not reachable'; }
 }
 refresh(); setInterval(refresh, 3000);
+
+// the spectrum tile (minispec.js): the channel receiving a picture now, else the busiest one, else 20 m
+// the spectrum tile (minispec.js): every SSTV channel, each one's 3 kHz shaded (the one receiving a picture stronger);
+// zoom: that channel, or the busiest
+window.miniSpecRange = () => {
+  const ch = ((S.info && S.info.channels) || []).slice().sort((a, b) => a.freq_hz - b.freq_hz);
+  if (!ch.length) return null;
+  const seg = (c) => (c.mode === 'lsb' ? [c.freq_hz - 3000, c.freq_hz] : [c.freq_hz, c.freq_hz + 3000]);
+  const now = ch.find((x) => x.live) || ch.find((x) => x.state && x.state !== 'listening');
+  const segs = ch.map((c) => ({lo: seg(c)[0], hi: seg(c)[1], label: c.band, on: c === now}));
+  const lo = segs[0].lo, hi = segs[segs.length - 1].hi, pad = (hi - lo) * 0.02;
+  const z = now || [...ch].sort((a, b) => b.pictures - a.pictures || b.triggers - a.triggers || (b.band === '20m') - (a.band === '20m'))[0];
+  const [zl, zh] = seg(z);
+  return {lo: Math.max(0, lo - pad), hi: hi + pad, label: `SSTV · ${ch.length} channels · ${(lo / 1e6).toFixed(2)}–${(hi / 1e6).toFixed(2)} MHz`, segs,
+          zoom: {lo: zl - 300, hi: zh + 300, label: `SSTV ${z.band} · ${(z.freq_hz / 1e3).toFixed(1)} kHz ${z.mode.toUpperCase()}`, marks: [{f: z.freq_hz, label: 'dial'}]}};
+};

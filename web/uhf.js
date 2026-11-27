@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // UHF survey: the 200-1000 MHz sweep (uhf_survey.json), what each band would give as a tab, and the signals measured.
+// "Survey live" sweeps the chart's range again (POST /api/survey/stream, rxapp/jobs.py Scanner.survey) and redraws the
+// chart window by window; the last live survey (GET /api/survey/last) is laid over the morning's on load.
 'use strict';
 
 const $ = (id) => document.getElementById(id);
@@ -84,6 +86,7 @@ const VERDICT = {go: 'v-go', check: 'v-check', legal: 'v-legal', no: 'v-no'};
 const KIND = {signal: 'signal', spur: 'tuner spur (16 MHz harmonic)', tv: 'TV pilot', local: 'steady local carrier'};
 
 let D = null, view = null;
+const LIVE = {running: false, win: null, last: null};
 
 // ------------------------------------------------------------------ chart
 const W = 1200, H = 300, M = {l: 44, r: 12, t: 26, b: 28};
@@ -113,6 +116,11 @@ function draw() {
     parts.push(`<rect x="${a}" y="${M.t}" width="${Math.max(1, b - a)}" height="${H - M.t - M.b}" fill="var(--${go ? 'band-go' : 'band-no'})"
       stroke="var(--${go ? 'band-go-edge' : 'magenta'})" stroke-width="1" ${go ? '' : 'stroke-dasharray="3 3"'}/>`);
     if (b - a > 34) parts.push(`<text class="bandlab" x="${(a + b) / 2}" y="${M.t - 8}" text-anchor="middle">${esc(o.title.split(' (')[0].replace('UHF business and public safety', 'UHF voice'))}</text>`);
+  }
+  // the tuner window a live survey is sweeping now
+  if (LIVE.running && LIVE.win && LIVE.win[1] > lo && LIVE.win[0] < hi) {
+    const a = X(Math.max(lo, LIVE.win[0])), b = X(Math.min(hi, LIVE.win[1]));
+    parts.push(`<rect class="sweep" x="${a}" y="${M.t}" width="${Math.max(2, b - a)}" height="${H - M.t - M.b}"/>`);
   }
   // grid and axes
   for (let v = 0; v <= top; v += 10) parts.push(`<g class="grid"><line x1="${M.l}" x2="${W - M.r}" y1="${Y(v)}" y2="${Y(v)}"/></g>
@@ -163,6 +171,58 @@ function viewFor(o) {
   return {key: o.id, range: [z.lo, z.hi], zoom: o.zoom};
 }
 
+// ------------------------------------------------------------------ live survey
+// lay a survey's 100 kHz cells (from lo_mhz) over the chart's data
+function merge(loMhz, start, av, mx) {
+  const base = Math.round((loMhz - D.range_mhz[0]) / (D.step_hz / 1e6)) + start;
+  av.forEach((v, j) => { const i = base + j; if (v != null && i >= 0 && i < D.av.length) { D.av[i] = v; D.mx[i] = mx[j]; } });
+}
+let redrawTimer = null;
+const redrawSoon = () => { if (!redrawTimer) redrawTimer = setTimeout(() => { redrawTimer = null; draw(); }, 250); };
+function liveFacts() {
+  const l = LIVE.last;
+  $('liveFact').innerHTML = l ? `<b>live</b>${new Date(l.made * 1000).toLocaleString([], {dateStyle: 'medium', timeStyle: 'short'})} · ${l.range_mhz[0]}–${l.range_mhz[1]} MHz${l.stopped ? ' (stopped early)' : ''}` : '';
+}
+async function startSurvey() {
+  // the range on the chart (a close-up from the morning's data becomes the same range at 100 kHz)
+  let [lo, hi] = view.range;
+  lo = Math.max(D.range_mhz[0], Math.floor(lo * 10) / 10); hi = Math.min(D.range_mhz[1], Math.ceil(hi * 10) / 10);
+  if (view.zoom) setView({key: view.key + '-live', range: [lo, hi]});
+  const secs = +$('secs').value;
+  LIVE.running = true; LIVE.win = null;
+  $('survey').textContent = 'Stop'; $('survey').classList.add('on');
+  $('surveyNote').textContent = 'taking the receiver…';
+  try {
+    if (window.receiverFocus) await receiverFocus.ensure((f) => f === 'pause');   // the recorder must not move the tuner
+    const h = await (await fetch('/api/health')).json();
+    if (h.band !== 'vhf') {
+      await fetch('/api/band', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({band: 'vhf'})});
+      await new Promise((r) => setTimeout(r, 1500));
+    }
+    $('surveyNote').textContent = `sweeping ${lo}–${hi} MHz…`;
+    const t0 = Date.now();
+    const r = await postStream(`/api/survey/stream?lo_mhz=${lo}&hi_mhz=${hi}&secs=${secs}`, {}, (p) => {
+      merge(lo, p.start, p.av, p.mx);
+      LIVE.win = [lo + p.start * D.step_hz / 1e6, lo + (p.start + p.av.length) * D.step_hz / 1e6];
+      const left = (Date.now() - t0) / p.window * (p.windows - p.window) / 1000;
+      $('surveyNote').textContent = `window ${p.window} of ${p.windows} · ${LIVE.win[0].toFixed(1)}–${LIVE.win[1].toFixed(1)} MHz · about ${Math.ceil(left / 60)} min left`;
+      redrawSoon();
+    });
+    LIVE.last = {...r, range_mhz: r.range_mhz};
+    $('surveyNote').textContent = `${r.stopped ? 'stopped' : 'done'}: ${r.windows} windows in ${Math.round(r.took_sec)} s · the tuner is back where it was`;
+  } catch (e) {
+    $('surveyNote').textContent = 'survey failed: ' + e.message;
+  }
+  LIVE.running = false; LIVE.win = null;
+  $('survey').textContent = 'Survey live'; $('survey').classList.remove('on'); $('survey').disabled = false;
+  liveFacts(); draw();
+}
+$('survey').addEventListener('click', async () => {
+  if (!LIVE.running) { startSurvey(); return; }
+  $('survey').disabled = true; $('surveyNote').textContent = 'stopping after this window…';
+  try { await fetch('/api/survey/stop', {method: 'POST'}); } catch (e) { /* rxapp restarting */ }
+});
+
 // ------------------------------------------------------------------ cards
 function drawCards() {
   $('cards').innerHTML = OPPS.map((o) => `<article class="panel card" id="opp-${o.id}">
@@ -205,7 +265,11 @@ function drawTable() {
   const real = D.signals.filter((s) => s.kind === 'signal').length;
   $('facts').innerHTML = `<span><b>swept</b>${new Date(D.made * 1000).toLocaleString([], {dateStyle: 'medium', timeStyle: 'short'})}</span>
     <span><b>range</b>200–1000 MHz</span><span><b>look</b>${D.first_pass_secs} s per window, 20 s on 5 bands</span>
-    <span><b>signals</b>${real} (+${D.signals.length - real} spurs, pilots, local)</span>`;
+    <span><b>signals</b>${real} (+${D.signals.length - real} spurs, pilots, local)</span><span id="liveFact"></span>`;
+  try {                                                       // the last live survey, over the morning's
+    const l = await (await fetch('/api/survey/last')).json();
+    if (l && l.av) { merge(l.range_mhz[0], 0, l.av, l.mx); LIVE.last = l; liveFacts(); }
+  } catch (e) { /* none yet */ }
   const zb = [{key: 'all', label: '200–1000 MHz', range: D.range_mhz}, ...OPPS.filter((o) => o.zoom && o.verdict !== 'no')
     .map((o) => ({...viewFor(o), label: o.freq.split(' ')[0] + ' ' + o.title.split(' (')[0].split(' ').slice(0, 2).join(' ')}))];
   $('zooms').innerHTML = zb.map((z) => `<button type="button" data-key="${z.key}" aria-pressed="false">${esc(z.label)}</button>`).join('');
@@ -215,3 +279,6 @@ function drawTable() {
   $('fBand').addEventListener('change', drawTable); $('fAll').addEventListener('change', drawTable);
   drawCards(); drawTable(); setView(zb[0]);
 })();
+
+// the spectrum tile (minispec.js): while a live survey runs, its whole range with the window being swept highlighted
+window.miniSpecRange = () => (LIVE.running && miniSpec.scan() ? miniSpec.scanRange('UHF survey') : null);

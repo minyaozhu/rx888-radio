@@ -101,18 +101,22 @@ async def check(scanner, items: List[dict], frames: int = 12, bin_hz: float = 25
     todo = sorted(items, key=lambda x: x["freq_hz"])
     out = []
     async with scanner.lock:
-        i = 0
-        while i < len(todo):
-            start = todo[i]["freq_hz"] - 45e3
-            group = [x for x in todo[i:] if x["freq_hz"] + 45e3 <= start + span]
-            i += len(group)
-            freqs, db, _ = await scanner._capture(start + span / 2, bin_hz, frames)
-            new = []
-            for x in group:
-                s = passband_snr(freqs, db, x["freq_hz"], x["mode"])
-                new.append({"freq_hz": x["freq_hz"], "snr_db": None if np.isnan(s) else round(s, 1)})
-            out += new
-            if on_results and new:
-                on_results(new)
-            await asyncio.sleep(0)
+        scanner.band_range = (todo[0]["freq_hz"] - 45e3, todo[-1]["freq_hz"] + 45e3) if todo else None
+        try:
+            i = 0
+            while i < len(todo):
+                start = todo[i]["freq_hz"] - 45e3
+                group = [x for x in todo[i:] if x["freq_hz"] + 45e3 <= start + span]
+                i += len(group)
+                freqs, db, _ = await scanner._capture(start + span / 2, bin_hz, frames)
+                new = []
+                for x in group:
+                    s = passband_snr(freqs, db, x["freq_hz"], x["mode"])
+                    new.append({"freq_hz": x["freq_hz"], "snr_db": None if np.isnan(s) else round(s, 1)})
+                out += new
+                if on_results and new:
+                    on_results(new)
+                await asyncio.sleep(0)
+        finally:
+            scanner.band_range = None
     return out

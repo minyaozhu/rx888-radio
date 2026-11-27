@@ -270,3 +270,17 @@ async function pollSpots() {
 }
 pollInfo().then(pollLive); pollHome().then(pollSpots);
 setInterval(pollLive, 1000); setInterval(pollInfo, 5000); setInterval(pollSpots, 10000);
+
+// the spectrum tile (minispec.js): every band the skimmer watches, each band's CW segment shaded (the band picked
+// stronger); zoom: the picked band's segment with its CW signals and the one listened to
+window.miniSpecRange = () => {
+  const bands = ((S.info && S.info.bands) || []).slice().sort((a, b) => a.lo_hz - b.lo_hz);
+  if (!bands.length) return null;
+  const segs = bands.map((b) => ({lo: b.lo_hz, hi: b.hi_hz, label: b.band, on: b.band === S.band}));
+  const lo = segs[0].lo, hi = segs[segs.length - 1].hi, pad = (hi - lo) * 0.02;
+  const listen = S.playing ? [{f: S.playing.freq, play: true, width: 500, label: 'listening'}] : [];
+  const pick = bands.find((b) => b.band === S.band);
+  return {lo: Math.max(0, lo - pad), hi: hi + pad, label: `CW · ${bands.length} bands · ${(lo / 1e6).toFixed(2)}–${(hi / 1e6).toFixed(2)} MHz`, segs, marks: listen,
+          zoom: pick ? {lo: pick.lo_hz, hi: pick.hi_hz, label: `CW ${pick.band} · ${(pick.lo_hz / 1e3).toFixed(0)}–${(pick.hi_hz / 1e3).toFixed(0)} kHz`,
+                        marks: S.live.filter((x) => x.band === pick.band).map((x) => ({f: x.freq_hz, label: ''})).concat(listen)} : null};
+};

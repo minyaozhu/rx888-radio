@@ -325,3 +325,9 @@ async function poll() {
 }
 $('session').addEventListener('change', () => loadSession($('session').value));
 loadSession().catch(() => poll()).finally(() => setInterval(poll, 4000));
+
+// the spectrum tile (minispec.js): the marine window, the channels on the air, the one listened to shaded
+window.miniSpecRange = () => {
+  const f = audio.on && freqOf(audio.ssrc);
+  return miniSpec.voice(S.status, 'marine', f ? [{f: +f, play: true, width: 25000, label: 'listening'}] : []);
+};

@@ -95,3 +95,10 @@ async function poll() {
 $('session').addEventListener('change', () => loadSession($('session').value));
 if (window.statsReset) statsReset.onChange(() => poll());
 loadSession().catch(() => poll()).finally(() => setInterval(poll, 4000));
+
+// the spectrum tile (minispec.js): the APRS window, 144.390 MHz marked
+window.miniSpecRange = () => {
+  const r = miniSpec.voice(S.status, 'aprs', [{f: 144.39e6, label: 'APRS', color: '#4cd08a'}]);
+  if (r) r.zoom = {lo: 144.39e6 - 60e3, hi: 144.39e6 + 60e3, label: '144.390 MHz · APRS', marks: [{f: 144.39e6, play: true, width: 12.5e3, label: 'APRS'}]};
+  return r;
+};

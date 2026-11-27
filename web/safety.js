@@ -486,3 +486,9 @@ if (!INCIDENTS) {                                  // no incidents map: the tran
 }
 $('session').addEventListener('change', () => { I.sel = null; I.list = []; drawIncident(); loadSession($('session').value).then(() => INCIDENTS && pollIncidents()); });
 loadSession().catch(() => poll(true)).finally(() => { setInterval(poll, 2000); if (INCIDENTS) { pollIncidents(); setInterval(pollIncidents, 8000); } });
+
+// the spectrum tile (minispec.js): this page's window, the channels on the air, the one listened to shaded
+window.miniSpecRange = () => {
+  const f = audio.on && Object.entries(S.status.channels || {}).find(([, s]) => s === audio.ssrc)?.[0];
+  return miniSpec.voice(S.status, SVC, f ? [{f: +f, play: true, width: 12500, label: $('chan').value === 'follow' ? 'following' : 'listening'}] : []);
+};

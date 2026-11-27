@@ -433,6 +433,7 @@ function playStep(ts) {
 // ------------------------------------------------------------------ data
 async function load() {
   const info = await api(API);
+  S.info = info;
   SLOT = info.slot_sec || SLOT;
   drawMonitor(info);
   S.qth = info.qth || 'CM87';
@@ -519,6 +520,7 @@ main();
 
 // ------------------------------------------------------------------ monitor on/off (also on the Radio tab for FT8)
 function drawMonitor(info) {
+  if (info) S.info = info;
   const b = $('monBtn'); if (!b || !info) return;
   b.textContent = info.running ? `${PROTO.toUpperCase()} monitor on · Stop` : `Start ${PROTO.toUpperCase()} monitor`;
   b.dataset.running = info.running ? '1' : '';
@@ -533,3 +535,15 @@ if ($('monBtn')) {
   });
   setInterval(async () => { try { drawMonitor(await api(API)); } catch (e) { /* restarting */ } }, 10000);
 }
+
+// the spectrum tile (minispec.js): every band decoded, low to high, each band's 3 kHz segment shaded (the band
+// picked in the filter stronger); the tile's zoom button looks at the picked band's segment alone
+window.miniSpecRange = () => {
+  const bands = ((S.info && S.info.bands) || []).slice().sort((a, b) => a.dial_hz - b.dial_hz);
+  if (!bands.length) return null;
+  const segs = bands.map((b) => ({lo: b.dial_hz, hi: b.dial_hz + 3000, label: b.band, on: b.band === S.band}));
+  const lo = segs[0].lo, hi = segs[segs.length - 1].hi, pad = (hi - lo) * 0.02;
+  const pick = bands.find((b) => b.band === S.band);
+  return {lo: Math.max(0, lo - pad), hi: hi + pad, label: `${PROTO.toUpperCase()} · ${bands.length} bands · ${(lo / 1e6).toFixed(2)}–${(hi / 1e6).toFixed(2)} MHz`, segs,
+          zoom: pick ? {lo: pick.dial_hz - 200, hi: pick.dial_hz + 3400, label: `${PROTO.toUpperCase()} ${pick.band} · ${(pick.dial_hz / 1e3).toFixed(1)} kHz`, marks: [{f: pick.dial_hz, label: 'dial'}]} : null};
+};

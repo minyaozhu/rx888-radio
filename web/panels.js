@@ -29,15 +29,6 @@ const PANEL_PRESETS = [
 ];
 const PANEL_DEFAULTS = [0, 1, 12, 17].map((i) => PANEL_PRESETS[i]);
 const PANEL_LIVE_S = 3;                     // a column counts as live if updated this recently
-const PANEL_LUT = (() => {                  // viridis-like
-  const stops = [[0, 0, 4], [40, 11, 84], [101, 21, 110], [159, 42, 99], [212, 72, 66], [245, 125, 21], [250, 193, 39], [252, 255, 164]];
-  const lut = new Uint8ClampedArray(256 * 3);
-  for (let i = 0; i < 256; i++) {
-    const x = i / 255 * (stops.length - 1), k = Math.min(Math.floor(x), stops.length - 2), f = x - k;
-    for (let c = 0; c < 3; c++) lut[i * 3 + c] = stops[k][c] + (stops[k + 1][c] - stops[k][c]) * f;
-  }
-  return lut;
-})();
 const PG = {panels: [], ws: null, info: null, feedOf: {}};   // feedOf: "lo:hi" -> feed id
 
 const pfmt = (f) => f >= 1e6 ? (f / 1e6).toLocaleString(undefined, {maximumFractionDigits: 3}) + ' MHz' : (f / 1e3).toLocaleString(undefined, {maximumFractionDigits: 1}) + ' kHz';
@@ -72,10 +63,10 @@ function ensureView(p) {
     const tmp = document.createElement('canvas'); tmp.width = W; tmp.height = H;
     tmp.getContext('2d').drawImage(p.wf, 0, 0);
     const span = v.hi - v.lo, dx = (old.lo - v.lo) / span * W, dw = (old.hi - old.lo) / span * W;
-    p.wctx.fillStyle = '#05070a'; p.wctx.fillRect(0, 0, W, H);
+    p.wctx.fillStyle = specTheme.t().bg; p.wctx.fillRect(0, 0, W, H);
     p.wctx.imageSmoothingEnabled = false;
     p.wctx.drawImage(tmp, 0, 0, W, H, dx, 0, dw, H);
-  } else { p.wctx.fillStyle = '#05070a'; p.wctx.fillRect(0, 0, W, H); }
+  } else { p.wctx.fillStyle = specTheme.t().bg; p.wctx.fillRect(0, 0, W, H); }
   [...p.frames.values()].sort((a, b) => a.t - b.t).forEach((fr) => overlay(p, fr));
 }
 
@@ -91,6 +82,8 @@ function initPanels() {
   grid.innerHTML = '';
   PG.panels = loadRanges().map((range, idx) => makePanel(grid, range, idx));
   window.addEventListener('resize', () => PG.panels.forEach((p) => { sizePanel(p); rebuild(p); }));
+  specTheme.onChange(() => PG.panels.forEach((p) => { p.wctx.fillStyle = specTheme.t().bg; p.wctx.fillRect(0, 0, p.wf.width, p.wf.height); drawPanel(p); }));
+  PG.panels.forEach(drawPanel);                      // axes and the theme's background before any data
   connectPanels();
   setInterval(() => PG.panels.forEach(drawStatus), 1000);
 }
@@ -102,7 +95,7 @@ function makePanel(grid, range, idx) {
       <span class="custom"><input class="lo" inputmode="decimal" aria-label="From (MHz)"> – <input class="hi" inputmode="decimal" aria-label="To (MHz)"> MHz <button type="button" class="go">Set</button></span>
       <button type="button" class="fit" title="Zoom this panel to the VHF tuner's 8.4 MHz live window (it follows the tuner)">Fit 8.4 MHz</button>
       <button type="button" class="unzoom" title="Back to the panel's whole range" style="display:none"></button>
-      <span class="pnl-st"></span></div>
+      <span class="pnl-st"></span><span class="pnl-theme"></span></div>
     <canvas class="spec"></canvas><canvas class="wf"></canvas>`;
   grid.appendChild(el);
   const p = {idx, range, el, spec: el.querySelector('.spec'), wf: el.querySelector('.wf'), frames: new Map(),
@@ -129,6 +122,7 @@ function makePanel(grid, range, idx) {
   const fit = el.querySelector('.fit');
   fit.addEventListener('click', () => { p.range = {...p.range, fit: !p.range.fit, zoom: null}; saveRanges(); drawPanel(p); subscribeSoon(); });
   el.querySelector('.unzoom').addEventListener('click', () => unzoom(p));
+  el.querySelector('.pnl-theme').appendChild(specTheme.button());
   wirePanelMouse(p);
   sizePanel(p);
   return p;
@@ -143,7 +137,7 @@ function sizePanel(p) {
   p.colT = new Float64Array(p.spec.width);
   p.viewKey = null; p.v = p.range;
   resetPersist(p);
-  p.wctx.fillStyle = '#05070a'; p.wctx.fillRect(0, 0, p.wf.width, p.wf.height);
+  p.wctx.fillStyle = specTheme.t().bg; p.wctx.fillRect(0, 0, p.wf.width, p.wf.height);
 }
 function setRange(p, range) {
   p.range = {...range, fit: !!p.range.fit, zoom: null}; p.frames.clear(); sizePanel(p); saveRanges(); subscribe(); drawPanel(p);
@@ -269,12 +263,13 @@ function waterfallRow(p) {
   const W = p.wf.width, H = p.wf.height, ctx = p.wctx;
   ctx.drawImage(p.wf, 0, 0, W, H - 1, 0, 1, W, H - 1);
   const row = ctx.createImageData(W, 1), d = row.data, tnow = Date.now() / 1000;
-  const {floor, ceil} = p.levels, k = 255 / (ceil - floor);
+  const {floor, ceil} = p.levels, k = 255 / (ceil - floor), t = specTheme.t(), L = t.lut, bg = t.bgRGB;
   for (let x = 0; x < W; x++) {
     const v = p.cols[x];
-    if (isNaN(v)) { d[x * 4 + 3] = 255; continue; }
+    if (isNaN(v)) { d[x * 4] = bg[0]; d[x * 4 + 1] = bg[1]; d[x * 4 + 2] = bg[2]; d[x * 4 + 3] = 255; continue; }
     const c = Math.max(0, Math.min(255, (v - floor) * k)) | 0, live = tnow - p.colT[x] < PANEL_LIVE_S, a = live ? 1 : 0.3;
-    d[x * 4] = PANEL_LUT[c * 3] * a; d[x * 4 + 1] = PANEL_LUT[c * 3 + 1] * a; d[x * 4 + 2] = PANEL_LUT[c * 3 + 2] * a; d[x * 4 + 3] = 255;
+    for (let j = 0; j < 3; j++) d[x * 4 + j] = L[c * 3 + j] * a + bg[j] * (1 - a);   // old pictures: faded towards the background
+    d[x * 4 + 3] = 255;
   }
   ctx.putImageData(row, 0, 0);
 }
@@ -283,8 +278,9 @@ function drawPanel(p) {
   if (document.getElementById('autoscale').checked) autoLevelsP(p);
   const ctx = p.sctx, W = p.spec.width, H = p.spec.height, d = devicePixelRatio || 1;
   const {floor, ceil} = p.levels, lo = p.v.lo, hi = p.v.hi, span = hi - lo, tnow = Date.now() / 1000;
-  ctx.fillStyle = '#05070a'; ctx.fillRect(0, 0, W, H);
-  ctx.font = `${10 * d}px -apple-system, sans-serif`; ctx.strokeStyle = '#1b222b'; ctx.fillStyle = '#5b6573'; ctx.lineWidth = 1;
+  const t = specTheme.t();
+  ctx.fillStyle = t.bg; ctx.fillRect(0, 0, W, H);
+  ctx.font = `${10 * d}px -apple-system, sans-serif`; ctx.strokeStyle = t.grid; ctx.fillStyle = t.gridText; ctx.lineWidth = 1;
   const step = niceStep(span / 6), ticks = [];
   for (let f = Math.ceil(lo / step) * step; f < hi; f += step) {
     const x = (f - lo) / span * W;
@@ -299,10 +295,9 @@ function drawPanel(p) {
   // the afterglow, then the trace: coloured by level where live, grey where it is the last picture
   if (p.pc) ctx.drawImage(p.pc, 0, 0);
   const levelInk = ctx.createLinearGradient(0, H, 0, 0);            // weak -> strong, bottom -> top
-  levelInk.addColorStop(0, '#2f6bff'); levelInk.addColorStop(0.35, '#22d3ee'); levelInk.addColorStop(0.6, '#a3e635');
-  levelInk.addColorStop(0.8, '#facc15'); levelInk.addColorStop(1, '#ef4444');
+  [0, 0.35, 0.6, 0.8, 1].forEach((s, i) => levelInk.addColorStop(s, t.ink[i]));
   for (const live of [false, true]) {
-    ctx.strokeStyle = live ? levelInk : '#55606c'; ctx.lineWidth = (live ? 1.3 : 1) * d; ctx.beginPath();
+    ctx.strokeStyle = live ? levelInk : t.old; ctx.lineWidth = (live ? 1.3 : 1) * d; ctx.beginPath();
     let pen = false;
     for (let x = 0; x < W; x++) {
       const v = p.cols[x], isLive = tnow - p.colT[x] < PANEL_LIVE_S;
@@ -315,7 +310,15 @@ function drawPanel(p) {
   // the receiver's VHF window on VHF panels
   if (PG.info && PG.info.band === 'vhf' && pInput(p.range) === 'vhf' && PG.info.vhf.center_hz) {
     const a = (PG.info.vhf.center_hz - PG.info.vhf.span_hz / 2 - lo) / span * W, b = (PG.info.vhf.center_hz + PG.info.vhf.span_hz / 2 - lo) / span * W;
-    if (b > 0 && a < W) { ctx.fillStyle = 'rgba(108,201,154,0.07)'; ctx.fillRect(a, 0, b - a, H); }
+    if (b > 0 && a < W) { ctx.fillStyle = t.window; ctx.fillRect(a, 0, b - a, H); }
+  }
+  // a band scan: the range it is capturing now
+  const sc = PG.info && PG.info.scan;
+  if (sc && sc.lo != null && sc.hi > lo && sc.lo < hi) {
+    const a = Math.max(0, (sc.lo - lo) / span * W), b = Math.min(W, (sc.hi - lo) / span * W);
+    ctx.fillStyle = t.scanFill; ctx.fillRect(a, 0, b - a, H);
+    ctx.strokeStyle = t.scan; ctx.lineWidth = 2 * d; ctx.strokeRect(a + d, d, Math.max(0, b - a - 2 * d), H - 2 * d);
+    ctx.font = `600 ${11 * d}px -apple-system, sans-serif`; ctx.fillStyle = t.scan; ctx.fillText('scanning', Math.min(a + 5 * d, W - 60 * d), 14 * d);
   }
   // channels
   for (const ch of state.channels || []) {
@@ -335,10 +338,10 @@ function drawPanel(p) {
   for (const [x, label] of ticks) {
     const tw = ctx.measureText(label).width, pad = 3 * d, bh = 14 * d, y0 = H - bh - 2 * d;
     const bx = Math.min(Math.max(0, x + 2 * d), W - tw - 2 * pad);
-    ctx.fillStyle = 'rgba(5,7,10,0.85)'; ctx.fillRect(bx, y0, tw + 2 * pad, bh);
-    ctx.strokeStyle = '#ffd84a'; ctx.lineWidth = d;
+    ctx.fillStyle = t.legendBg; ctx.fillRect(bx, y0, tw + 2 * pad, bh);
+    ctx.strokeStyle = t.legend; ctx.lineWidth = d;
     ctx.beginPath(); ctx.moveTo(x, H); ctx.lineTo(x, H - 6 * d); ctx.stroke();
-    ctx.fillStyle = '#ffd84a'; ctx.shadowColor = 'rgba(255,216,74,0.6)'; ctx.shadowBlur = 6 * d;
+    ctx.fillStyle = t.legend; ctx.shadowColor = t.legendGlow; ctx.shadowBlur = 6 * d;
     ctx.fillText(label, bx + pad, H - 6 * d);
     ctx.shadowBlur = 0;
   }

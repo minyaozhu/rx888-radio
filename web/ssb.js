@@ -132,11 +132,13 @@ const selectedBands = () => [...document.querySelectorAll('#bands input:checked'
 $('scan').addEventListener('click', async () => {
   $('scan').disabled = true;
   const sec = S.sec;                       // the section being scanned, even if you switch while it runs
+  const all = S.data.ham_bands.map((b) => b.band);
+  const sel = sec === 'ham' ? (selectedBands().length ? selectedBands() : all) : [];
+  S.scanning = {sec, bands: sel};          // the spectrum tile shows all of it while the scan runs
   try {
     await ensureHF();
     if (sec === 'ham') {
-      const all = S.data.ham_bands.map((b) => b.band);
-      const bands = (selectedBands().length ? selectedBands() : all).filter((b) => all.includes(b));   // 60 m: channels only
+      const bands = sel.filter((b) => all.includes(b));   // 60 m: channels only
       S.activity = [];
       draw();
       for (const [k, b] of bands.entries()) {
@@ -165,6 +167,7 @@ $('scan').addEventListener('click', async () => {
     S.scanned[sec] = Date.now();
     $('scanNote').textContent = `scanned ${hms(S.scanned[sec])}` + (sec === 'ham' ? ` · ${S.activity.length} conversations found` : '');
   } catch (e) { $('scanNote').textContent = 'scan failed: ' + e.message; }
+  S.scanning = null;
   $('scan').disabled = false;
   draw();
 });
@@ -317,3 +320,44 @@ $('tOn').addEventListener('change', async () => {
 $('tEmpty').addEventListener('change', tDraw);
 api('/api/ssb/transcribe').then((st) => { $('tOn').checked = st.enabled; tStatus(null); }).catch(() => {});
 tPoll(); setInterval(tPoll, 3000); setInterval(beat, 4000);
+
+// the spectrum tile (minispec.js): around the channel playing; nothing playing: what the receiver sees
+const SSB_CONTEXT = [[1.8e6, 2e6, '160 m'], [3.5e6, 4e6, '80 m'], [5.25e6, 5.45e6, '60 m'], [7e6, 7.3e6, '40 m'], [14e6, 14.35e6, '20 m'],
+  [18.068e6, 18.168e6, '17 m'], [21e6, 21.45e6, '15 m'], [24.89e6, 24.99e6, '12 m'], [28e6, 29.7e6, '10 m']];
+// listening: on an amateur band, the whole amateur range (160-10 m, each band a segment, the channel's lit);
+// elsewhere 300 kHz around it. The channel shaded; zoom: its passband.
+function ssbContext() {
+  const p = S.playing, z = miniSpec.around(p.freq, p.mode, `${p.title} · ${khz(p.freq)} kHz ${p.mode.toUpperCase()}`);
+  const b = SSB_CONTEXT.find(([lo, hi]) => p.freq >= lo && p.freq <= hi);
+  if (b) {
+    const segs = SSB_CONTEXT.map(([lo, hi, name]) => ({lo, hi, label: name, on: lo === b[0]}));
+    const lo = segs[0].lo, hi = segs[segs.length - 1].hi, pad = (hi - lo) * 0.02;
+    return {lo: Math.max(0, lo - pad), hi: hi + pad, segs, label: `Amateur ${(lo / 1e6).toFixed(1)}–${(hi / 1e6).toFixed(1)} MHz · ${b[2]} · ${p.title}`,
+            marks: z.marks, zoom: z};
+  }
+  return {lo: p.freq - 150e3, hi: p.freq + 150e3, label: `${khz(p.freq)} kHz ± 150 kHz · ${p.title}`, marks: z.marks, zoom: z};
+}
+// scanning: the whole of what is being scanned (Amateur: the selected bands side by side, each a segment; other
+// sections: the span of their listed channels), the part being captured highlighted; zoom: just that part
+const SSB_BAND_KEY = {'160m': '160 m', '80m': '80 m', '60m': '60 m', '40m': '40 m', '20m': '20 m', '17m': '17 m',
+  '15m': '15 m', '12m': '12 m', '10m': '10 m'};
+function scanContext() {
+  const sc = S.scanning, live = miniSpec.scan();
+  let segs = [];
+  if (sc.sec === 'ham') {
+    segs = sc.bands.map((b) => SSB_CONTEXT.find((c) => c[2] === SSB_BAND_KEY[b])).filter(Boolean)
+      .sort((a, b) => a[0] - b[0]).map(([lo, hi, name]) => ({lo, hi, label: name,
+        on: !!(live && live.lo != null && live.lo < hi && live.hi > lo)}));
+  }
+  let lo, hi;
+  if (segs.length) { lo = segs[0].lo; hi = segs[segs.length - 1].hi; } else {
+    const fs = S.data.channels.filter((c) => c.group === sc.sec && c.reachable).map((c) => c.freq_hz);
+    if (!fs.length) return live ? miniSpec.scanRange('SSB scan') : null;
+    lo = Math.min(...fs) - 20e3; hi = Math.max(...fs) + 20e3;
+  }
+  const pad = (hi - lo) * 0.02, name = sc.sec === 'ham' ? 'Amateur' : (S.data.groups[sc.sec] || sc.sec);
+  return {lo: Math.max(0, lo - pad), hi: hi + pad, segs,
+          label: `SSB scan · ${name} · ${(lo / 1e6).toFixed(2)}–${(hi / 1e6).toFixed(2)} MHz`,
+          zoom: live ? miniSpec.scanRange('SSB scan, this part') : null};
+}
+window.miniSpecRange = () => (S.scanning ? scanContext() : S.playing ? ssbContext() : null);

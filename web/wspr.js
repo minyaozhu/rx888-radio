@@ -97,3 +97,16 @@ async function refresh() {
   } catch (e) { $('notice').textContent = 'rxapp not reachable: ' + e.message; $('notice').style.display = ''; }
 }
 refresh(); setInterval(refresh, 20000);
+
+// the spectrum tile (minispec.js): every band decoded, each band's WSPR segment (dial + 1400-1600 Hz) shaded (the
+// band picked stronger); zoom: the picked band's segment
+window.miniSpecRange = () => {
+  const bands = ((S.info && S.info.bands) || []).slice().sort((a, b) => a.dial_hz - b.dial_hz);
+  if (!bands.length) return null;
+  const segs = bands.map((b) => ({lo: b.dial_hz + 1400, hi: b.dial_hz + 1600, label: b.band, on: b.band === $('band').value}));
+  const lo = segs[0].lo, hi = segs[segs.length - 1].hi, pad = (hi - lo) * 0.02;
+  const pick = bands.find((b) => b.band === $('band').value);
+  return {lo: Math.max(0, lo - pad), hi: hi + pad, label: `WSPR · ${bands.length} bands · ${(lo / 1e6).toFixed(2)}–${(hi / 1e6).toFixed(2)} MHz`, segs,
+          zoom: pick ? {lo: pick.dial_hz + 1000, hi: pick.dial_hz + 2000, label: `WSPR ${pick.band} · ${((pick.dial_hz + 1500) / 1e3).toFixed(1)} kHz`,
+                        marks: [{f: pick.dial_hz + 1400, label: ''}, {f: pick.dial_hz + 1600, label: ''}]} : null};
+};

@@ -60,6 +60,7 @@ class PanelHub:
         self._state = None        # (band, tuner centre, coverage) the streams were built for
         self._lock = asyncio.Lock()
         self._saved = 0.0
+        self.scan_state = lambda: None        # a band scan's state (server.py: Scanner.state()): band_lo/hi, lo/hi now
         self.load()
 
     # -- last pictures on disk ----------------------------------------------------------------------
@@ -111,7 +112,9 @@ class PanelHub:
         return self.hf[key]
 
     def describe(self, ranges) -> Dict:
+        sc = self.scan_state()
         return {"band": self.radio.band, "coverage_hz": CONFIG.max_freq_hz,
+                "scan": sc,
                 "vhf": {"id": VHF_ID, "center_hz": self.radio.vhf.center_hz, "span_hz": LIVE_VHF_SPAN},
                 "feeds": [{"id": self.feed_for(lo, hi).id, "lo": lo, "hi": hi} for lo, hi in ranges]}
 
@@ -236,13 +239,15 @@ class PanelHub:
     async def serve(self, ws):
         self.clients[ws] = set()
         ranges: List[Tuple[float, float]] = []
+        asked = False             # the client said what it wants (an empty list too: a VHF-only window)
         sent: Dict[int, float] = {}
 
         async def reader():
-            nonlocal ranges
+            nonlocal ranges, asked
             while True:
                 msg = await ws.receive_json()
                 if "ranges" in msg:
+                    asked = True
                     ranges = [(float(lo), float(hi)) for lo, hi in msg["ranges"] if 0 <= float(lo) < float(hi)]
                     self.clients[ws] = {r for r in ranges if r[1] <= CONFIG.max_freq_hz}
                     await self._sync()
@@ -255,10 +260,11 @@ class PanelHub:
         try:
             while not task.done():
                 now = time.time()
-                moved = (self.radio.band, self.radio.vhf.center_hz) != last_seen
-                if now - last_info > info_every or moved:   # the input / tuner can move under us
-                    last_info, last_seen = now, (self.radio.band, self.radio.vhf.center_hz)
-                    if ranges:
+                seen = (self.radio.band, self.radio.vhf.center_hz, self.scan_state())
+                moved = seen != last_seen
+                if now - last_info > info_every or moved:   # the input / tuner / a scan can move under us
+                    last_info, last_seen = now, seen
+                    if asked:             # also to VHF-only windows (no HF ranges): the tuner and a scan's progress
                         await ws.send_json(self.describe(ranges))
                 for f in [self.hf.get(r) for r in ranges] + [self.vhf]:
                     if f and f.stream and f.latest and f.latest[3] > sent.get(f.id, 0):

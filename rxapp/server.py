@@ -139,6 +139,7 @@ async def lifespan(app):
         except Exception as e:
             log.warning("could not restore VHF: %s", e)
     S.panels = PanelHub(S.radio, S.spectrum)
+    S.panels.scan_state = S.scanner.state                # the spectrum tiles show a scan's range and highlight its window
     S.panels.start()
     S.store.event("app_start")
     log.info("rxapp ready on http://%s:%d", CONFIG.host, CONFIG.port)
@@ -1234,6 +1235,46 @@ def _ndjson(run):
         await task
 
     return StreamingResponse(lines(), media_type="application/x-ndjson", headers={"Cache-Control": "no-cache"})
+
+
+SURVEY_LAST = CONFIG.data_dir / "survey_last.json"
+
+
+@app.post("/api/survey/stream")
+async def survey_stream(lo_mhz: float = 200.0, hi_mhz: float = 1000.0, secs: float = 1.5):
+    """A live VHF / UHF survey for the UHF survey page, as NDJSON: {"partial": {start, av, mx, window, windows}} per
+    tuner window (cells of 100 kHz from lo_mhz, dB above that window's floor), then {"done": the whole survey}, also
+    kept in rxapp_data/survey_last.json. It steps the tuner, so the voice session must be paused ("pause" focus)."""
+    focus = None
+    try:
+        focus = json.loads(FOCUS_FILE.read_text()).get("focus")
+    except (OSError, ValueError):
+        pass
+    if focus != "pause":
+        raise HTTPException(409, "pause the voice session first (it would move the tuner during the survey)")
+    secs = max(0.5, min(secs, 20.0))
+
+    async def run(emit):
+        r = await S.scanner.survey(lo_mhz * 1e6, hi_mhz * 1e6, secs, on_window=emit)
+        SURVEY_LAST.write_text(json.dumps(r))
+        return {k: v for k, v in r.items() if k not in ("av", "mx")}
+    return _ndjson(run)
+
+
+@app.post("/api/survey/stop")
+async def survey_stop():
+    """End the running survey after the tuner window in progress (the tuner goes back where it was)."""
+    S.scanner.stop_survey()
+    return {"stopping": True}
+
+
+@app.get("/api/survey/last")
+async def survey_last():
+    """The last live survey (null if none yet)."""
+    try:
+        return json.loads(SURVEY_LAST.read_text())
+    except (OSError, ValueError):
+        return None
 
 
 @app.get("/api/scans")

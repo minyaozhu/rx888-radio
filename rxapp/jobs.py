@@ -71,6 +71,17 @@ class Scanner:
         self.store = store
         self.lock = asyncio.Lock()    # one scan at a time
         self.bins = spectrum.bins
+        self.active = None            # (lo_hz, hi_hz) being captured now (RF), for the spectrum tiles' highlight
+        self.band_range = None        # (lo_hz, hi_hz) of the whole scan running (the tiles show all of it)
+        self.survey_stop = False
+
+    def state(self):
+        """What a scan is doing, for the spectrum tiles: the whole range and the part being captured now."""
+        if self.band_range is None and self.active is None:
+            return None
+        lo, hi = self.band_range or self.active
+        a = self.active
+        return {"band_lo": lo, "band_hi": hi, "lo": a[0] if a else None, "hi": a[1] if a else None}
 
     async def _capture(self, center_hz: float, bin_hz: float, frames: int, timeout: float = 15.0,
                        clamp: bool = True):
@@ -79,6 +90,8 @@ class Scanner:
         if clamp:
             center_hz = min(max(center_hz, half), CONFIG.max_freq_hz - half) if 2 * half < CONFIG.max_freq_hz \
                 else CONFIG.max_freq_hz / 2
+        if clamp:                     # HF: the capture is the range (VHF: _capture_vhf sets the tuner window)
+            self.active = (center_hz - half, center_hz + half)
         loop = asyncio.get_running_loop()
         q: asyncio.Queue = asyncio.Queue()
 
@@ -100,6 +113,8 @@ class Scanner:
                 n += 1
         finally:
             await asyncio.to_thread(stream.stop)
+            if clamp:
+                self.active = None
         if n == 0:
             raise TimeoutError("no spectrum frames")
         freqs = center_hz + (np.arange(len(acc)) - len(acc) // 2) * bin_hz
@@ -115,37 +130,140 @@ class Scanner:
         if band.band != radio.band:
             raise ValueError(f"{name} is a {band.band.upper()} band; switch the input to {band.band.upper()} first")
         async with self.lock:
-            if name == "wwv":
-                return await self._scan_wwv(frames, emit)
-            width = band.stop_hz - band.start_hz
-            if band.band == "vhf":
-                if self.spectrum.sweeping:          # the scan needs the tuner
-                    await self.spectrum.ensure_live(radio.vhf.center_hz)
-                bin_hz = 2500.0 if band.step_hz >= 100e3 else 500.0
-                def window(f, d):                      # stations in this tuner window, against its own floor
-                    inb = (f >= band.start_hz) & (f <= band.stop_hz)
-                    if emit and inb.any():
-                        fl = float(np.percentile(d[inb], 30))
-                        emit(self._grid_hits(band, f, d, fl, min_snr) if band.step_hz
-                             else self._peak_hits(f, d, inb, fl, min_snr, bin_hz))
-                freqs, db, n = await self._capture_vhf(band.start_hz, band.stop_hz, bin_hz, frames, window)
-            else:
-                bin_hz = next(b for b in NICE_BINS if b * self.bins >= width * 1.1)
-                if band.step_hz:
-                    bin_hz = min(bin_hz, max(NICE_BINS[0], band.step_hz / 4))
-                    while bin_hz * self.bins < width * 1.1:
-                        bin_hz *= 2
-                freqs, db, n = await self._capture((band.start_hz + band.stop_hz) / 2, bin_hz, frames)
-            inband = (freqs >= band.start_hz) & (freqs <= band.stop_hz)
-            floor = float(np.percentile(db[inband], 30))
-            hits = self._grid_hits(band, freqs, db, floor, min_snr) if band.step_hz \
-                else self._peak_hits(freqs, db, inband, floor, min_snr, bin_hz)
-            if emit and band.band == "hf":
-                emit(hits)
-            sid = self.store.add_scan(name, band.start_hz, band.stop_hz, band.step_hz, bin_hz, n, floor, hits)
-            self.store.event("scan", band=name, stations=len(hits))
-            return {"scan_id": sid, "band": name, "mode": band.mode, "floor_db": floor, "bin_hz": bin_hz,
-                    "frames": n, "hits": [{"freq_hz": f, "snr_db": round(s, 1)} for f, s in hits]}
+            self.band_range = (2.5e6 - 5e4, 25e6 + 5e4) if name == "wwv" else (band.start_hz, band.stop_hz)
+            try:
+                return await self._scan_locked(name, band, frames, min_snr, emit)
+            finally:
+                self.band_range = None
+
+    async def _scan_locked(self, name, band, frames, min_snr, emit):
+        radio = self.spectrum.radio
+        if name == "wwv":
+            return await self._scan_wwv(frames, emit)
+        width = band.stop_hz - band.start_hz
+        if band.band == "vhf":
+            if self.spectrum.sweeping:          # the scan needs the tuner
+                await self.spectrum.ensure_live(radio.vhf.center_hz)
+            bin_hz = 2500.0 if band.step_hz >= 100e3 else 500.0
+            def window(f, d):                      # stations in this tuner window, against its own floor
+                inb = (f >= band.start_hz) & (f <= band.stop_hz)
+                if emit and inb.any():
+                    fl = float(np.percentile(d[inb], 30))
+                    emit(self._grid_hits(band, f, d, fl, min_snr) if band.step_hz
+                         else self._peak_hits(f, d, inb, fl, min_snr, bin_hz))
+            freqs, db, n = await self._capture_vhf(band.start_hz, band.stop_hz, bin_hz, frames, window)
+        else:
+            bin_hz = next(b for b in NICE_BINS if b * self.bins >= width * 1.1)
+            if band.step_hz:
+                bin_hz = min(bin_hz, max(NICE_BINS[0], band.step_hz / 4))
+                while bin_hz * self.bins < width * 1.1:
+                    bin_hz *= 2
+            freqs, db, n = await self._capture((band.start_hz + band.stop_hz) / 2, bin_hz, frames)
+        inband = (freqs >= band.start_hz) & (freqs <= band.stop_hz)
+        floor = float(np.percentile(db[inband], 30))
+        hits = self._grid_hits(band, freqs, db, floor, min_snr) if band.step_hz \
+            else self._peak_hits(freqs, db, inband, floor, min_snr, bin_hz)
+        if emit and band.band == "hf":
+            emit(hits)
+        sid = self.store.add_scan(name, band.start_hz, band.stop_hz, band.step_hz, bin_hz, n, floor, hits)
+        self.store.event("scan", band=name, stations=len(hits))
+        return {"scan_id": sid, "band": name, "mode": band.mode, "floor_db": floor, "bin_hz": bin_hz,
+                "frames": n, "hits": [{"freq_hz": f, "snr_db": round(s, 1)} for f, s in hits]}
+
+    # -- the UHF / VHF survey (the UHF survey page's live chart) -----------------------------------------
+    SURVEY_BIN_HZ = 4000.0           # 2048 bins: 8.2 MHz per capture, 7.4 MHz of it used
+    SURVEY_CELL_HZ = 100e3           # what the chart shows: the strongest in each 100 kHz
+
+    def stop_survey(self):
+        self.survey_stop = True
+
+    async def survey(self, lo_hz: float, hi_hz: float, secs: float = 1.5, on_window=None) -> dict:
+        """Step the VHF tuner across [lo, hi]; in each window keep the average and the peak of every bin over `secs`,
+        in dB above that window's floor (its 30th percentile), the strongest per 100 kHz cell. on_window({start,
+        av, mx}) with each window's cells (start: the cell index from lo). The tuner goes back where it was.
+        stop_survey() ends it after the window in progress."""
+        radio = self.spectrum.radio
+        if radio.band != "vhf":
+            raise ValueError("the survey uses the VHF tuner: switch the input to VHF first")
+        if not (24e6 <= lo_hz < hi_hz <= 1700e6):
+            raise ValueError("survey range: 24-1700 MHz, low < high")
+        cells = int(round((hi_hz - lo_hz) / self.SURVEY_CELL_HZ))
+        av = [None] * cells
+        mx = [None] * cells
+        self.survey_stop = False
+        async with self.lock:
+            if self.spectrum.sweeping:
+                await self.spectrum.ensure_live(radio.vhf.center_hz)
+            home = radio.vhf.center_hz
+            use = min(self.bins * self.SURVEY_BIN_HZ, 2 * WINDOW_HZ) * 0.9
+            centers = list(np.arange(lo_hz + use / 2, hi_hz + use / 2, use))
+            self.band_range = (lo_hz, hi_hz)
+            t0 = time.time()
+            try:
+                for k, c in enumerate(centers):
+                    if self.survey_stop:
+                        break
+                    self.active = (c - use / 2, c + use / 2)
+                    await radio.move_tuner(c)
+                    await asyncio.sleep(0.2)            # PLL settle
+                    f, a_db, m_db = await self._capture_peak(radio.vhf.if_hz, self.SURVEY_BIN_HZ, secs)
+                    rf = radio.vhf.to_rf(f)
+                    keep = (np.abs(rf - c) <= use / 2) & (rf >= lo_hz) & (rf < hi_hz)
+                    if not keep.any():
+                        continue
+                    floor = float(np.percentile(a_db[keep], 30))
+                    idx = ((rf[keep] - lo_hz) // self.SURVEY_CELL_HZ).astype(int)
+                    a_up, m_up = a_db[keep] - floor, m_db[keep] - floor
+                    first, last = int(idx.min()), int(idx.max())
+                    out_a, out_m = [], []
+                    for i in range(first, last + 1):
+                        sel = idx == i
+                        if not sel.any():
+                            out_a.append(None)
+                            out_m.append(None)
+                            continue
+                        av[i] = round(float(a_up[sel].max()), 1)
+                        mx[i] = round(float(m_up[sel].max()), 1)
+                        out_a.append(av[i])
+                        out_m.append(mx[i])
+                    if on_window:
+                        on_window({"start": first, "av": out_a, "mx": out_m, "window": k + 1, "windows": len(centers)})
+            finally:
+                self.active = self.band_range = None
+                await radio.move_tuner(home)
+        return {"made": time.time(), "range_mhz": [lo_hz / 1e6, hi_hz / 1e6], "step_hz": self.SURVEY_CELL_HZ,
+                "secs_per_window": secs, "windows": len(centers), "stopped": self.survey_stop,
+                "took_sec": round(time.time() - t0, 1), "av": av, "mx": mx}
+
+    async def _capture_peak(self, center_hz: float, bin_hz: float, secs: float, timeout: float = 15.0):
+        """Like _capture, for `secs` seconds, keeping the average and the peak (max hold) of every bin."""
+        loop = asyncio.get_running_loop()
+        q: asyncio.Queue = asyncio.Queue()
+
+        def on_frame(st):
+            db = st.spectrum.bin_power_db
+            if db is not None and len(db):
+                loop.call_soon_threadsafe(q.put_nowait, np.asarray(db, np.float64))
+
+        stream = LeasedSpectrumStream(control=self.spectrum.radio.ctl, frequency_hz=center_hz, bin_count=self.bins,
+                                      resolution_bw=bin_hz, on_spectrum=on_frame)
+        await asyncio.to_thread(stream.start)
+        acc = peak = None
+        n = 0
+        try:
+            for _ in range(2):                          # the first frames can predate the full configuration
+                await asyncio.wait_for(q.get(), timeout)
+            t0 = time.time()
+            while time.time() - t0 < secs or n < 3:
+                d = await asyncio.wait_for(q.get(), timeout)
+                p = 10 ** (d / 10)
+                acc = p if acc is None else acc + p
+                peak = d if peak is None else np.maximum(peak, d)
+                n += 1
+        finally:
+            await asyncio.to_thread(stream.stop)
+        freqs = center_hz + (np.arange(len(acc)) - len(acc) // 2) * bin_hz
+        return freqs, 10 * np.log10(acc / n), peak
 
     async def _capture_vhf(self, start_hz, stop_hz, bin_hz, frames, on_window=None):
         """Step the tuner across [start, stop] and stitch the (un-inverted) IF spectra.
@@ -161,6 +279,7 @@ class Scanner:
         all_f, all_db, n_min = [], [], frames
         try:
             for c in centers:
+                self.active = (c - use / 2, c + use / 2)
                 await radio.move_tuner(c)
                 await asyncio.sleep(0.2)               # PLL settle
                 f_if, db, n = await self._capture(radio.vhf.if_hz, bin_hz, frames, clamp=False)
@@ -173,6 +292,7 @@ class Scanner:
                 if on_window:
                     on_window(all_f[-1], all_db[-1])
         finally:
+            self.active = None
             await radio.move_tuner(home)
         return np.concatenate(all_f), np.concatenate(all_db), n_min
 

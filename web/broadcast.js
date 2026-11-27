@@ -147,9 +147,11 @@ function selectedBands() { return [...document.querySelectorAll('#bands input:ch
 $('scan').addEventListener('click', async () => {
   $('scan').disabled = true;
   const sec = S.sec;                       // the section being scanned, even if you switch while it runs
+  const swBands = selectedBands().length ? selectedBands() : SW_BANDS().map((b) => b.name);
+  S.scanning = {sec, bands: sec === 'sw' ? swBands : []};   // the spectrum tile shows all of it while it runs
   try {
     if (sec === 'sw') {
-      const bands = selectedBands().length ? selectedBands() : SW_BANDS().map((b) => b.name);
+      const bands = swBands;
       await ensureInput('sw');
       let found = 0;
       for (const [k, b] of bands.entries()) {
@@ -182,6 +184,7 @@ $('scan').addEventListener('click', async () => {
     S.scanned[sec] = Date.now();
     $('scanNote').textContent = `scanned ${new Date().toLocaleTimeString([], {hour12: false})}`;
   } catch (e) { $('scanNote').textContent = 'scan failed: ' + e.message; }
+  S.scanning = null;
   $('scan').disabled = false;
   draw();
 });
@@ -284,3 +287,26 @@ load();
 setInterval(async () => {                 // the shortwave schedule changes on the hour and half hour
   try { S.sw = await api('/api/broadcast/sw/now'); if (S.sec === 'sw') draw(); } catch (e) { /* ignore */ }
 }, 5 * 60000);
+
+// the spectrum tile (minispec.js): around the station playing
+// scanning: the whole section (shortwave: its meter bands marked, the one being scanned lit), the part being
+// captured highlighted, zoom: just that part; else the section's band, the station playing shaded (zoom: around it)
+const SEC_BAND = {am: [520e3, 1720e3, 'AM broadcast · 520–1720 kHz'], sw: [2.3e6, 26.1e6, 'Shortwave broadcast · 2.3–26.1 MHz'],
+                  fm: [87.7e6, 108.1e6, 'FM broadcast · 87.7–108.1 MHz']};
+window.miniSpecRange = () => {
+  const sc = S.scanning;
+  if (sc && SEC_BAND[sc.sec]) {
+    const [lo, hi, label] = SEC_BAND[sc.sec], live = miniSpec.scan();
+    const segs = sc.sec === 'sw' ? SW_BANDS().filter((b) => sc.bands.includes(b.name)).map((b) => ({lo: b.start_hz, hi: b.stop_hz,
+      label: b.name, on: !!(live && live.lo != null && live.lo < b.stop_hz && live.hi > b.start_hz)})) : [];
+    return {lo, hi, label: `${sc.sec.toUpperCase()} scan · ${label.replace('Shortwave', 'SW')}`, segs,
+            zoom: live ? miniSpec.scanRange(`${sc.sec.toUpperCase()} scan, this part`) : null};
+  }
+  const b = SEC_BAND[S.sec];
+  if (!b) return null;
+  // listening stays on the band (the station shaded); the tile's zoom button looks closer at the station
+  const here = S.playing && S.playing.freq >= b[0] && S.playing.freq <= b[1];
+  const play = here ? [{f: S.playing.freq, play: true, width: S.playing.sec === 'fm' ? 180e3 : 9e3, label: 'listening'}] : [];
+  const zoom = here ? miniSpec.around(S.playing.freq, S.playing.sec === 'fm' ? 'wfm' : 'am') : null;
+  return {lo: b[0], hi: b[1], label: b[2], marks: play, zoom};
+};

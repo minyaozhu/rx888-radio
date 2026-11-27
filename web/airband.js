@@ -685,3 +685,7 @@ for (const k of ['check', 'alt', 'vec', 'trf', 'app', 'hand', 'other']) {
   lg.appendChild(s);
 }
 loadSession().then(() => setInterval(poll, 1500)).catch((e) => { $('dRaw').textContent = 'No airband session yet: ' + e.message; });
+
+// the spectrum tile (minispec.js): this page's window, the channels on the air, the one listened to shaded
+window.miniSpecRange = () => miniSpec.voice(S.status, 'air', audio.on && freqOf(audio.ssrc)
+  ? [{f: +freqOf(audio.ssrc), play: true, width: 25000, label: $('chan').value === 'follow' ? 'following' : 'listening'}] : []);
