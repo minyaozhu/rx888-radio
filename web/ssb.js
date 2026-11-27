@@ -135,6 +135,7 @@ $('scan').addEventListener('click', async () => {
   const all = S.data.ham_bands.map((b) => b.band);
   const sel = sec === 'ham' ? (selectedBands().length ? selectedBands() : all) : [];
   S.scanning = {sec, bands: sel};          // the spectrum tile shows all of it while the scan runs
+  const searched = [];                     // the bands whose search finished
   try {
     await ensureHF();
     if (sec === 'ham') {
@@ -145,6 +146,7 @@ $('scan').addEventListener('click', async () => {
         $('scanNote').textContent = `searching ${S.data.ham_bands.find((x) => x.band === b).label} for conversations (${k + 1}/${bands.length})… ${S.activity.length} found so far`;
         try {
           const r = await postStream(`/api/scan/${b}/stream`, {}, () => {});
+          searched.push(b);
           const side = r.mode;
           for (const h of r.hits) {
             // speech energy peaks a few hundred Hz into the voice band: put the dial ~600 Hz the other way
@@ -155,9 +157,17 @@ $('scan').addEventListener('click', async () => {
         } catch (e) { /* a band beyond the coverage */ }
       }
     }
+    // listed channels inside a band just searched were covered by that search: only the rest are measured
+    const skip = sec === 'ham' ? S.data.ham_bands.filter((h) => searched.includes(h.band) && h.lo_hz != null).map((h) => [h.lo_hz, h.hi_hz]) : [];
+    // (their reading: a conversation the search found on them, else none)
+    for (const c of S.data.channels) {
+      if (c.group !== sec || !skip.some(([a, b]) => c.freq_hz >= a && c.freq_hz <= b)) continue;
+      const hit = S.activity.filter((a) => Math.abs(a.freq_hz - c.freq_hz) < 2500).sort((x, y) => y.snr - x.snr)[0];
+      if (hit) S.snr[c.freq_hz] = hit.snr; else delete S.snr[c.freq_hz];
+    }
     $('scanNote').textContent = 'checking the listed channels…';
     let n = 0;
-    const r = await postStream('/api/ssb/check/stream', {group: sec}, (part) => {
+    const r = await postStream('/api/ssb/check/stream', {group: sec, skip}, (part) => {
       for (const x of part) S.snr[x.freq_hz] = x.snr_db;
       n += part.length;
       $('scanNote').textContent = `checking the listed channels… ${n} measured`;
@@ -180,11 +190,7 @@ function sigCell(snr) {
 }
 function rowsFor() {
   const q = $('find').value.trim().toLowerCase(), only = $('heardOnly').checked;
-  const bandOf = (f) => S.data.ham_bands.find((b) => {
-    const r = {"160m": [1.8e6, 2e6], "80m": [3.6e6, 4e6], "40m": [7.125e6, 7.3e6], "20m": [14.15e6, 14.35e6], "17m": [18.11e6, 18.168e6],
-      "15m": [21.2e6, 21.45e6], "12m": [24.93e6, 24.99e6], "10m": [28.3e6, 28.85e6]}[b.band];
-    return r && f >= r[0] && f <= r[1];
-  });
+  const bandOf = (f) => S.data.ham_bands.find((b) => b.lo_hz != null && f >= b.lo_hz && f <= b.hi_hz);
   const rows = S.data.channels.filter((c) => c.group === S.sec).map((c) => ({
     key: 'c' + c.freq_hz, freq_hz: c.freq_hz, mode: c.mode, title: c.name, sub: c.note,
     cols: [c.name, c.note], snr: S.snr[c.freq_hz] ?? null, off: !c.reachable}));
@@ -345,9 +351,10 @@ function scanContext() {
   const sc = S.scanning, live = miniSpec.scan();
   let segs = [];
   if (sc.sec === 'ham') {
-    segs = sc.bands.map((b) => SSB_CONTEXT.find((c) => c[2] === SSB_BAND_KEY[b])).filter(Boolean)
-      .sort((a, b) => a[0] - b[0]).map(([lo, hi, name]) => ({lo, hi, label: name,
-        on: !!(live && live.lo != null && live.lo < hi && live.hi > lo)}));
+    // each band's voice part, the range the scan searches (not the whole band: CW / data at the bottom are skipped)
+    segs = sc.bands.map((b) => (S.data.ham_bands || []).find((h) => h.band === b)).filter((h) => h && h.lo_hz != null)
+      .sort((a, b) => a.lo_hz - b.lo_hz).map((h) => ({lo: h.lo_hz, hi: h.hi_hz, label: SSB_BAND_KEY[h.band] || h.band,
+        on: !!(live && live.lo != null && live.band_lo < h.hi_hz && live.band_hi > h.lo_hz)}));
   }
   let lo, hi;
   if (segs.length) { lo = segs[0].lo; hi = segs[segs.length - 1].hi; } else {

@@ -167,8 +167,10 @@
     }
     // a band scan: the range it is capturing now
     const sc = M.info && M.info.scan;
-    if (sc && sc.lo != null && sc.hi > r.lo && sc.lo < r.hi) {
-      const a = Math.max(0, X(sc.lo)), b = Math.min(W, X(sc.hi));
+    // (only the part inside the range searched: a capture is wider than what it searches)
+    const sLo = sc && sc.lo != null ? Math.max(sc.lo, sc.band_lo ?? sc.lo) : null, sHi = sc ? Math.min(sc.hi, sc.band_hi ?? sc.hi) : null;
+    if (sLo != null && sHi > sLo && sHi > r.lo && sLo < r.hi) {
+      const a = Math.max(0, X(sLo)), b = Math.min(W, X(sHi));
       sctx.fillStyle = t.scanFill; sctx.fillRect(a, 0, b - a, H);
       sctx.strokeStyle = t.scan; sctx.lineWidth = 2 * d; sctx.strokeRect(a + d, d, Math.max(0, b - a - 2 * d), H - 2 * d);
       sctx.font = `600 ${11 * d}px -apple-system, sans-serif`; sctx.fillStyle = t.scan;

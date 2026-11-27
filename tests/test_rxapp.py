@@ -836,6 +836,19 @@ def test_ssb_channels_and_passband():
     assert ssb.passband_snr(f, db, 8992e3, "lsb") < 3
 
 
+def test_ssb_check_skips_channels_a_band_search_covered():
+    from rxapp import server
+    from rxapp.jobs import BANDS
+    d = ssb.channels(64.8e6)
+    for h in d["ham_bands"]:                             # the edges the band search uses
+        assert (h["lo_hz"], h["hi_hz"]) == (BANDS[h["band"]].start_hz, BANDS[h["band"]].stop_hz)
+    b20 = BANDS["20m"]
+    left = {c["freq_hz"] for c in server._ssb_items(server.SsbCheck(group="ham", skip=[[b20.start_hz, b20.stop_hz]]))}
+    assert not left & {14285e3, 14300e3, 14325e3}         # inside 20 m: covered by its search
+    assert {5357e3, 7285e3} <= left                      # 60 m (never searched) and 40 m (not this time)
+    assert len(server._ssb_items(server.SsbCheck(group="ham"))) == sum(c["group"] == "ham" and c["reachable"] for c in d["channels"])
+
+
 # ---- panels: last pictures survive a restart -------------------------------------------------
 def test_panel_history_round_trip(tmp_path, monkeypatch):
     from rxapp import panels

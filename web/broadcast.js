@@ -298,7 +298,7 @@ window.miniSpecRange = () => {
   if (sc && SEC_BAND[sc.sec]) {
     const [lo, hi, label] = SEC_BAND[sc.sec], live = miniSpec.scan();
     const segs = sc.sec === 'sw' ? SW_BANDS().filter((b) => sc.bands.includes(b.name)).map((b) => ({lo: b.start_hz, hi: b.stop_hz,
-      label: b.name, on: !!(live && live.lo != null && live.lo < b.stop_hz && live.hi > b.start_hz)})) : [];
+      label: b.name, on: !!(live && live.lo != null && live.band_lo < b.stop_hz && live.band_hi > b.start_hz)})) : [];
     return {lo, hi, label: `${sc.sec.toUpperCase()} scan · ${label.replace('Shortwave', 'SW')}`, segs,
             zoom: live ? miniSpec.scanRange(`${sc.sec.toUpperCase()} scan, this part`) : null};
   }

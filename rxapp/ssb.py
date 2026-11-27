@@ -12,6 +12,8 @@ from typing import Dict, List
 
 import numpy as np
 
+from .jobs import BANDS
+
 # group, kHz, mode, name, note
 CHANNELS = [
     ("ham", 3985.0, "lsb", "80 m QRP SSB calling", "low-power stations' calling frequency"),
@@ -76,7 +78,8 @@ def channels(max_hz: float) -> Dict:
     return {"groups": GROUPS,
             "channels": [{"group": g, "freq_hz": k * 1e3, "mode": m, "name": n, "note": note,
                           "reachable": k * 1e3 + 3e3 < max_hz} for g, k, m, n, note in CHANNELS],
-            "ham_bands": [{"band": b, "label": lab, "mode": m} for b, lab, m in HAM_BANDS]}
+            "ham_bands": [{"band": b, "label": lab, "mode": m,          # lo/hi: the part a scan searches
+                           "lo_hz": BANDS[b].start_hz, "hi_hz": BANDS[b].stop_hz} for b, lab, m in HAM_BANDS]}
 
 
 def passband_snr(freqs: np.ndarray, db: np.ndarray, f: float, mode: str) -> float:

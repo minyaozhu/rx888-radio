@@ -884,13 +884,19 @@ async def ssb_clip(day: str, name: str):
 
 class SsbCheck(BaseModel):
     group: Optional[str] = None          # one group (ham | air | mil | marine), or every listed channel
+    skip: List[List[float]] = []         # [lo_hz, hi_hz] ranges already searched (a band scan): channels in them are left out
+
+
+def _ssb_items(body: SsbCheck):
+    return [c for c in ssb.channels(CONFIG.max_freq_hz)["channels"]
+            if c["reachable"] and (body.group is None or c["group"] == body.group)
+            and not any(len(r) == 2 and r[0] <= c["freq_hz"] <= r[1] for r in body.skip)]
 
 
 @app.post("/api/ssb/check/stream")
 async def ssb_check_stream(body: SsbCheck):
     """The channel check as NDJSON: {"partial": [{freq_hz, snr_db}]} per spectrum window, then {"done": result}."""
-    items = [c for c in ssb.channels(CONFIG.max_freq_hz)["channels"]
-             if c["reachable"] and (body.group is None or c["group"] == body.group)]
+    items = _ssb_items(body)
 
     async def run(emit):
         return {"t": time.time(), "results": await ssb.check(S.scanner, items, on_results=emit)}
@@ -900,8 +906,7 @@ async def ssb_check_stream(body: SsbCheck):
 @app.post("/api/ssb/check")
 async def ssb_check(body: SsbCheck):
     """Signal in each listed channel's voice band right now (one spectrum capture per ~430 kHz of channels)."""
-    items = [c for c in ssb.channels(CONFIG.max_freq_hz)["channels"]
-             if c["reachable"] and (body.group is None or c["group"] == body.group)]
+    items = _ssb_items(body)
     try:
         return {"t": time.time(), "results": await ssb.check(S.scanner, items)}
     except ValueError as e:
