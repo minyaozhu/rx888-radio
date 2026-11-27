@@ -1,0 +1,173 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>L-band Survey</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root{
+  --bg:#F2F4EE; --panel:#FFFFFF; --ink:#1D2833; --muted:#5A6774; --line:#CBD3D8;
+  --magenta:#A3316F; --series:#2A5A93; --series-fill:rgba(42,90,147,.16);
+  --band-go:rgba(46,123,87,.10); --band-go-edge:#2E7B57; --band-no:rgba(90,103,116,.08); --band-no-edge:#9AA5AE;
+  --grid:#E3E8EA; --shadow:0 1px 2px rgba(29,40,51,.08);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme:dark;
+    --bg:#0E151B; --panel:#151F27; --ink:#E4EAEE; --muted:#93A2AE; --line:#2B3843;
+    --magenta:#E07BB2; --series:#5A8FD8; --series-fill:rgba(90,143,216,.20);
+    --band-go:rgba(108,201,154,.10); --band-go-edge:#6CC99A; --band-no:rgba(147,162,174,.08); --band-no-edge:#66737D;
+    --grid:#22303A; --shadow:none;
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --bg:#0E151B; --panel:#151F27; --ink:#E4EAEE; --muted:#93A2AE; --line:#2B3843;
+  --magenta:#E07BB2; --series:#5A8FD8; --series-fill:rgba(90,143,216,.20);
+  --band-go:rgba(108,201,154,.10); --band-go-edge:#6CC99A; --band-no:rgba(147,162,174,.08); --band-no-edge:#66737D;
+  --grid:#22303A; --shadow:none;
+}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font:15px/1.5 "Barlow",system-ui,-apple-system,"Segoe UI",sans-serif;padding:0 20px;margin:0}
+@media (max-width:600px){body{padding:0 16px}}
+.wrap{max-width:1475px;margin:0 auto;padding-block:28px 48px;display:grid;grid-template-columns:minmax(0,1fr);gap:22px}
+.wrap > *{min-width:0}
+header{display:grid;gap:6px}
+.eyebrow{font:600 13px/1 "Barlow Condensed",sans-serif;letter-spacing:.14em;text-transform:uppercase;color:var(--magenta)}
+h1{font:700 clamp(34px,5vw,54px)/1 "Barlow Condensed","Arial Narrow",sans-serif;letter-spacing:.01em;margin:0;text-wrap:balance}
+h2{font:700 13px/1 "Barlow Condensed",sans-serif;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin:0}
+h3{font:700 22px/1.1 "Barlow Condensed",sans-serif;margin:0}
+.sub{color:var(--muted);max-width:80ch;margin:0}
+.facts{display:flex;flex-wrap:wrap;gap:8px 22px;margin-top:6px;font:500 14px/1.3 "IBM Plex Mono",ui-monospace,monospace}
+.facts span b{font-weight:500;color:var(--muted);margin-right:6px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:6px;box-shadow:var(--shadow);padding:16px 18px}
+.notice{border-left:3px solid #B26E12;padding:8px 14px;color:var(--muted);max-width:90ch}
+
+/* chart */
+.chartbar{display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px;margin-bottom:8px}
+.chartbar .legend{display:flex;gap:14px;font:500 12px "IBM Plex Mono",monospace;color:var(--muted)}
+.legend i{display:inline-block;width:18px;height:10px;margin-right:6px;vertical-align:-1px}
+.legend .l-av{border-top:2px solid var(--series);height:0;vertical-align:3px}
+.legend .l-mx{background:var(--series-fill)}
+.legend .l-go{background:var(--band-go);border:1px solid var(--band-go-edge)}
+.legend .l-no{background:var(--band-no);border:1px dashed var(--magenta)}
+.zoombtns{display:flex;flex-wrap:wrap;gap:6px}
+.livebar{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px;margin-top:8px;font:500 13px "IBM Plex Mono",monospace}
+.livebar select{font:500 13px "IBM Plex Mono",monospace;background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:4px;padding:4px 6px}
+.livebar .note{color:var(--muted)}
+#survey.on{background:var(--magenta);border-color:var(--magenta);color:#fff}
+.chart .sweep{fill:var(--magenta);opacity:.12}
+button{font:600 12px/1 "Barlow Condensed",sans-serif;letter-spacing:.08em;text-transform:uppercase;background:transparent;color:var(--ink);
+  border:1px solid var(--line);border-radius:4px;padding:6px 9px;cursor:pointer}
+button:hover{border-color:var(--magenta);color:var(--magenta)}
+button[aria-pressed="true"]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+button:focus-visible{outline:2px solid var(--magenta);outline-offset:2px}
+.chart{position:relative}
+.chart svg{display:block;width:100%;height:auto;overflow:visible}
+.axis text{font:500 11px "IBM Plex Mono",monospace;fill:var(--muted)}
+.axis line,.grid line{stroke:var(--grid);stroke-width:1}
+.bandlab{font:600 11px "Barlow Condensed",sans-serif;letter-spacing:.06em;fill:var(--muted)}
+.tip{position:absolute;pointer-events:none;background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:6px 9px;
+  font:500 12px/1.4 "IBM Plex Mono",monospace;box-shadow:0 2px 8px rgba(0,0,0,.15);white-space:nowrap;display:none;z-index:2}
+.tip b{font-weight:600}
+.caption{color:var(--muted);font-size:13px;margin:6px 0 0}
+
+/* opportunity cards */
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,420px),1fr));gap:16px}
+.card{display:grid;gap:10px;align-content:start}
+.card .top{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:6px 12px}
+.freq{font:500 13px "IBM Plex Mono",monospace;color:var(--muted)}
+.verdict{font:600 12px/1 "Barlow Condensed",sans-serif;letter-spacing:.1em;text-transform:uppercase;padding:5px 8px;border-radius:3px;border:1px solid}
+.v-go{color:var(--band-go-edge);border-color:var(--band-go-edge)}
+.v-check{color:#B26E12;border-color:#B26E12}
+.v-no{color:var(--muted);border-color:var(--line)}
+.v-legal{color:var(--magenta);border-color:var(--magenta)}
+.card dl{display:grid;grid-template-columns:max-content 1fr;gap:6px 12px;margin:0}
+.card dt{font:600 12px/1.5 "Barlow Condensed",sans-serif;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+.card dd{margin:0}
+@media (max-width:520px){.card dl{grid-template-columns:1fr}.card dd{margin-bottom:4px}}
+.card ul{margin:0;padding-left:18px}
+.card .zoom{justify-self:start}
+.effort{font:500 12px "IBM Plex Mono",monospace;color:var(--muted)}
+
+/* table */
+.tablebar{display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px;margin-bottom:10px}
+select,label.chk{font:500 13px "IBM Plex Mono",monospace;color:var(--ink)}
+select{background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:5px 8px}
+.tablewrap{overflow-x:auto;max-height:520px;overflow-y:auto}
+table{border-collapse:collapse;width:100%;font:400 13px "IBM Plex Mono",monospace}
+th{position:sticky;top:0;background:var(--panel);text-align:left;font:600 12px "Barlow Condensed",sans-serif;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);
+  border-bottom:1px solid var(--line);padding:6px 10px;white-space:nowrap}
+td{border-top:1px solid var(--line);padding:5px 10px;white-space:nowrap}
+td.num{text-align:right}
+tr.k-spur td{color:var(--muted)}
+.chart .empty{font:500 14px "IBM Plex Mono",monospace;fill:var(--muted)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="eyebrow"><a href="index.html" target="_top" style="color:inherit">rxapp</a> · L-band survey · RX-888</div>
+    <h1>What's on 1.0–1.7 GHz</h1>
+    <p class="sub">A sweep of the top of the RX-888's VHF/UHF tuner (it reaches 1700 MHz) from this antenna: each 7.4 MHz tuner
+      window watched for a moment, levels in dB above that window's noise floor, the strongest in each 100 kHz. Below the chart:
+      what each band could give, what it would take, and what this antenna can't reach.</p>
+    <div class="facts" id="facts"></div>
+  </header>
+
+  <p class="notice">“Survey live” sweeps the range on the chart: it needs the receiver, so it pauses the voice session (pages
+    listening on VHF / UHF, P25 included, lose their audio meanwhile) and puts the tuner back afterwards. The whole 1000–1700 MHz
+    takes about 3 minutes at 1.5 s per window; a zoomed range only its part. The tuner is less sensitive up here, and most of
+    these signals come from satellites or aircraft, so a weak or empty sweep is expected without a dedicated antenna.</p>
+
+  <section class="panel" aria-labelledby="chartTitle">
+    <div class="chartbar">
+      <h2 id="chartTitle">Spectrum, dB above the floor</h2>
+      <div class="legend" aria-hidden="true">
+        <span><i class="l-av"></i>average</span><span><i class="l-mx"></i>peak (max-hold)</span>
+        <span><i class="l-go"></i>worth a check</span><span><i class="l-no"></i>not allowed to decode</span>
+      </div>
+    </div>
+    <div class="zoombtns" id="zooms" role="group" aria-label="Chart range"></div>
+    <div class="livebar">
+      <button type="button" id="survey">Survey live</button>
+      <label>look <select id="secs" aria-label="Seconds per tuner window"><option value="1">1 s</option><option value="1.5" selected>1.5 s</option><option value="3">3 s</option><option value="6">6 s</option></select> per window</label>
+      <span id="surveyNote" class="note"></span>
+      <span id="focusBox"></span>
+    </div>
+    <div class="chart" id="chart"><div class="tip" id="tip" role="status"></div></div>
+    <p class="caption" id="caption"></p>
+  </section>
+
+  <section aria-labelledby="oppTitle" style="display:grid;gap:12px">
+    <h2 id="oppTitle">What could be here</h2>
+    <div class="cards" id="cards"></div>
+  </section>
+
+  <section class="panel" aria-labelledby="sigTitle">
+    <div class="tablebar">
+      <h2 id="sigTitle">Signals in the last survey</h2>
+      <select id="fBand" aria-label="Band"></select>
+      <label class="chk"><input type="checkbox" id="fAll"> include likely tuner spurs</label>
+      <span class="effort" id="nSig"></span>
+    </div>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>MHz</th><th>Band</th><th>Width kHz</th><th>Peak dB</th><th>Avg dB</th><th>What it is</th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+    <p class="caption">A signal: neighbouring 100 kHz cells whose peak stood 8 dB or more above the floor. “Likely tuner spur”:
+      within 100 kHz of a multiple of 16 MHz, where the tuner makes its own carriers.</p>
+  </section>
+</div>
+<script src="ndjson.js?v=1"></script>
+<script src="lband.js?v=1"></script>
+<script src="focus.js?v=2" data-focus="pause" data-what="the L-band survey (the voice session paused)"></script>
+<script src="spectheme.js?v=3"></script>
+<script src="minispec.js?v=10"></script>
+</body>
+</html>

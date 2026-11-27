@@ -1245,13 +1245,22 @@ def _ndjson(run):
 
 
 SURVEY_LAST = CONFIG.data_dir / "survey_last.json"
+SURVEY_PAGES = ("uhf", "lband")          # each survey page keeps its own last survey
+
+
+def _survey_file(page: str) -> Path:
+    if page not in SURVEY_PAGES:
+        raise HTTPException(404, f"no survey page {page!r}")
+    return SURVEY_LAST if page == "uhf" else SURVEY_LAST.with_name(f"survey_last_{page}.json")
 
 
 @app.post("/api/survey/stream")
-async def survey_stream(lo_mhz: float = 200.0, hi_mhz: float = 1000.0, secs: float = 1.5):
-    """A live VHF / UHF survey for the UHF survey page, as NDJSON: {"partial": {start, av, mx, window, windows}} per
-    tuner window (cells of 100 kHz from lo_mhz, dB above that window's floor), then {"done": the whole survey}, also
-    kept in rxapp_data/survey_last.json. It steps the tuner, so the voice session must be paused ("pause" focus)."""
+async def survey_stream(lo_mhz: float = 200.0, hi_mhz: float = 1000.0, secs: float = 1.5, page: str = "uhf"):
+    """A live VHF / UHF survey for a survey page (uhf: 200-1000 MHz, lband: 1000-1700 MHz), as NDJSON:
+    {"partial": {start, av, mx, window, windows}} per tuner window (cells of 100 kHz from lo_mhz, dB above that
+    window's floor), then {"done": the whole survey}, also kept as that page's last survey. It steps the tuner, so
+    the voice session must be paused ("pause" focus)."""
+    out = _survey_file(page)
     focus = None
     try:
         focus = json.loads(FOCUS_FILE.read_text()).get("focus")
@@ -1276,10 +1285,10 @@ async def survey_stop():
 
 
 @app.get("/api/survey/last")
-async def survey_last():
-    """The last live survey (null if none yet)."""
+async def survey_last(page: str = "uhf"):
+    """A survey page's last live survey (null if none yet)."""
     try:
-        return json.loads(SURVEY_LAST.read_text())
+        return json.loads(_survey_file(page).read_text())
     except (OSError, ValueError):
         return None
 

@@ -1818,3 +1818,17 @@ def test_every_voice_session_service_may_make_channels():
     for prof in (voice_session.AIR, voice_session.SAFETY, voice_session.MARINE, voice_session.APRS,
                  voice_session.UHF, voice_session.P25):
         assert prof.service in CHANNEL_KINDS, prof.service
+
+
+def test_each_survey_page_keeps_its_own_last_survey(tmp_path, monkeypatch):
+    import json
+    from fastapi.testclient import TestClient
+    from rxapp import server
+    monkeypatch.setattr(server, "SURVEY_LAST", tmp_path / "survey_last.json")
+    (tmp_path / "survey_last.json").write_text(json.dumps({"range_mhz": [200, 1000]}))
+    c = TestClient(server.app, client=("127.0.0.1", 50000))
+    assert c.get("/api/survey/last").json()["range_mhz"] == [200, 1000]
+    assert c.get("/api/survey/last?page=lband").json() is None
+    (tmp_path / "survey_last_lband.json").write_text(json.dumps({"range_mhz": [1000, 1700]}))
+    assert c.get("/api/survey/last?page=lband").json()["range_mhz"] == [1000, 1700]
+    assert c.get("/api/survey/last?page=../x").status_code == 404
