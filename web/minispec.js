@@ -21,7 +21,7 @@
   css.textContent = `
     header.mini{display:flex!important;gap:16px 24px;align-items:flex-start}
     header.mini>.mini-left{display:grid;gap:6px;flex:1 1 auto;min-width:0}
-    .minispec{flex:0 0 616px;border:1px solid var(--spec-border);border-radius:6px;background:var(--spec-bg);overflow:hidden;
+    .minispec{flex:0 0 708px;border:1px solid var(--spec-border);border-radius:6px;background:var(--spec-bg);overflow:hidden;
       color:var(--spec-text);font:11px ui-monospace,Menlo,monospace}
     .minispec .ms-bar{display:flex;gap:8px;align-items:center;padding:5px 8px;background:var(--spec-bar);border-bottom:1px solid var(--spec-border)}
     .minispec .ms-bar b{font:600 12px -apple-system,system-ui,sans-serif;color:var(--spec-strong);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -29,7 +29,7 @@
     .minispec .ms-st.live{color:var(--spec-live)}
     .minispec canvas{display:block;width:100%}
     .minispec .ms-spec{height:120px} .minispec .ms-wf{height:105px}
-    @media (max-width:1180px){header.mini{flex-direction:column}.minispec{flex:none;width:100%}}`;
+    @media (max-width:1272px){header.mini{flex-direction:column}.minispec{flex:none;width:100%}}`;
   document.head.appendChild(css);
   const left = document.createElement('div');
   left.className = 'mini-left';
