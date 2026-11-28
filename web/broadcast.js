@@ -24,7 +24,7 @@ const S = {stereo: {}, stereoAt: 0, sec: 'am', st: null, sw: null, hits: {am: {}
 async function ensureInput(sec, freq, scan = false) {
   const [h, f] = await Promise.all([api('/api/health'), api('/api/voice/focus')]);
   const fm = sec === 'fm';
-  const canHear = fm ? h.band === 'vhf' && (scan || (h.vhf && h.vhf.center_hz && Math.abs(h.vhf.center_hz - freq) < 4.0e6))
+  const canHear = fm ? h.band === 'vhf' && (scan || (h.vhf && h.vhf.center_hz && Math.abs(h.vhf.center_hz - freq) < 3.5e6))   // window +-4.2 MHz, less the channel's width
     : h.band === 'hf';
   if (canHear && f.focus) {
     note(`Listening on what the receiver already hears; it stays with ${f.label || f.focus}.`);
@@ -107,7 +107,7 @@ function connect(ssrc) {
     audio.retry = setTimeout(async () => {
       audio.retry = null;
       if (!S.playing || audio.ssrc !== ssrc) return;
-      try { if (e.code === 4404) { const p = S.playing, band = p.sec === 'fm' ? 'vhf' : 'hf'; S.chans[band] = (await post('/api/channels', {freq_hz: p.freq, mode: p.sec === 'fm' ? 'wfm' : 'am', band, label: 'broadcast'})).ssrc; } } catch (err) { /* rxapp still starting: try again */ }
+      try { if (e.code === 4404) { const p = S.playing, band = p.sec === 'fm' ? 'vhf' : 'hf'; S.chans[band] = (await post('/api/channels', {freq_hz: p.freq, mode: p.sec === 'fm' ? 'wfm' : 'am', band, label: 'broadcast'})).ssrc; if (p.sec === 'fm') await setStereo(stereoPref()); } } catch (err) { /* rxapp still starting: try again */ }
       connect(e.code === 4404 ? S.chans[S.playing.sec === 'fm' ? 'vhf' : 'hf'] : ssrc);
     }, 1000);
   };

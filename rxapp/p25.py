@@ -27,6 +27,7 @@ own messages (Trunk), not transcribed, and never played live.
 Calls on encrypted talkgroups are granted on the control channel (so they show in the activity) but can't be
 heard. Recordings stay in rxapp_data/p25 (pruned like the public-safety ones) and are never published.
 """
+import bisect
 import json
 import logging
 import re
@@ -37,7 +38,7 @@ import threading
 import time
 from collections import deque
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Optional
 
 import numpy as np
 
@@ -229,23 +230,52 @@ class Trunk:
 CALL_RE = re.compile(r"(\d{8}_\d{6})_\d+_P25_\w*?_GROUP_TGT_(\d+)_SRC_(\d+)\.wav$")
 
 
+_CALL_CACHE: Dict[str, Dict[str, tuple]] = {}   # calls dir -> clip name -> (mtime, size, the call)
+_CALL_DIRS_KEPT = 3
+
+
 def list_calls(calls_dir: Path, now: Optional[float] = None, limit: int = 300, enc_calls=(), enc_tgs=()):
     """Finished per-call recordings (dsd-fme -P), newest first. A file still being written (changed in the last
-    2 s) isn't finished; dsd-fme's catch-all file for calls it couldn't attribute (TGT_0) is left out."""
+    2 s) isn't finished; dsd-fme's catch-all file for calls it couldn't attribute (TGT_0) is left out.
+    A session collects thousands of calls and the pages poll this every few seconds, so each recording is parsed
+    once and the encrypted sightings are looked up per talkgroup."""
     now = now or time.time()
+    by_tg: Dict[int, list] = {}
+    for et, etg in enc_calls:
+        by_tg.setdefault(int(etg), []).append(et)
+    for v in by_tg.values():
+        v.sort()
     out = []
+    old, seen = _CALL_CACHE.get(str(calls_dir), {}), {}     # only files still there are kept: pruned ones drop out
     for p in calls_dir.glob("*.wav") if calls_dir.exists() else []:
-        m = CALL_RE.search(p.name)
-        st = p.stat()
-        if not m or int(m.group(2)) == 0 or now - st.st_mtime < 2:
+        try:
+            st = p.stat()
+        except OSError:                              # pruned while listing
             continue
-        t0 = time.mktime(time.strptime(m.group(1), "%Y%m%d_%H%M%S"))
-        secs = round(max(0, st.st_size - 44) / 16000, 1)
-        tg = int(m.group(2))
+        hit = old.get(p.name)
+        if hit and hit[0] == st.st_mtime and hit[1] == st.st_size:
+            c = hit[2]
+        else:
+            m = CALL_RE.search(p.name)
+            if not m or int(m.group(2)) == 0:
+                continue
+            c = {"t": time.mktime(time.strptime(m.group(1), "%Y%m%d_%H%M%S")), "tg": int(m.group(2)),
+                 "src": int(m.group(3)), "secs": round(max(0, st.st_size - 44) / 16000, 1), "clip": p.name}
+        seen[p.name] = (st.st_mtime, st.st_size, c)
+        if now - st.st_mtime < 2:
+            continue
         # encrypted: the voice channel named this talkgroup with a non-clear ALG ID during the call. dsd-fme
         # often learns that a few frames in, so the recording is noise; such calls are listed, not played.
-        enc = tg in enc_tgs or any(etg == tg and t0 - 3 <= et <= t0 + secs + 3 for et, etg in enc_calls)
-        out.append({"t": t0, "tg": tg, "src": int(m.group(3)), "secs": secs, "clip": p.name, "enc": enc})
+        ts = by_tg.get(c["tg"])
+        enc = c["tg"] in enc_tgs
+        if not enc and ts:
+            i = bisect.bisect_left(ts, c["t"] - 3)
+            enc = i < len(ts) and ts[i] <= c["t"] + c["secs"] + 3
+        out.append({**c, "enc": enc})
+    _CALL_CACHE.pop(str(calls_dir), None)
+    _CALL_CACHE[str(calls_dir)] = seen
+    while len(_CALL_CACHE) > _CALL_DIRS_KEPT:          # the sessions looked at most recently
+        _CALL_CACHE.pop(next(iter(_CALL_CACHE)))
     return sorted(out, key=lambda c: -c["t"])[:limit]
 
 

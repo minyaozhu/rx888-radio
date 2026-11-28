@@ -516,6 +516,10 @@ gets a few messages, from the nearest aircraft: enough to mark some planes, not 
   stopping one cuts its lifetime to 1 s. ka9q-python's `remove_channel` only tunes a channel to 0 Hz, and
   radiod deletes it only when its lifetime runs out, so a stream without one leaks a channel on every
   rebuild. `python -m rxapp.reap [--apply]` removes such leftovers (spectrum, 0 Hz, not rxapp's).
+- **Nothing slow on the event loop.** Audio to the pages (`/ws/audio`) is relayed on it, so a request that holds
+  it for 0.5 s drops 0.5 s of every stream: the P25 tab's call list (thousands of recordings, polled every 2 s)
+  cut FM audio every 2 s. File listings and database queries that can take long run in a thread
+  (`asyncio.to_thread`), and the P25 call list parses each recording once.
 - **SNR** is estimated as baseband power over (noise density × filter width).
 - **Storage**: `rxapp_data/rxapp.sqlite` (scans, detections, recordings, health, events) and
   `rxapp_data/recordings/*.wav`.

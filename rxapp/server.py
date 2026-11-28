@@ -328,7 +328,7 @@ def _digital_mode_routes(name: str):
         sql, args = f"SELECT * FROM {name} WHERE t > ? AND id > ?", [since, after_id]
         if band:
             sql, args = sql + " AND band = ?", args + [band]
-        return S.store.query(sql + " ORDER BY t DESC, band, hz LIMIT ?", args + [min(limit, 50000)])
+        return await asyncio.to_thread(S.store.query, sql + " ORDER BY t DESC, band, hz LIMIT ?", args + [min(limit, 50000)])
 
     @app.get(f"/api/{name}/conversations", name=f"{name}_conversations")
     async def conversations_(hours: float = 1.0, band: Optional[str] = None):
@@ -696,17 +696,38 @@ async def p25_trunk(session: Optional[str] = None):
 async def p25_calls(session: Optional[str] = None, limit: int = 300):
     """Recorded calls, newest first: talkgroup, radio ID, length, clip name, encrypted or not, and the
     transcript once voice_session.py has one (text; transcribed true, even when no words were found)."""
+    return await asyncio.to_thread(_p25_call_list, session, min(limit, 2000))   # off the event loop: audio runs there
+
+
+_P25_TEXT: Dict[str, tuple] = {}
+
+
+def _p25_transcripts(path: Path) -> dict:
+    """The session's transcripts by clip, read again only when the file has grown."""
+    try:
+        st = path.stat()
+    except OSError:
+        return {}
+    hit = _P25_TEXT.get(str(path))
+    if hit and hit[0] == (st.st_size, st.st_mtime):
+        return hit[1]
+    text = {r["clip"]: r for r in _jsonl(path) if r.get("clip")}
+    _P25_TEXT.pop(str(path), None)
+    _P25_TEXT[str(path)] = ((st.st_size, st.st_mtime), text)
+    while len(_P25_TEXT) > 3:                        # the sessions looked at most recently
+        _P25_TEXT.pop(next(iter(_P25_TEXT)))
+    return text
+
+
+def _p25_call_list(session: Optional[str], limit: int):
     from .p25 import list_calls
     d = _session_dir(P25_DIR, session)
     try:
         j = json.loads((d / "p25.json").read_text())
     except (OSError, ValueError):
         j = {}
-    calls = list_calls(d / "calls", limit=min(limit, 2000), enc_calls=j.get("enc_calls", []), enc_tgs=set(j.get("enc_tgs", [])))
-    text = {}                                    # voice_session.py's Whisper transcripts, by clip
-    for r in _jsonl(d / "transcripts.jsonl"):
-        if r.get("clip"):
-            text[r["clip"]] = r
+    calls = list_calls(d / "calls", limit=limit, enc_calls=j.get("enc_calls", []), enc_tgs=set(j.get("enc_tgs", [])))
+    text = _p25_transcripts(d / "transcripts.jsonl")     # voice_session.py's Whisper transcripts, by clip
     for c in calls:
         r = text.get(c["clip"])
         if r is not None:

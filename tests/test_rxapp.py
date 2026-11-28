@@ -1976,3 +1976,19 @@ def test_only_one_rxapp_runs_at_a_time(tmp_path):
     held.close()                                          # the first one ends: the next one starts
     r = subprocess.run([_sys.executable, "-c", code], capture_output=True, text=True, timeout=30)
     assert r.returncode == 0 and "started" in r.stdout
+
+
+def test_p25_call_cache_forgets_deleted_recordings(tmp_path):
+    from rxapp import p25 as P
+    d = tmp_path / "calls"
+    d.mkdir()
+    names = ["20261127_101010_1_P25_x_GROUP_TGT_1501_SRC_7.wav", "20261127_101020_1_P25_x_GROUP_TGT_1501_SRC_8.wav"]
+    for n in names:
+        (d / n).write_bytes(b"\0" * 16044)
+        os.utime(d / n, (time.time() - 60, time.time() - 60))
+    if not P.CALL_RE.search(names[0]):
+        pytest.skip("call file names differ")
+    assert len(P.list_calls(d, limit=10)) == 2
+    (d / names[0]).unlink()
+    assert [c["clip"] for c in P.list_calls(d, limit=10)] == [names[1]]
+    assert set(P._CALL_CACHE[str(d)]) == {names[1]}
