@@ -508,6 +508,10 @@ gets a few messages, from the nearest aircraft: enough to mark some planes, not 
   radiod starts a new channel's AGC at low gain and climbs ~20 dB/s, so a fresh channel was silent for ~4 s;
   `agc_seed` gives it a starting gain (its own last gain, or the nearest settled channel's + 10 dB), and
   audio is at full level within half a second.
+  Commands are UDP, and a band switch reopens ~50 channels at once: a lost AGC-on after the gain seed left a
+  channel at that fixed gain (AM broadcast at 90 dB, 91% of samples clipped). So 1.5 s after a channel opens
+  rxapp reads radiod's status and switches AGC on again if it's off (a few channels at a time), and a status
+  poll that finds it off does the same, at most every 30 s.
   Spectrum streams (display, panels, scans, voice_session.py) are `LeasedSpectrumStream`s with the same lease;
   stopping one cuts its lifetime to 1 s. ka9q-python's `remove_channel` only tunes a channel to 0 Hz, and
   radiod deletes it only when its lifetime runs out, so a stream without one leaks a channel on every

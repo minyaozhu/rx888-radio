@@ -28,6 +28,8 @@ LIFETIME_FRAMES = 1500        # radiod frames are 20 ms: 30 s without a refresh
 KEEPALIVE_SEC = 10
 STALL_SEC = 5                 # no new output packets for this long: re-create the channel
 AGC_MODES = {"am", "sam", "usb", "lsb", "cwu", "cwl"}
+AGC_CHECK_SEC = 1.5                 # after a channel opens: when to check its AGC really is on (_ensure_agc)
+AGC_RETRY_SEC = 30.0                # a status poll that finds it off again switches it on at most this often
 HF_SEED_DB = 90.0             # HF linear channels settle at 72-97 dB here; used when no neighbour's gain is known yet
 SEED_MARGIN_DB = 10           # a borrowed gain is raised by this: the AGC comes down fast but climbs ~20 dB/s
 
@@ -100,6 +102,9 @@ class Radio:
         self.on_tuner_move = []          # async callbacks (the spectrum follows the tuner)
         self.vhf_paused = False          # a VHF sweep owns the tuner; VHF channels are parked
         self.store_event = lambda kind, **kw: None
+        self._agc_checks = set()         # _ensure_agc tasks (kept so they aren't garbage-collected mid-run)
+        self._agc_sem = asyncio.Semaphore(4)   # a band switch reopens ~50 channels: check a few at a time, not
+        self._agc_fixed = {}             # all at once on the shared thread pool; ssrc -> when refresh() last fixed it
 
     # -- lifecycle -------------------------------------------------------
     async def connect(self):
@@ -157,6 +162,27 @@ class Radio:
         if ch.mode == "wfm" and ch.stereo:
             await asyncio.to_thread(self.ctl.set_output_channels, ch.ssrc, 2)
         ch.parked, ch.opened = False, time.time()
+        if ch.mode in AGC_MODES:
+            self._agc_checks.add(asyncio.create_task(self._ensure_agc(ch, ch.opened)))
+            for t in [t for t in self._agc_checks if t.done()]:
+                self._agc_checks.discard(t)
+
+    async def _ensure_agc(self, ch, opened: float, tries: int = 3):
+        """Check, once the commands have landed, that radiod really runs the channel's AGC, and switch it on
+        again if not. The commands are UDP: when a band switch reopens ~50 channels at once (~200 commands in a
+        burst), one can be lost, and a lost AGC-on after the gain seed leaves the channel at that fixed gain. An
+        AM broadcast station at a 90 dB seed came out with 91% of its samples clipped."""
+        for _ in range(tries):
+            await asyncio.sleep(AGC_CHECK_SEC)
+            if ch.opened != opened or ch.parked or ch.mode not in AGC_MODES or ch.ssrc not in self.channels:
+                return                               # closed, reopened or retuned to another mode since
+            async with self._agc_sem:
+                d = await self.status(ch.ssrc, timeout=2.0)
+            if d is None or d.get("agc_enable") is not False:
+                return
+            log.warning("channel %d (%.1f kHz %s): AGC was off at %.0f dB gain; switching it on",
+                        ch.ssrc, ch.freq_hz / 1e3, ch.mode, d.get("gain") or 0)
+            await asyncio.to_thread(self.ctl.set_agc, ch.ssrc, True)
 
     async def _close(self, ch):
         ch.parked = True
@@ -231,6 +257,8 @@ class Radio:
             if rate:
                 await asyncio.to_thread(self.ctl.set_sample_rate, ssrc, rate)
             await asyncio.to_thread(self.ctl.set_agc, ssrc, True)
+            if ch.mode in AGC_MODES:
+                self._agc_checks.add(asyncio.create_task(self._ensure_agc(ch, ch.opened)))
             ch.sample_rate = rate or 48000          # WFM: radiod's output is always 48 kHz
         if ch.filter_hz and (filter_hz is not ... or mode != old_mode):
             await asyncio.to_thread(self.ctl.set_filter, ssrc, *ch.filter_hz)
@@ -338,6 +366,12 @@ class Radio:
         if d.get("output_samprate"):
             ch.sample_rate = int(d["output_samprate"])
         await self._check_stall(ch, d.get("output_data_packets"))
+        now = time.time()
+        if d.get("agc_enable") is False and ch.mode in AGC_MODES and now - ch.opened > AGC_CHECK_SEC \
+                and now - self._agc_fixed.get(ch.ssrc, 0) > AGC_RETRY_SEC:     # (see _ensure_agc) not every poll
+            self._agc_fixed[ch.ssrc] = now
+            log.warning("channel %d (%.1f kHz %s): AGC was off; switching it on", ch.ssrc, ch.freq_hz / 1e3, ch.mode)
+            await asyncio.to_thread(self.ctl.set_agc, ch.ssrc, True)
         ch.power_db, ch.noise_db = d.get("baseband_power"), d.get("noise_density")
         ch.gain_db, ch.snr_db, ch.updated = d.get("gain"), estimate_snr(d), time.time()
         return ch

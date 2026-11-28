@@ -1934,6 +1934,35 @@ def test_each_survey_page_keeps_its_own_last_survey(tmp_path, monkeypatch):
     assert c.get("/api/survey/last?page=../x").status_code == 404
 
 
+def test_a_channel_whose_agc_on_command_was_lost_gets_it_again(monkeypatch):
+    import asyncio as aio
+    from types import SimpleNamespace
+    from rxapp import radio as R
+    monkeypatch.setattr(R, "AGC_CHECK_SEC", 0.01)
+    r = R.Radio.__new__(R.Radio)
+    r.channels, r._agc_checks, r._agc_sem, r._agc_fixed = {}, set(), aio.Semaphore(4), {}
+    sent, state = [], {"agc_enable": False, "gain": 90.0}
+    r.ctl = SimpleNamespace(set_agc=lambda ssrc, on: sent.append((ssrc, on)) or state.update(agc_enable=on))
+
+    async def status(ssrc, timeout=1.0):
+        return dict(state)
+    r.status = status
+    ch = R.Channel(ssrc=7, freq_hz=610e3, mode="am", band="hf")
+    ch.opened = 1.0
+    r.channels[7] = ch
+    aio.run(r._ensure_agc(ch, 1.0))
+    assert sent == [(7, True)]                             # off after the burst: switched on, once
+    aio.run(r._ensure_agc(ch, 1.0))
+    assert sent == [(7, True)]                             # already on: nothing sent
+    state["agc_enable"] = False
+    ch.opened = 2.0                                        # reopened since: that open's own check handles it
+    aio.run(r._ensure_agc(ch, 1.0))
+    assert sent == [(7, True)]
+    ch.mode = "wfm"                                        # FM has no AGC to switch on
+    aio.run(r._ensure_agc(ch, 2.0))
+    assert sent == [(7, True)]
+
+
 def test_only_one_rxapp_runs_at_a_time(tmp_path):
     import subprocess
     import sys as _sys
