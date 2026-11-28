@@ -142,7 +142,7 @@ $('vol').addEventListener('input', () => { if (audio.gain) audio.gain.gain.value
 // ------------------------------------------------------------------ scanning
 const SW_BANDS = () => (S.sw ? S.sw.bands : []);
 function selectedBands() { return [...document.querySelectorAll('#bands input:checked')].map((x) => x.value); }
-// Stations show up as the scan finds them (postStream: ndjson.js), not all at the end: SW band by band, FM
+// Stations show up as the scan finds them (postStream: ndjson.js), not all at the end: SW bands all at once, FM
 // tuner window by tuner window (and its stereo check the same way).
 $('scan').addEventListener('click', async () => {
   $('scan').disabled = true;
@@ -153,13 +153,15 @@ $('scan').addEventListener('click', async () => {
     if (sec === 'sw') {
       const bands = swBands;
       await ensureInput('sw');
-      let found = 0;
-      for (const [k, b] of bands.entries()) {
-        $('scanNote').textContent = `scanning ${b} (${k + 1}/${bands.length})… ${found} stations so far`;
-        const add = (hits) => { for (const h of hits) S.hits.sw[Math.round(h.freq_hz / 5000) * 5000] = h.snr_db; draw(); };
-        const r = await postStream(`/api/scan/${b}/stream`, {}, add);
-        add(r.hits); found += r.hits.length;
-      }
+      // all the selected bands at once (one capture each, side by side): about as long as one band
+      let found = 0, nb = 0;
+      $('scanNote').textContent = `scanning ${bands.length} band${bands.length === 1 ? '' : 's'}…`;
+      await postStream('/api/scans/stream', {bands}, (r) => {
+        nb++;
+        if (!r.error) { for (const h of r.hits) S.hits.sw[Math.round(h.freq_hz / 5000) * 5000] = h.snr_db; found += r.hits.length; }
+        $('scanNote').textContent = `scanning… ${nb}/${bands.length} bands, ${found} stations so far`;
+        draw();
+      });
     } else {
       await ensureInput(sec, 98e6, true);
       const what = sec === 'fm' ? 'scanning 88–108 MHz (the tuner steps across the band, ~25 s)' : 'scanning 530–1700 kHz';

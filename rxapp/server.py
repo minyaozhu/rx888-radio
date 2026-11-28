@@ -1226,6 +1226,21 @@ async def spectrum_view(body: SpectrumView):
     return S.spectrum.info()
 
 
+class ScanBands(BaseModel):
+    bands: List[str]
+
+
+@app.post("/api/scans/stream")
+async def scans_stream(body: ScanBands, frames: int = 20, min_snr: float = 8.0):
+    """Several HF bands scanned at the same time (a band's scan takes ~2 s of waiting for spectrum frames, so
+    together they take about as long as one). NDJSON: {"partial": <a band's scan result>} as each finishes (or
+    {"partial": {"band", "error"}}), then {"done": [all of them, in the order asked]}."""
+    for b in body.bands:
+        if b not in BANDS:
+            raise HTTPException(404, f"unknown band {b}")
+    return _ndjson(lambda emit: S.scanner.scan_many(body.bands, frames, min_snr, on_band=emit))
+
+
 @app.post("/api/scan/{band}")
 async def scan(band: str, frames: int = 20, min_snr: float = 8.0):
     if band not in BANDS:

@@ -279,7 +279,7 @@ send Cmd+C/V/Z/Y and media keys. Keys reach rxapp only while its browser window 
 - **Marine:** Coast Guard distress and safety channels, and NMC Point Reyes weather.
 
 *Scan* measures each listed channel's voice band (300–2700 Hz above the dial for USB, below for LSB) against the
-local noise floor, one spectrum capture per ~430 kHz of channels (`POST /api/ssb/check {group}`; the list is
+local noise floor, one spectrum capture per ~430 kHz of channels, all captured at once (`POST /api/ssb/check {group}`; the list is
 `GET /api/ssb/channels`, from `rxapp/ssb.py`). *Listen* opens the page's own USB/LSB channel. While listening,
 ±100 / ±500 Hz buttons nudge the tuning and a button flips the sideband. Like AM and shortwave, it holds the HF input.
 
@@ -288,7 +288,7 @@ local noise floor, one spectrum capture per ~430 kHz of channels (`POST /api/ssb
 `broadcast.html` (tab *AM / SW / FM*): Bay Area AM and FM stations (`rxapp/broadcast.py`, from Wikipedia's list
 of Bay Area stations) and shortwave broadcasters scheduled this hour in the 120 m-13 m bands, from the EiBi
 schedule (eibispace.de; downloaded for the current season, A = summer, B = winter, into `rxapp_data/eibi/`).
-*Scan* runs the band scanner and adds a signal column (stations heard but not listed show as unlisted /
+*Scan* runs the band scanner (the shortwave bands all at once, `POST /api/scans/stream`) and adds a signal column (stations heard but not listed show as unlisted /
 unscheduled); *Listen* creates the page's own channel (AM, or WFM on the VHF tuner) and plays it. AM and
 shortwave hold the receiver on the HF input, FM pauses the voice session and moves the tuner; *Resume rotation*
 gives the receiver back. API: `/api/broadcast/stations`, `/api/broadcast/sw/now?band=`, and the scanner's
@@ -535,6 +535,7 @@ gets a few messages, from the nearest aircraft: enough to mark some planes, not 
 | POST | `/api/spectrum` | move/zoom the view `{center_hz, bin_hz}` |
 | POST | `/api/scan/{band}` | scan now |
 | POST | `/api/scan/{band}/stream` | the same scan as NDJSON: `{"partial": [hits]}` as found, then `{"done": result}` or `{"error": msg}` |
+| POST | `/api/scans/stream` `{bands}` | several HF bands scanned at the same time (each is ~2 s of waiting for radiod's ~10 spectrum frames a second, so 8 bands take ~4 s, not ~19 s); a band's result per partial |
 | POST | `/api/ssb/check/stream`, `/api/broadcast/fm/stereo/stream` | the SSB channel check and FM stereo probe, streamed the same way |
 | GET/POST/DELETE | `/api/schedules`, `/api/watches` | server-side monitoring |
 | GET | `/api/occupancy/{band}`, `/api/timeline/{band}`, `/api/health/history` | dashboard data |

@@ -127,8 +127,8 @@ $('vol').addEventListener('input', () => { if (audio.gain) audio.gain.gain.value
 
 // ------------------------------------------------------------------ scanning
 const selectedBands = () => [...document.querySelectorAll('#bands input:checked')].map((x) => x.value);
-// Results show up as they come in (postStream: ndjson.js): conversations band by band, then the listed
-// channels one spectrum window (~430 kHz of channels) at a time.
+// Results show up as they come in (postStream: ndjson.js): the bands are searched all at once, then the listed
+// channels the search didn't cover, also all at once (one spectrum window per ~430 kHz of channels).
 $('scan').addEventListener('click', async () => {
   $('scan').disabled = true;
   const sec = S.sec;                       // the section being scanned, even if you switch while it runs
@@ -142,20 +142,17 @@ $('scan').addEventListener('click', async () => {
       const bands = sel.filter((b) => all.includes(b));   // 60 m: channels only
       S.activity = [];
       draw();
-      for (const [k, b] of bands.entries()) {
-        $('scanNote').textContent = `searching ${S.data.ham_bands.find((x) => x.band === b).label} for conversations (${k + 1}/${bands.length})… ${S.activity.length} found so far`;
-        try {
-          const r = await postStream(`/api/scan/${b}/stream`, {}, () => {});
-          searched.push(b);
-          const side = r.mode;
-          for (const h of r.hits) {
-            // speech energy peaks a few hundred Hz into the voice band: put the dial ~600 Hz the other way
-            const dial = Math.round((h.freq_hz + (side === 'usb' ? -600 : 600)) / 100) * 100;
-            S.activity.push({band: b, freq_hz: dial, mode: side, snr: h.snr_db});
-          }
-          draw();
-        } catch (e) { /* a band beyond the coverage */ }
-      }
+      // all the selected bands at once (one capture each, side by side): about as long as one band
+      $('scanNote').textContent = `searching ${bands.length} band${bands.length === 1 ? '' : 's'} for conversations…`;
+      const took = (r) => {
+        if (r.error) return;                   // a band beyond the coverage
+        searched.push(r.band);
+        // speech energy peaks a few hundred Hz into the voice band: put the dial ~600 Hz the other way
+        for (const h of r.hits) S.activity.push({band: r.band, freq_hz: Math.round((h.freq_hz + (r.mode === 'usb' ? -600 : 600)) / 100) * 100, mode: r.mode, snr: h.snr_db});
+        $('scanNote').textContent = `searching for conversations… ${searched.length}/${bands.length} bands, ${S.activity.length} found so far`;
+        draw();
+      };
+      if (bands.length) await postStream('/api/scans/stream', {bands}, took);
     }
     // listed channels inside a band just searched were covered by that search: only the rest are measured
     const skip = sec === 'ham' ? S.data.ham_bands.filter((h) => searched.includes(h.band) && h.lo_hz != null).map((h) => [h.lo_hz, h.hi_hz]) : [];

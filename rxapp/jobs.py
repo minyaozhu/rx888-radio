@@ -70,6 +70,7 @@ class Scanner:
         self.spectrum = spectrum      # the display's Spectrum (for its radio and bin count)
         self.store = store
         self.lock = asyncio.Lock()    # one scan at a time
+        self.ctl_lock = asyncio.Lock()  # spectrum channels opened and closed one at a time (capture_many)
         self.bins = spectrum.bins
         self.active = None            # (lo_hz, hi_hz) being captured now (RF), for the spectrum tiles' highlight
         self.band_range = None        # (lo_hz, hi_hz) of the whole scan running (the tiles show all of it)
@@ -83,14 +84,21 @@ class Scanner:
         a = self.active
         return {"band_lo": lo, "band_hi": hi, "lo": a[0] if a else None, "hi": a[1] if a else None}
 
+    def _clamp(self, center_hz: float, bin_hz: float) -> float:
+        """An HF capture's center, moved in so the whole capture is inside the receiver's coverage."""
+        half = self.bins * bin_hz / 2
+        return min(max(center_hz, half), CONFIG.max_freq_hz - half) if 2 * half < CONFIG.max_freq_hz \
+            else CONFIG.max_freq_hz / 2
+
     async def _capture(self, center_hz: float, bin_hz: float, frames: int, timeout: float = 15.0,
-                       clamp: bool = True):
-        """Average `frames` spectrum frames (linear power) from a temporary spectrum channel."""
+                       clamp: bool = True, mark: bool = True):
+        """Average `frames` spectrum frames (linear power) from a temporary spectrum channel. mark: show the
+        captured range on the spectrum tiles (capture_many marks all of its captures at once instead)."""
         half = self.bins * bin_hz / 2
         if clamp:
-            center_hz = min(max(center_hz, half), CONFIG.max_freq_hz - half) if 2 * half < CONFIG.max_freq_hz \
-                else CONFIG.max_freq_hz / 2
-        if clamp:                     # HF: the capture is the range (VHF: _capture_vhf sets the tuner window)
+            center_hz = self._clamp(center_hz, bin_hz)
+        mark = mark and clamp         # HF: the capture is the range (VHF: _capture_vhf sets the tuner window)
+        if mark:
             self.active = (center_hz - half, center_hz + half)
         loop = asyncio.get_running_loop()
         q: asyncio.Queue = asyncio.Queue()
@@ -102,7 +110,8 @@ class Scanner:
 
         stream = LeasedSpectrumStream(control=self.spectrum.radio.ctl, frequency_hz=center_hz, bin_count=self.bins,
                                 resolution_bw=bin_hz, on_spectrum=on_frame)
-        await asyncio.to_thread(stream.start)
+        async with self.ctl_lock:     # radiod's control socket: one channel set up or torn down at a time
+            await asyncio.to_thread(stream.start)
         acc, n, t0 = None, 0, time.time()
         try:
             for _ in range(2):        # the first frames can predate the full configuration
@@ -112,8 +121,9 @@ class Scanner:
                 acc = p if acc is None else acc + p
                 n += 1
         finally:
-            await asyncio.to_thread(stream.stop)
-            if clamp:
+            async with self.ctl_lock:
+                await asyncio.to_thread(stream.stop)
+            if mark:
                 self.active = None
         if n == 0:
             raise TimeoutError("no spectrum frames")
@@ -153,12 +163,21 @@ class Scanner:
                          else self._peak_hits(f, d, inb, fl, min_snr, bin_hz))
             freqs, db, n = await self._capture_vhf(band.start_hz, band.stop_hz, bin_hz, frames, window)
         else:
-            bin_hz = next(b for b in NICE_BINS if b * self.bins >= width * 1.1)
-            if band.step_hz:
-                bin_hz = min(bin_hz, max(NICE_BINS[0], band.step_hz / 4))
-                while bin_hz * self.bins < width * 1.1:
-                    bin_hz *= 2
-            freqs, db, n = await self._capture((band.start_hz + band.stop_hz) / 2, bin_hz, frames)
+            center, bin_hz = self._hf_plan(band)
+            freqs, db, n = await self._capture(center, bin_hz, frames)
+        return self._result(name, band, freqs, db, n, bin_hz, min_snr, emit)
+
+    def _hf_plan(self, band):
+        """An HF band's single capture: its center and the finest bin size whose capture covers the band."""
+        width = band.stop_hz - band.start_hz
+        bin_hz = next(b for b in NICE_BINS if b * self.bins >= width * 1.1)
+        if band.step_hz:
+            bin_hz = min(bin_hz, max(NICE_BINS[0], band.step_hz / 4))
+            while bin_hz * self.bins < width * 1.1:
+                bin_hz *= 2
+        return (band.start_hz + band.stop_hz) / 2, bin_hz
+
+    def _result(self, name, band, freqs, db, n, bin_hz, min_snr, emit=None):
         inband = (freqs >= band.start_hz) & (freqs <= band.stop_hz)
         floor = float(np.percentile(db[inband], 30))
         hits = self._grid_hits(band, freqs, db, floor, min_snr) if band.step_hz \
@@ -169,6 +188,65 @@ class Scanner:
         self.store.event("scan", band=name, stations=len(hits))
         return {"scan_id": sid, "band": name, "mode": band.mode, "floor_db": floor, "bin_hz": bin_hz,
                 "frames": n, "hits": [{"freq_hz": f, "snr_db": round(s, 1)} for f, s in hits]}
+
+    async def capture_many(self, specs, frames: int, on_done=None):
+        """Several HF captures at the same time: specs [(center_hz, bin_hz)], each averaged over `frames` frames.
+        radiod digitizes all of HF at once and serves many spectrum channels side by side, and a capture's time
+        is waiting for its frames (radiod sends ~10 a second, whatever the range), so N captures take about as
+        long as one. on_done(i, (freqs, db, n) or an exception) as each finishes; returns them in spec order.
+        The spectrum tiles show the whole span being captured."""
+        centers = [(self._clamp(c, b), b) for c, b in specs]
+        if not centers:
+            return []
+        self.active = (min(c - self.bins * b / 2 for c, b in centers), max(c + self.bins * b / 2 for c, b in centers))
+
+        async def one(i, c, b):
+            try:
+                r = await self._capture(c, b, frames, mark=False)
+            except Exception as e:              # one capture failing doesn't stop the others
+                log.warning("capture at %.3f MHz: %s", c / 1e6, e)
+                r = e
+            if on_done:
+                try:
+                    on_done(i, r)
+                except Exception as e:          # nor does a result that can't be read
+                    log.warning("capture at %.3f MHz: %s", c / 1e6, e)
+                    r = e
+            return r
+        try:
+            return await asyncio.gather(*(one(i, c, b) for i, (c, b) in enumerate(centers)))
+        finally:
+            self.active = None
+
+    async def scan_many(self, names, frames: int = 20, min_snr: float = 8.0, on_band=None):
+        """HF bands scanned all at once (capture_many): each band's result as scan() returns it, in the order
+        given; on_band(result) as each finishes. A band that couldn't be captured gives {"band", "error"}."""
+        bands = [BANDS[n] for n in names]
+        if any(b.band != "hf" or b.name == "wwv" for b in bands):
+            raise ValueError("scan_many takes HF bands only (not WWV)")
+        if self.spectrum.radio.band != "hf":
+            raise ValueError("these are HF bands; switch the input to HF first")
+        plans = [self._hf_plan(b) for b in bands]
+        out = [None] * len(bands)
+
+        def done(i, r):
+            b = bands[i]
+            if not isinstance(r, Exception):
+                try:
+                    out[i] = self._result(b.name, b, *r[:3], plans[i][1], min_snr)
+                except Exception as e:          # e.g. no bins inside the band
+                    r = e
+            if isinstance(r, Exception):
+                out[i] = {"band": b.name, "error": str(r) or type(r).__name__}
+            if on_band:
+                on_band(out[i])
+        async with self.lock:
+            self.band_range = (min(b.start_hz for b in bands), max(b.stop_hz for b in bands)) if bands else None
+            try:
+                await self.capture_many(plans, frames, done)
+            finally:
+                self.band_range = None
+        return out
 
     # -- the UHF / VHF survey (the UHF survey page's live chart) -----------------------------------------
     SURVEY_BIN_HZ = 4000.0           # 2048 bins: 8.2 MHz per capture, 7.4 MHz of it used

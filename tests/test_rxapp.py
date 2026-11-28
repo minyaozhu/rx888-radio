@@ -1934,6 +1934,66 @@ def test_each_survey_page_keeps_its_own_last_survey(tmp_path, monkeypatch):
     assert c.get("/api/survey/last?page=../x").status_code == 404
 
 
+# ---- HF bands scanned side by side (jobs.Scanner.capture_many) -------------------------------------
+def _fake_scanner(monkeypatch, fail=()):
+    import asyncio as aio
+    from types import SimpleNamespace
+    from rxapp import jobs
+    radio = SimpleNamespace(band="hf", ctl=None)
+    added = []
+    store = SimpleNamespace(add_scan=lambda *a: added.append(a[0]) or len(added), event=lambda *a, **k: None)
+    sc = jobs.Scanner(SimpleNamespace(radio=radio, bins=2048), store)
+    seen = {"live": 0, "most": 0, "ranges": []}
+
+    async def capture(center, bin_hz, frames, timeout=15.0, clamp=True, mark=True):
+        assert not mark                                  # capture_many marks the whole span itself
+        seen["ranges"].append(sc.active)
+        seen["live"] += 1
+        seen["most"] = max(seen["most"], seen["live"])
+        await aio.sleep(0.2)                             # the wait for frames
+        seen["live"] -= 1
+        if any(abs(center - c) < 1 for c in fail):
+            raise TimeoutError("no spectrum frames")
+        freqs = center + (np.arange(2048) - 1024) * bin_hz
+        db = np.zeros(2048)
+        db[1024 + 40] = 20.0                             # one station, 40 bins above the center
+        return freqs, db, frames
+    monkeypatch.setattr(sc, "_capture", capture)
+    return sc, seen, added
+
+
+def test_scan_many_captures_the_bands_side_by_side_and_answers_in_order(monkeypatch):
+    import asyncio as aio
+    from rxapp.jobs import BANDS
+    sc, seen, added = _fake_scanner(monkeypatch, fail=[sum(BANDS["17m"].start_hz + BANDS["17m"].stop_hz for _ in [0]) / 2])
+    names = ["160m", "80m", "40m", "20m", "17m", "15m", "12m", "10m"]
+    got = []
+    t0 = time.time()
+    out = aio.run(sc.scan_many(names, on_band=got.append))
+    assert time.time() - t0 < 0.6                        # eight 0.2 s captures together, not 1.6 s one by one
+    assert seen["most"] == 8 and sc.active is None and sc.band_range is None
+    lo, hi = seen["ranges"][0]
+    assert lo <= BANDS["160m"].start_hz and hi >= BANDS["10m"].stop_hz
+    assert [r["band"] for r in out] == names and len(got) == 8
+    r17 = out[4]
+    assert r17 == {"band": "17m", "error": "no spectrum frames"}       # one band failing doesn't stop the rest
+    assert all(len(r["hits"]) == 1 and r["mode"] == BANDS[r["band"]].mode for r in out if "error" not in r)
+    assert sorted(added) == sorted(n for n in names if n != "17m")      # each scan stored, like scan() does
+    sc.spectrum.radio.band = "vhf"
+    with pytest.raises(ValueError):
+        aio.run(sc.scan_many(["20m"]))
+
+
+def test_ssb_check_measures_all_its_windows_at_once(monkeypatch):
+    import asyncio as aio
+    sc, seen, _ = _fake_scanner(monkeypatch)
+    items = [{"freq_hz": f, "mode": "usb"} for f in (3.7e6, 5.357e6, 7.2e6, 14.3e6, 18.15e6, 21.3e6)]
+    parts = []
+    out = aio.run(ssb.check(sc, items, on_results=parts.append))
+    assert seen["most"] == len(parts) == 6               # one window each, all open together
+    assert [x["freq_hz"] for x in out] == [x["freq_hz"] for x in items]
+
+
 def test_a_channel_whose_agc_on_command_was_lost_gets_it_again(monkeypatch):
     import asyncio as aio
     from types import SimpleNamespace
@@ -1976,6 +2036,16 @@ def test_only_one_rxapp_runs_at_a_time(tmp_path):
     held.close()                                          # the first one ends: the next one starts
     r = subprocess.run([_sys.executable, "-c", code], capture_output=True, text=True, timeout=30)
     assert r.returncode == 0 and "started" in r.stdout
+
+
+def test_scan_many_a_band_whose_result_fails_is_reported_and_the_rest_stand(monkeypatch):
+    import asyncio as aio
+    sc, seen, added = _fake_scanner(monkeypatch)
+    real = sc._result
+    monkeypatch.setattr(sc, "_result", lambda name, *a, **k: (_ for _ in ()).throw(IndexError("empty")) if name == "40m" else real(name, *a, **k))
+    out = aio.run(sc.scan_many(["80m", "40m", "20m"]))
+    assert out[1] == {"band": "40m", "error": "empty"} and "hits" in out[0] and "hits" in out[2]
+    assert sc.lock.locked() is False and sc.active is None
 
 
 def test_p25_call_cache_forgets_deleted_recordings(tmp_path):
