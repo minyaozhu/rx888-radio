@@ -1932,3 +1932,18 @@ def test_each_survey_page_keeps_its_own_last_survey(tmp_path, monkeypatch):
     (tmp_path / "survey_last_lband.json").write_text(json.dumps({"range_mhz": [1000, 1700]}))
     assert c.get("/api/survey/last?page=lband").json()["range_mhz"] == [1000, 1700]
     assert c.get("/api/survey/last?page=../x").status_code == 404
+
+
+def test_only_one_rxapp_runs_at_a_time(tmp_path):
+    import subprocess
+    import sys as _sys
+    from rxapp.__main__ import single_instance
+    lock = tmp_path / "rxapp.lock"
+    held = single_instance(lock)
+    code = ("import sys; sys.path.insert(0, %r); from rxapp.__main__ import single_instance; "
+            "from pathlib import Path; single_instance(Path(%r), wait=0.6); print('started')") % (str(Path(__file__).parent.parent), str(lock))
+    r = subprocess.run([_sys.executable, "-c", code], capture_output=True, text=True, timeout=30)
+    assert r.returncode == 1 and "started" not in r.stdout and "another rxapp" in r.stderr
+    held.close()                                          # the first one ends: the next one starts
+    r = subprocess.run([_sys.executable, "-c", code], capture_output=True, text=True, timeout=30)
+    assert r.returncode == 0 and "started" in r.stdout

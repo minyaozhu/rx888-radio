@@ -16,6 +16,10 @@ RX-888 ─USB─▶ radiod ──multicast (loopback)──▶ rxapp (FastAPI) �
 ```
 
 To run it at login and keep it running: see `service/com.rx888.rxapp.plist` (a LaunchAgent).
+Only one rxapp runs at a time (a lock on `rxapp_data/rxapp.lock`; a second one waits up to 30 s for the first to
+exit, then gives up), and stopping it takes at most ~5 s even with pages connected. Before both, a stopped rxapp
+waited for its pages' websockets to close and could live on for hours with every background job still running:
+nine copies once drove the receiver at the same time.
 Only one program can use the RX-888, so stop rxapp before using SDR++, ka9q-web's radiod session
 or the SoapySDDC scripts.
 
