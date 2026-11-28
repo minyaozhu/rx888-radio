@@ -379,6 +379,18 @@ the session stops dsd-fme. Recordings are deleted after 7 days like the public-s
 published. `/api/p25`, `/api/p25/trunk`, `/api/p25/calls`, `/api/p25/clip/{session}/{name}`; page
 `p25.html` (talkgroups in the last hour, recorded calls with "play new calls", grants).
 
+**Situation summary** (`rxapp/summary.py`, `rxapp/geo.py`): a button on the P25 tab (last 30 min / 1 h / 3 h /
+whole session) has a local model in LM Studio (Qwen 3.8 27B, on 127.0.0.1:1234, loaded on demand and unloaded
+after 15 min idle) read the transcripts and write an overview, the incidents (merged across talkgroups, with
+times and status), other activity and what each talkgroup carries. Long spans are summarized in parts, then
+together. The transcripts never leave this computer. The model then lists each incident's place, and those
+places (address, cross streets or business, and city; nothing else) are looked up with OpenStreetMap: Nominatim
+(1 request/s, cached in `rxapp_data/geocode_cache.json`, limited to Santa Clara County) and Overpass for where two
+streets meet. The page shows numbered pins on an OpenStreetMap map next to the report (which scrolls in its own
+box). Kept as `summary.json` in the session folder. Gemma 4 26B A4B was tried: 10-15x faster but it mixed up and
+invented incidents. `GET/POST /api/p25/summary?minutes=`, `POST /api/p25/summary/pins`.
+Conversations list the latest call first.
+
 Build (macOS): `brew install libsndfile pulseaudio`, then
 `git clone --depth 1 https://github.com/szechyjs/mbelib.git tools/mbelib`,
 `cmake -S tools/mbelib -B tools/mbelib/build -DCMAKE_INSTALL_PREFIX=$PWD/tools/local -DCMAKE_POLICY_VERSION_MINIMUM=3.5 && cmake --build tools/mbelib/build -j && cmake --install tools/mbelib/build`,

@@ -50,10 +50,11 @@ function followTg() {
   const slots = Object.values(S.trunk.slots || {}).filter((x) => !x.enc).sort((a, b) => (a.age ?? 99) - (b.age ?? 99));
   return Date.now() - live.heard < 6000 && slots.length ? slots[0].tg : null;
 }
-// Conversations grouped by talkgroup: one block per talkgroup (the most recently heard first), its conversations
-// oldest to newest like a chat, with the time between them. The last SHOW_CONV are shown, older ones on request.
+// Conversations grouped by talkgroup: one block per talkgroup (the most recently heard first), the latest voice
+// first: its conversations newest first, and each one's calls newest first, with the quiet between them. The
+// last SHOW_CONV are shown, older ones on request.
 const SHOW_CONV = 4;
-const gapText = (s) => s < 90 ? `${Math.round(s)} s later` : s < 5400 ? `${Math.round(s / 60)} min later` : `${(s / 3600).toFixed(1)} h later`;
+const gapText = (s) => s < 90 ? `${Math.round(s)} s before` : s < 5400 ? `${Math.round(s / 60)} min before` : `${(s / 3600).toFixed(1)} h before`;
 function convHtml(th, showEnc) {
   const span = hms(th.start) + (th.n > 1 ? '–' + hms(th.end) : '');
   const clear = th.calls.filter((c) => !c.enc);
@@ -61,7 +62,7 @@ function convHtml(th, showEnc) {
       <div class="conv-head"><span class="muted">${span} · ${th.n} call${th.n === 1 ? '' : 's'} · radio${th.srcs.length === 1 ? '' : 's'} ${th.srcs.join(', ')}</span>
         ${th.live ? '<span class="badge b-live">live</span>' : ''}
         ${clear.length ? `<button type="button" class="mini" data-playth="${esc(th.id)}" title="Play this conversation">▶</button>` : ''}</div>
-      <ol class="overs">${th.calls.filter((c) => showEnc || !c.enc).map((c) => `<li ${c.enc ? 'class="enc"' : `data-clip="${esc(c.clip)}"${S.playing === c.clip ? ' class="playing"' : ''}`}>
+      <ol class="overs">${th.calls.filter((c) => showEnc || !c.enc).slice().reverse().map((c) => `<li ${c.enc ? 'class="enc"' : `data-clip="${esc(c.clip)}"${S.playing === c.clip ? ' class="playing"' : ''}`}>
         <span class="t">${hms(c.t)}</span><span class="src">${c.src}</span>${said(c)}<span class="len">${c.secs.toFixed(1)} s</span></li>`).join('')}</ol>
     </div>`;
 }
@@ -77,11 +78,11 @@ function drawCalls() {
   }
   const list = [...groups.entries()].slice(0, 60);       // already in order of the latest conversation
   $('threads').innerHTML = list.map(([tg, convs]) => {
-    const all = S.openTg.has(tg), shown = (all ? convs : convs.slice(0, SHOW_CONV)).slice().reverse();
+    const all = S.openTg.has(tg), shown = all ? convs : convs.slice(0, SHOW_CONV);
     const n = convs.reduce((k, th) => k + th.n, 0), fol = ftg === tg, live = convs[0].live;
     const parts = [];
     shown.forEach((th, i) => {
-      if (i) parts.push(`<div class="gap">${gapText(th.start - shown[i - 1].end)}</div>`);
+      if (i) parts.push(`<div class="gap">${gapText(shown[i - 1].start - th.end)}</div>`);
       parts.push(convHtml(th, showEnc));
     });
     return `<article class="thread${fol ? ' following' : ''}" data-tg="${tg}">
@@ -89,9 +90,9 @@ function drawCalls() {
         ${fol ? '<span class="badge b-follow">following</span>' : live ? '<span class="badge b-live">live</span>' : ''}
         ${convs.every((th) => th.enc) ? '<span class="badge b-enc" title="Probably encrypted (AES): likely noise">maybe encrypted</span>' : ''}
         <span class="muted">${convs.length} conversation${convs.length === 1 ? '' : 's'} · ${n} call${n === 1 ? '' : 's'} · last ${hms(convs[0].end)}</span></div>
+      ${parts.join('')}
       ${convs.length > shown.length ? `<button type="button" class="older" data-older="${tg}">${convs.length - shown.length} earlier conversation${convs.length - shown.length === 1 ? '' : 's'}</button>`
         : all && convs.length > SHOW_CONV ? `<button type="button" class="older" data-older="${tg}">show fewer</button>` : ''}
-      ${parts.join('')}
     </article>`;
   }).join('')
     || `<p class="empty">${S.tg == null ? 'No unencrypted calls recorded in this session yet.' : 'No recorded calls for this talkgroup (it may be encrypted).'}</p>`;
@@ -209,11 +210,131 @@ function drawLive() {
 }
 setInterval(drawLive, 500);
 
+// ------------------------------------------------------------------ situation summary (rxapp/summary.py)
+// A local model reads the session's transcripts on request; the page polls while it writes.
+function md(text) {                          // the little Markdown the model writes: ## headings, bullets, **bold**
+  const inline = (x) => esc(x).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
+  const out = []; let list = false, table = false;
+  for (const raw of String(text || '').split('\n')) {
+    const line = raw.trim();
+    if (!line) continue;                     // a blank line between bullets doesn't end the list
+    const h = line.match(/^#{1,4}\s+(.*)/), li = line.match(/^(?:[-*•]|\d+\.)\s+(.*)/), row = /^\|.*\|$/.test(line);
+    if (!li && list) { out.push('</ul>'); list = false; }
+    if (!row && table) { out.push('</table>'); table = false; }
+    if (row) {                               // a Markdown table: | a | b |, its |---| rule skipped
+      const cells = line.slice(1, -1).split('|').map((c) => c.trim());
+      if (cells.every((c) => /^:?-{2,}:?$/.test(c))) continue;
+      out.push((table ? '' : '<table>') + '<tr>' + cells.map((c) => `<td>${inline(c)}</td>`).join('') + '</tr>');
+      table = true;
+    } else if (h) out.push(`<h3>${inline(h[1])}</h3>`);
+    else if (li) { if (!list) { out.push('<ul>'); list = true; } out.push(`<li>${inline(li[1])}</li>`); }
+    else out.push(`<p>${inline(line)}</p>`);
+  }
+  if (list) out.push('</ul>');
+  if (table) out.push('</table>');
+  return out.join('');
+}
+const SUM = {timer: null, shown: null, map: null, layer: null, marks: {}};
+const KIND_LABEL = {fire: 'Fire', medical: 'Medical', police: 'Police', transit: 'Transit', traffic: 'Traffic', other: 'Other'};
+
+// The incidents of the report on an OpenStreetMap map: numbered pins matching the numbers on the report's incident
+// bullets; filled = ongoing or unclear, hollow = resolved, dashed ring = placed only by its street.
+function sumMap() {
+  if (SUM.map) return SUM.map;
+  const m = SUM.map = L.map('sumMap', {zoomSnap: 0.25, zoomDelta: 0.5}).setView([37.33, -121.92], 11);
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {      // darkened by CSS in dark mode
+    maxZoom: 18, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'}).addTo(m);
+  SUM.layer = L.layerGroup().addTo(m);
+  return m;
+}
+function selectPin(n, from) {
+  for (const [k, mk] of Object.entries(SUM.marks)) mk.getElement()?.querySelector('.pin')?.classList.toggle('sel', +k === n);
+  document.querySelectorAll('#sumText li[data-n]').forEach((li) => li.classList.toggle('sel', +li.dataset.n === n));
+  const mk = SUM.marks[n];
+  if (from === 'list' && mk) { SUM.map.flyTo(mk.getLatLng(), Math.max(SUM.map.getZoom(), 14), {duration: 0.6}); mk.openPopup(); }
+  if (from === 'map') {                       // bring its bullet into view inside the report's own scroll box
+    const li = document.querySelector(`#sumText li[data-n="${n}"]`), box = $('sumText');
+    if (li) box.scrollTo({top: li.offsetTop - box.offsetTop - 40, behavior: 'smooth'});
+  }
+}
+function drawPins(last) {
+  $('sumGrid').hidden = !last;
+  if (!last) return;
+  if (typeof L === 'undefined') { $('sumMap').hidden = true; $('pinNote').textContent = 'The map library didn\'t load.'; return; }
+  const map = sumMap();
+  setTimeout(() => map.invalidateSize(), 0);
+  SUM.layer.clearLayers(); SUM.marks = {};
+  const pins = last.pins || [];
+  // number the report's incident bullets like their pins
+  const h = [...document.querySelectorAll('#sumText h3')].find((x) => /incident/i.test(x.textContent));
+  const items = h && h.nextElementSibling && h.nextElementSibling.tagName === 'UL' ? [...h.nextElementSibling.children] : [];
+  items.forEach((li, i) => {
+    const p = pins.find((x) => x.n === i + 1);
+    if (!p) return;
+    li.dataset.n = p.n;
+    li.insertAdjacentHTML('afterbegin', `<span class="pinno k-${p.kind} s-${p.status}${p.lat == null ? ' nopin' : ''}" title="${p.lat == null ? 'not on the map' : 'on the map'}">${p.n}</span>`);
+    if (p.lat != null) { li.classList.add('pinned'); li.addEventListener('click', () => selectPin(p.n, 'list')); }
+  });
+  const placed = pins.filter((p) => p.lat != null);
+  for (const p of placed) {
+    const icon = L.divIcon({className: 'pin-ic k-' + p.kind, iconSize: [22, 22], iconAnchor: [11, 11], popupAnchor: [0, -12],
+      html: `<span class="pin s-${p.status}${p.approx ? ' approx' : ''}">${p.n}</span>`});
+    SUM.marks[p.n] = L.marker([p.lat, p.lon], {icon, title: `${p.n}. ${p.what}`, zIndexOffset: p.status === 'resolved' ? 0 : 100})
+      .bindPopup(`<b>${p.n}. ${esc(p.what)}</b><br>${esc(p.where)}<br><span style="color:var(--muted)">${esc(p.time)} · ${esc(KIND_LABEL[p.kind] || p.kind)} · ${esc(p.status)}${p.approx ? ' · approximate (street only)' : ''}</span>`)
+      .on('click', () => selectPin(p.n, 'map')).addTo(SUM.layer);
+  }
+  if (placed.length) map.fitBounds(L.latLngBounds(placed.map((p) => [p.lat, p.lon])).pad(0.15), {maxZoom: 14});
+  const kinds = [...new Set(pins.map((p) => p.kind))];
+  $('pinLegend').innerHTML = kinds.map((k) => `<span class="k-${k}"><i></i>${KIND_LABEL[k] || k}</span>`).join('')
+    + (pins.length ? '<span class="k-other"><i class="hollow"></i>resolved</span><span><i class="dash"></i>street only</span>' : '');
+  const missed = pins.filter((p) => p.lat == null);
+  $('pinNote').innerHTML = last.pins_error ? `Map: ${esc(last.pins_error)} <button type="button" id="pinGo">Try again</button>`
+    : !last.pins ? `This summary isn't on the map yet. <button type="button" id="pinGo">Pin incidents</button>`
+    : !pins.length ? 'No incidents to place.'
+    : `${placed.length} of ${pins.length} incidents placed` + (missed.length ? ` · couldn't place: ${missed.map((p) => `${p.n} (${esc(p.where || 'no place given')})`).join(', ')}` : '');
+  const go = $('pinGo');
+  if (go) go.addEventListener('click', async () => {
+    go.disabled = true;
+    const r = await fetch(`/api/p25/summary/pins?session=${encodeURIComponent(S.session)}`, {method: 'POST'}).catch(() => null);
+    if (r && !r.ok) $('sumNote').textContent = 'Map: ' + ((await r.json().catch(() => ({}))).detail || r.statusText);
+    pollSummary();
+  });
+}
+function drawSummary(st) {
+  const job = st.job, last = st.last, busy = st.busy;
+  $('sumGo').disabled = busy;
+  $('sumGo').textContent = busy ? 'Summarizing…' : 'Summarize';
+  if (busy) {
+    $('sumNote').innerHTML = `<b>●</b> ${esc(job.step)} · ${job.calls} transmissions · ${Math.round(Date.now() / 1000 - job.started)} s`;
+  } else if (job && job.state === 'error') {
+    $('sumNote').textContent = 'Summary failed: ' + job.step;
+  } else {
+    $('sumNote').textContent = last ? `${last.span} · written ${hms(last.made)} in ${last.took_sec} s by ${last.model}`
+      : 'Reads the transcripts and writes what is going on: incidents, units, places, and what each talkgroup carries.';
+  }
+  const key = last ? `${last.made}:${last.pins ? last.pins.length : '-'}:${last.pins_error || ''}` : null;
+  clearTimeout(SUM.timer);
+  if (busy) SUM.timer = setTimeout(pollSummary, 1500);       // before drawing: a drawing error mustn't stop the polls
+  if (key !== SUM.shown) { $('sumText').innerHTML = last ? md(last.text) : ''; SUM.shown = key; drawPins(last); }
+}
+async function pollSummary() {
+  try { drawSummary(await api('/api/p25/summary?session=' + encodeURIComponent(S.session))); } catch (e) { /* rxapp restarting */ }
+}
+$('sumGo').addEventListener('click', async () => {
+  $('sumGo').disabled = true;
+  try {
+    const r = await fetch(`/api/p25/summary?session=${encodeURIComponent(S.session)}&minutes=${$('sumSpan').value}`, {method: 'POST'});
+    if (!r.ok) $('sumNote').textContent = 'Summary: ' + ((await r.json().catch(() => ({}))).detail || r.statusText);
+  } catch (e) { $('sumNote').textContent = 'Summary: ' + e.message; }
+  pollSummary();
+});
+
 async function loadSession(name) {
   const info = await api('/api/p25' + (name ? `?session=${encodeURIComponent(name)}` : ''));
-  S.session = info.session; S.newest = null;
+  S.session = info.session; S.newest = null; SUM.shown = undefined;
   $('session').innerHTML = info.sessions.map((s) => `<option ${s === info.session ? 'selected' : ''}>${esc(s)}</option>`).join('');
   await poll();
+  pollSummary();
 }
 
 async function poll() {

@@ -744,6 +744,54 @@ async def p25_threads(session: Optional[str] = None, limit: int = 600):
     return threads(calls, now=None if live else (max((c["t"] + c["secs"] for c in calls), default=0) + 1e6))
 
 
+_SUMMARY = None
+
+
+def _summarizer():
+    global _SUMMARY
+    if _SUMMARY is None:
+        from .geo import Geocoder
+        from .summary import Summarizer
+        _SUMMARY = Summarizer(Geocoder(CONFIG.data_dir / "geocode_cache.json"))
+    return _SUMMARY
+
+
+@app.get("/api/p25/summary")
+async def p25_summary_status(session: Optional[str] = None):
+    """The situation summary of a P25 session: the one being written (job: step, state) and the last one made."""
+    return _summarizer().status(_session_dir(P25_DIR, session))
+
+
+@app.post("/api/p25/summary")
+async def p25_summary_start(session: Optional[str] = None, minutes: int = 60):
+    """Summarize a session's transcribed calls of the last `minutes` (0: all of it) with a local model in LM Studio
+    (rxapp/summary.py; the transcripts never leave this computer), then pins its incidents on a map: the places it
+    names are looked up with OpenStreetMap (rxapp/geo.py). Runs in the background: poll GET /api/p25/summary."""
+    if minutes < 0 or minutes > 7 * 24 * 60:
+        raise HTTPException(400, "minutes: 0 (whole session) to a week")
+    d = _session_dir(P25_DIR, session)
+    from .p25 import threads as make_threads
+    threads = make_threads(await asyncio.to_thread(_p25_call_list, d.name, 1_000_000))
+    if not _summarizer().start(d, threads, minutes):
+        raise HTTPException(409, "a summary is already being written")
+    return _summarizer().status(d)
+
+
+@app.post("/api/p25/summary/pins")
+async def p25_summary_pins(session: Optional[str] = None):
+    """Pin the incidents of the session's last summary on the map (for one written before the map existed)."""
+    d = _session_dir(P25_DIR, session)
+    if not (d / "summary.json").exists():
+        raise HTTPException(404, "no summary yet")
+    try:
+        started = _summarizer().start_pins(d)
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e))
+    if not started:
+        raise HTTPException(409, "a summary is already being written")
+    return _summarizer().status(d)
+
+
 @app.get("/api/p25/clip/{session}/{name}")
 async def p25_clip(session: str, name: str):
     path = _session_dir(P25_DIR, session) / "calls" / Path(name).name

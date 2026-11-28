@@ -6,11 +6,13 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>P25 Live</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <style>
 :root{
   --bg:#F2F4EE; --panel:#FFFFFF; --ink:#1D2833; --muted:#5A6774; --line:#CBD3D8;
   --magenta:#A3316F; --blue:#2A5A93; --ok:#2E7B57; --warn:#B26E12;
+  --water:#D6E2E8; --c-fire:#C2461B; --c-medical:#2A5A93; --c-police:#6A45A8; --c-transit:#2E7B57; --c-traffic:#9A6A00; --c-other:#5A6774;
   --shadow:0 1px 2px rgba(29,40,51,.08);
 }
 @media (prefers-color-scheme: dark){
@@ -18,6 +20,7 @@
     color-scheme:dark;
     --bg:#0E151B; --panel:#151F27; --ink:#E4EAEE; --muted:#93A2AE; --line:#2B3843;
     --magenta:#E07BB2; --blue:#7FAEE6; --ok:#6CC99A; --warn:#E3A54B;
+    --water:#0B1A24; --c-fire:#F0825A; --c-medical:#7FAEE6; --c-police:#B79AF0; --c-transit:#6CC99A; --c-traffic:#E3B44B; --c-other:#93A2AE;
     --shadow:none;
   }
 }
@@ -25,6 +28,7 @@
   color-scheme:dark;
   --bg:#0E151B; --panel:#151F27; --ink:#E4EAEE; --muted:#93A2AE; --line:#2B3843;
   --magenta:#E07BB2; --blue:#7FAEE6; --ok:#6CC99A; --warn:#E3A54B;
+    --water:#0B1A24; --c-fire:#F0825A; --c-medical:#7FAEE6; --c-police:#B79AF0; --c-transit:#6CC99A; --c-traffic:#E3B44B; --c-other:#93A2AE;
   --shadow:none;
 }
 *{box-sizing:border-box}
@@ -93,6 +97,46 @@ button.older{margin-top:6px;padding:3px 8px;font-size:11px}
 .overs .said{font-size:14px;line-height:1.4}
 .overs .said.none{color:var(--muted);font-style:italic}
 @media (max-width:600px){.overs li{grid-template-columns:auto minmax(0,1fr)}.overs .src,.overs .len{display:none}}
+#sumSpan{font:500 13px "IBM Plex Mono",monospace;background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:4px;padding:5px 8px}
+.sumgrid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.15fr);gap:18px;align-items:start}
+.sumgrid[hidden]{display:none}
+#sumMap{height:540px;border-radius:4px;background:var(--water)}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) #sumMap .leaflet-tile-pane{filter:invert(1) hue-rotate(180deg) brightness(.85) contrast(.9)}}
+:root[data-theme="dark"] #sumMap .leaflet-tile-pane{filter:invert(1) hue-rotate(180deg) brightness(.85) contrast(.9)}
+.leaflet-container{font:500 12px "IBM Plex Mono",monospace;background:var(--water)}
+.leaflet-popup-content-wrapper,.leaflet-popup-tip{background:var(--panel);color:var(--ink)}
+.leaflet-popup-content{font:400 13px/1.4 "Barlow",system-ui,sans-serif;margin:8px 12px}
+.leaflet-popup-content b{font-weight:600}
+.k-fire{--k:var(--c-fire)} .k-medical{--k:var(--c-medical)} .k-police{--k:var(--c-police)}
+.k-transit{--k:var(--c-transit)} .k-traffic{--k:var(--c-traffic)} .k-other{--k:var(--c-other)}
+.pin-ic{background:none;border:none}
+.pin{display:grid;place-items:center;width:22px;height:22px;border-radius:50%;font:600 11px/1 "IBM Plex Mono",monospace;
+  color:#fff;background:var(--k);border:2px solid var(--panel);box-shadow:0 0 0 1px var(--k);transition:transform .15s}
+.pin.s-resolved{background:var(--panel);color:var(--k);box-shadow:0 0 0 2px var(--k)}
+.pin.approx{outline:2px dashed var(--k);outline-offset:2px}
+.pin.sel{transform:scale(1.3)}
+.pinno{display:inline-grid;place-items:center;min-width:19px;height:19px;padding:0 4px;margin-right:6px;border-radius:10px;
+  font:600 10.5px/1 "IBM Plex Mono",monospace;color:#fff;background:var(--k);vertical-align:1px}
+.pinno.s-resolved{background:none;color:var(--k);box-shadow:0 0 0 1.5px var(--k) inset}
+.pinno.nopin{background:none;color:var(--muted);box-shadow:0 0 0 1px var(--line) inset}
+.summary li.pinned{cursor:pointer;border-radius:3px}
+.summary li.pinned:hover,.summary li.sel{background:var(--bg)}
+.pinlegend{display:flex;flex-wrap:wrap;gap:4px 12px;margin-top:8px;font:500 12px "IBM Plex Mono",monospace;color:var(--muted)}
+.pinlegend i{display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--k);margin-right:5px;vertical-align:-1px}
+.pinlegend i.hollow{background:none;box-shadow:0 0 0 2px var(--k) inset}
+.pinlegend i.dash{background:none;outline:2px dashed var(--muted);outline-offset:-2px}
+#pinNote{margin:6px 0 0}
+.summary{font-size:15px;line-height:1.5;max-height:540px;overflow:auto;padding-right:10px;overscroll-behavior:contain}
+.summary:empty{display:none}
+@media (max-width:900px){.sumgrid{grid-template-columns:minmax(0,1fr)}#sumMap{height:360px}.summary{max-height:420px}}
+.summary h3{font:700 13px/1 "Barlow Condensed",sans-serif;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin:14px 0 6px}
+.summary h3:first-child{margin-top:4px}
+.summary ul{margin:0;padding-left:20px;display:grid;gap:4px}
+.summary p{margin:0 0 6px}
+.summary table{width:auto;font:400 13.5px/1.4 "Barlow",system-ui,sans-serif;margin-top:4px}
+.summary table tr:first-child td{font:600 11px "Barlow Condensed",sans-serif;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+.summary td{white-space:normal;padding:3px 8px;cursor:default}
+.summary tr:hover td{background:none}
 .livebar{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px}
 .livebar select{font:500 13px "IBM Plex Mono",monospace;background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:4px;padding:6px 8px;max-width:100%}
 .livebar input[type=range]{width:110px;accent-color:var(--magenta)}
@@ -128,6 +172,26 @@ button.on{background:var(--magenta);border-color:var(--magenta);color:#fff}
       <span class="lnow" id="lnow"></span>
     </div>
   </section>
+  <section class="panel" aria-labelledby="sumTitle">
+    <div class="bar">
+      <h2 id="sumTitle">Situation summary</h2>
+      <span style="display:inline-flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <select id="sumSpan" aria-label="Span to summarize">
+          <option value="30">last 30 min</option><option value="60" selected>last 1 hour</option>
+          <option value="180">last 3 hours</option><option value="0">whole session</option></select>
+        <button type="button" id="sumGo">Summarize</button>
+      </span>
+    </div>
+    <p class="lnow" id="sumNote" style="margin:0"></p>
+    <div class="sumgrid" id="sumGrid" hidden>
+      <div>
+        <div id="sumMap" role="img" aria-label="Map of the incidents in the situation summary"></div>
+        <div class="pinlegend" id="pinLegend"></div>
+        <p class="lnow" id="pinNote"></p>
+      </div>
+      <div class="summary" id="sumText" tabindex="0" aria-label="Situation report"></div>
+    </div>
+  </section>
   <div class="main">
     <section class="panel" aria-labelledby="tgTitle">
       <div class="bar"><h2 id="tgTitle">Talkgroups, last hour</h2><span class="muted" id="tgN" style="font:500 12px 'IBM Plex Mono',monospace"></span></div>
@@ -147,7 +211,7 @@ button.on{background:var(--magenta);border-color:var(--magenta);color:#fff}
       </div>
       <audio id="player" controls preload="none" style="width:100%"></audio>
       <p class="muted" style="margin:0;font-size:13px">Grouped by talkgroup, the most recently heard first. Within one, calls less than
-        30 s apart make a conversation; conversations run oldest to newest. Click a line to play it, ▶ to play a conversation.</p>
+        30 s apart make a conversation; the latest call is on top. Click a line to play it, ▶ to play a conversation in order.</p>
       <div class="scroll" id="threads"></div>
     </section>
   </div>
@@ -162,11 +226,17 @@ button.on{background:var(--magenta);border-color:var(--magenta);color:#fff}
     Live listening plays the calls as dsd-fme decodes them: “Follow activity” stays with the conversation (talkgroup) it's
     playing, waiting up to 5 s for a reply on any voice channel, and moves to the next one when that goes quiet; picking a talkgroup
     plays only that one. A voice channel's first call can lose its first second while its decoder starts. Encrypted calls are never followed, so they stay silent.
+    The situation summary is written by a local model (LM Studio, Qwen 3.8 27B) from the transcripts, on this computer; the transcripts
+    are never sent anywhere. To pin its incidents on the map, only the places it names (address, cross streets or business, and city)
+    are looked up with OpenStreetMap (Nominatim, and Overpass for cross streets). Places misheard by the speech recognition can't be
+    placed or land on the wrong spot; a dashed ring marks a pin placed only by its street. Transcripts have errors and the model can
+    misread them, so check the calls behind anything that matters.
     Recordings stay on this computer and are deleted after 7 days, like the public-safety ones.</p>
 </div>
 <script src="audiofocus.js?v=2"></script>
 <script src="statsreset.js?v=2" data-page="p25"></script>
-<script src="p25.js?v=14"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="p25.js?v=20"></script>
 <script src="focus.js?v=2" data-focus="p25" data-what="the 700 MHz P25 system"></script>
 <script src="spectheme.js?v=3"></script>
 <script src="minispec.js?v=11"></script>

@@ -1934,6 +1934,127 @@ def test_each_survey_page_keeps_its_own_last_survey(tmp_path, monkeypatch):
     assert c.get("/api/survey/last?page=../x").status_code == 404
 
 
+# ---- P25 situation summary (rxapp/summary.py) --------------------------------------------------
+def test_summary_reads_clear_transcribed_calls_in_order_and_splits_long_spans(monkeypatch):
+    from rxapp import summary
+    def c(t, tg, text, enc=False):
+        return {"t": t, "tg": tg, "src": 7, "secs": 2.0, "clip": f"{t}.wav", "enc": enc, "text": text}
+    threads = [{"calls": [c(200, 1501, "Engine 78, copy."), c(100, 1501, "Engine 78 respond to a fire.")]},
+               {"calls": [c(150, 1801, "noise", enc=True), c(160, 2451, "(no speech)"), c(170, 2451, "")]}]
+    lines = summary.transcript_lines(threads)
+    assert [l.split(" ", 1)[1] for l in lines] == ["TG 1501 r7: Engine 78 respond to a fire.", "TG 1501 r7: Engine 78, copy."]
+    assert summary.transcript_lines(threads, since=150) == lines[1:]
+    assert [len(p) for p in summary.chunks(["x" * 40] * 10, size=100)] == [2, 2, 2, 2, 2]
+    asked = []
+    monkeypatch.setattr(summary, "chat", lambda prompt, max_tokens=2000: asked.append(prompt) or f"notes {len(asked)}")
+    monkeypatch.setattr(summary, "CHUNK_CHARS", 30)
+    out = summary.summarize(lines, 60)
+    assert len(asked) == 3 and "part 1 of 2" in asked[0] and "notes 1" in asked[2] and out == "notes 3"
+
+
+def test_summary_api_runs_in_the_background_and_keeps_the_result(tmp_path, monkeypatch):
+    import json
+    from fastapi.testclient import TestClient
+    from rxapp import server, summary
+    d = tmp_path / "20261127-135442"
+    (d / "calls").mkdir(parents=True)
+    monkeypatch.setattr(server, "P25_DIR", tmp_path)
+    monkeypatch.setattr(server, "_SUMMARY", None)
+    monkeypatch.setattr(server, "_p25_call_list", lambda s, limit: [
+        {"t": time.time() - 30, "tg": 1501, "src": 7, "secs": 2.0, "clip": "a.wav", "enc": False, "text": "Engine 78, copy."}])
+    monkeypatch.setattr(summary, "ensure_model", lambda say=None: None)
+    monkeypatch.setattr(summary, "chat", lambda prompt, max_tokens=2000: "## Overview\nQuiet.")
+    monkeypatch.setattr(summary, "pin", lambda report, geo, say=None: [{"n": 1, "what": "Medical", "lat": 37.3, "lon": -121.9}])
+    c = TestClient(server.app, client=("127.0.0.1", 50000))
+    assert c.post("/api/p25/summary?minutes=30").status_code == 200
+    for _ in range(50):
+        st = c.get("/api/p25/summary").json()
+        if not st["busy"]:
+            break
+        time.sleep(0.05)
+    assert st["job"]["state"] == "done" and st["last"]["text"] == "## Overview\nQuiet." and st["last"]["calls"] == 1
+    assert json.loads((d / "summary.json").read_text())["minutes"] == 30
+    assert st["last"]["pins"][0]["lat"] == 37.3
+    assert c.post("/api/p25/summary?minutes=-5").status_code == 400
+    # an older summary is pinned on request
+    (d / "summary.json").write_text(json.dumps({"made": 1, "minutes": 60, "calls": 3, "text": "## Incidents\n- x"}))
+    assert c.post("/api/p25/summary/pins").status_code == 200
+    for _ in range(50):
+        st = c.get("/api/p25/summary").json()
+        if not st["busy"]:
+            break
+        time.sleep(0.05)
+    assert st["last"]["pins"][0]["what"] == "Medical" and st["last"]["text"] == "## Incidents\n- x"
+
+
+def test_geo_street_names_and_the_order_places_are_tried(tmp_path):
+    from rxapp import geo
+    assert geo.street_core("E Maple St") == "Maple"
+    assert geo.street_core("South Oak Avenue") == "Oak"
+    assert geo.street_core("El Camino Real") == "El Camino Real"
+    g = geo.Geocoder(tmp_path / "cache.json")
+    asked = []
+    found = {"100 example dr, santa clara": {"lat": 1.0, "lon": 2.0, "rank": 30, "bbox": []},
+             "example dr, santa clara": {"lat": 1.1, "lon": 2.1, "rank": 26, "bbox": []},
+             "example stadium, san jose": {"lat": 3.0, "lon": 4.0, "rank": 30, "bbox": []}}
+    g.search = lambda q: asked.append(q) or found.get(q.lower())
+    g.city_box = lambda city: (0, 0, 1, 1)
+    g.crossing = lambda a, b, box: {"lat": 5.0, "lon": 6.0} if {a, b} == {"E Maple St", "S Oak Ave"} else None
+    P = lambda **k: {"address": "", "place": "", "cross": [], "city": "", **k}
+    assert g.locate(P(address="100 Example Dr", city="Santa Clara")) == {"lat": 1.0, "lon": 2.0, "how": "address", "approx": False}
+    assert g.locate(P(place="Example Stadium", address="1 S 1st St", city="San Jose"))["how"] == "place"
+    assert g.locate(P(cross=["E Maple St", "S Oak Ave"], city="San Jose"))["how"] == "cross streets"
+    r = g.locate(P(address="9999 Example Dr", city="Santa Clara"))     # unknown number: the street, approximately
+    assert r["how"] == "street" and r["approx"] and r["lat"] == 1.1
+    assert g.locate(P(address="1 Nowhere Rd", city="Atlantis")) is None
+    # answers (misses too) are cached on disk, so a place is asked about once
+    g2 = geo.Geocoder(tmp_path / "cache.json")
+    g2._get = lambda url, data=None: (_ for _ in ()).throw(AssertionError("asked again"))
+    g2.cache["n:somewhere"] = None
+    assert g2.search("Somewhere") is None
+
+
+def test_summary_pins_read_the_reports_places_and_keep_the_ones_osm_cant_place(monkeypatch):
+    from rxapp import summary
+    reply = ('Here: [{"n": 1, "what": "Medical call", "kind": "Medical", "status": "ongoing", "time": "13:57", '
+             '"address": "100 Example Dr", "cross": [], "place": "Example Cafe", "city": "Santa Clara"}, '
+             '{"n": 2, "what": "Fire", "kind": "arson?", "status": "out", "time": "14:41", "address": "", "cross": [], '
+             '"place": "", "city": ""}, {"n": 3, "what": "Outside fire", "kind": "fire", "status": "resolved", '
+             '"address": "", "cross": ["E Maple St", "S Oak Ave"], "place": "", "city": "San Jose"}]')
+    monkeypatch.setattr(summary, "chat", lambda prompt, max_tokens=2000: reply)
+
+    class Geo:
+        def locate(self, p):
+            return {"lat": 37.38, "lon": -121.98, "how": "address", "approx": False} if p["address"] else None
+    pins = summary.pin("## Incidents\n- a\n- b\n- c", Geo())
+    assert [p["n"] for p in pins] == [1, 2, 3]
+    assert pins[0]["lat"] == 37.38 and pins[0]["kind"] == "medical" and pins[0]["where"] == "Example Cafe, 100 Example Dr, Santa Clara"
+    assert pins[1]["lat"] is None and pins[1]["kind"] == "other" and pins[1]["status"] == "unclear"
+    assert pins[2]["lat"] is None and pins[2]["where"] == "E Maple St & S Oak Ave, San Jose" and pins[2]["status"] == "resolved"
+
+
+def test_geo_asks_a_busy_server_again(tmp_path, monkeypatch):
+    import io
+    import urllib.error
+    from rxapp import geo
+    monkeypatch.setattr(geo, "MIN_GAP_SEC", 0)
+    monkeypatch.setattr(geo.time, "sleep", lambda s: None)
+    answers = [urllib.error.HTTPError("u", 502, "Bad Gateway", {}, None), io.BytesIO(b'{"elements": []}')]
+
+    class R:
+        def __init__(self, b): self.b = b
+        def __enter__(self): return self.b
+        def __exit__(self, *a): return False
+
+    def urlopen(req, timeout):
+        a = answers.pop(0)
+        if isinstance(a, Exception):
+            raise a
+        return R(a)
+    monkeypatch.setattr(geo.urllib.request, "urlopen", urlopen)
+    assert geo.Geocoder(tmp_path / "c.json")._get("http://x") == {"elements": []}
+
+
 # ---- HF bands scanned side by side (jobs.Scanner.capture_many) -------------------------------------
 def _fake_scanner(monkeypatch, fail=()):
     import asyncio as aio
@@ -2036,6 +2157,22 @@ def test_only_one_rxapp_runs_at_a_time(tmp_path):
     held.close()                                          # the first one ends: the next one starts
     r = subprocess.run([_sys.executable, "-c", code], capture_output=True, text=True, timeout=30)
     assert r.returncode == 0 and "started" in r.stdout
+
+
+
+def test_overpass_street_regex_has_no_backslash_escapes():
+    from rxapp import geo
+    rx = geo.overpass_literal("Mt. Hamilton (old) \\ \"x\"")
+    assert "\\" not in rx and '"' not in rx
+    import re as _re
+    assert _re.fullmatch(rx, "Mt. Hamilton (old)  x") and not _re.fullmatch(rx, "MtX Hamilton (old)  x")
+
+
+def test_summary_places_read_odd_incident_numbers(monkeypatch):
+    from rxapp import summary
+    monkeypatch.setattr(summary, "chat", lambda prompt, max_tokens=2000:
+                        '[{"n": "1.", "what": "a"}, {"n": "#2", "what": "b"}, {"what": "c"}]')
+    assert [p["n"] for p in summary.extract_places("r")] == [1, 2, 3]
 
 
 def test_scan_many_a_band_whose_result_fails_is_reported_and_the_rest_stand(monkeypatch):
